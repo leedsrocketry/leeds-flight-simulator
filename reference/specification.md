@@ -699,10 +699,13 @@ All interaction via the command line. No graphical UI. Progress bars, tables, an
 
 ### 17.2 Commands
 
+All commands are run from inside the project directory (the git repo root, which
+is also the Python package root). `__main__.py` is the entry point.
+
 ```
-python -m leeds-flight-simulator run input/simulation.yaml
-python -m leeds-flight-simulator replay results/<timestamp>/summary.yaml --seed 42 --run 3 --sample 117
-python -m leeds-flight-simulator replay results/<timestamp>/summary.yaml --non-compliant
+python . run input/simulation.yaml
+python . replay results/<timestamp>/summary.yaml --seed 42 --run 3 --sample 117
+python . replay results/<timestamp>/summary.yaml --non-compliant
 ```
 
 `run` is the primary command. First argument is always the simulation configuration file. If `azimuth` or `inclination` is `"auto"`, optimisation runs first, with phase progress displayed, before the main MC analysis.
@@ -772,8 +775,11 @@ Strategy: Numba `@njit` hot loops, contiguous arrays, parallelism, adaptive step
 
 ## 20 Architecture
 
+The git repo root is the Python package root. All modules are imported directly
+(e.g. `import atmosphere`). Run with `python . run …` from inside the directory.
+
 ```
-leeds-flight-simulator/
+leeds-flight-simulator/      ← git repo root = package root
 ├── __main__.py              # CLI entry point (click)
 ├── cli.py                   # Command definitions, rich output
 ├── config.py                # YAML → dataclasses

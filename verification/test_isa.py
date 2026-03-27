@@ -10,7 +10,7 @@ Tolerances are tight (0.1 %) to catch any constant or formula regressions.
 
 import pytest
 import numpy as np
-from leeds_flight_simulator.atmosphere import isa, temperature, pressure, density, speed_of_sound, dynamic_viscosity
+from atmosphere import isa, temperature, pressure, density, speed_of_sound, dynamic_viscosity
 
 # ---------------------------------------------------------------------------
 # Reference values at selected altitudes
