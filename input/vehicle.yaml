@@ -1,0 +1,28 @@
+# Vehicle geometry
+diameter: 0.130          # Reference diameter (m)
+length: 2.6              # Total length (m)
+reference_area: 0.01327  # Pi * d^2 / 4 (m^2)
+launch_rail_length: 4.0  # Launch rail length (m)
+
+# Mass properties
+wet_mass: 26.5           # Mass at launch (kg)
+dry_mass: 14.7           # Mass after burnout (kg)
+cg_dry: 1.15             # Dry CG from nosecone (m)
+cg_propellant: 2.10      # Propellant CG from nosecone (m)
+
+# Moments of inertia (kg*m^2)
+I_R_wet: 0.012           # Roll, wet
+I_R_dry: 0.008           # Roll, dry
+I_L_wet: 5.2             # Lateral, wet
+I_L_dry: 3.1             # Lateral, dry
+
+# Nozzle
+nozzle_exit: 2.55        # Nozzle exit from nosecone (m)
+
+# Recovery
+CdA_drogue: 0.15         # Drogue drag area (m^2)
+CdA_main: 2.8            # Main drag area (m^2)
+deploy_altitude_agl: 305 # Main deploy altitude above launch site (m)
+
+# Roll model (Barrowman)
+r_fin: 0.095             # Fin CP spanwise distance from centreline (m)

@@ -658,13 +658,13 @@ paths:
   aero_dir: "input/aero_tables/"
   wind_profiles: "input/wind_profiles.npz"
   danger_area: "input/danger_area.geojson"
-  coastline: "input/coastline.geojson"  # none to disable sea-landing check
+  coastline: "input/coastline.geojson"  # omit to disable sea-landing check
 
 # Surface wind override
 surface_override:
   speed_ms: 5.0             # m/s
   bearing_deg: 270.0        # degrees clockwise from North
-  blend_height_m: 300       # metres AGL; none = override disabled
+  blend_height_m: 300       # metres AGL; omit to disable surface override
 ```
 
 

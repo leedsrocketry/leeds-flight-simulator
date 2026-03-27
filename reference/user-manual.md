@@ -35,7 +35,7 @@ pip install numpy numba scipy shapely pyyaml matplotlib rich click scikit-optimi
 Verify:
 
 ```
-python -m leeds-flight-simulator --help
+python . --help
 ```
 
 The simulator runs entirely offline. No network access is required.
@@ -44,7 +44,7 @@ The simulator runs entirely offline. No network access is required.
 ## Quick Start
 
 ```
-python -m leeds-flight-simulator run input/simulation.yaml
+python . run input/simulation.yaml
 ```
 
 This runs all four descent scenarios (4,000 samples by default) and prints a results table to the terminal:
@@ -234,13 +234,13 @@ paths:
   aero_dir: "input/aero_tables/"
   wind_profiles: "input/wind_profiles.npz"
   danger_area: "input/danger_area.geojson"
-  coastline: "input/coastline.geojson"  # none to disable sea-landing check
+  coastline: "input/coastline.geojson"  # omit to disable sea-landing check
 
 # Surface wind override
 surface_override:
   speed_ms: 5.0             # m/s
   bearing_deg: 270.0        # degrees clockwise from North
-  blend_height_m: 300       # metres AGL; none = override disabled
+  blend_height_m: 300       # metres AGL; omit to disable surface override
 ```
 
 
@@ -285,13 +285,13 @@ Every sample is deterministic given the master seed, run index, and sample index
 To replay a specific sample:
 
 ```
-python -m leeds-flight-simulator replay results/<timestamp>/summary.yaml --seed 42 --run 3 --sample 117
+python . replay results/<timestamp>/summary.yaml --seed 42 --run 3 --sample 117
 ```
 
 To automatically replay all non-compliant samples from a completed run:
 
 ```
-python -m leeds-flight-simulator replay results/<timestamp>/summary.yaml --non-compliant
+python . replay results/<timestamp>/summary.yaml --non-compliant
 ```
 
 Replay outputs a detailed time history (position, velocity, attitude, Mach, AoA, stability margin, damping coefficients, forces, moments) as a CSV.
