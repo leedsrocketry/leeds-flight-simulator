@@ -125,8 +125,8 @@ launch_rail_length: 4.0  # Launch rail length (m)
 # Mass properties
 wet_mass: 26.5           # Mass at launch (kg)
 dry_mass: 14.7           # Mass after burnout (kg)
-cg_dry: 1.15             # Dry CG from nosecone (m)
-cg_propellant: 2.10      # Propellant CG from nosecone (m)
+cg_dry: 1.15             # Dry vehicle CG from nosecone (airframe + empty casing) (m)
+motor_cg_loaded: 1.82    # Loaded motor CG from nosecone (matches "total weight" in .eng) (m)
 
 # Moments of inertia (kg*m^2)
 I_R_wet: 0.012           # Roll, wet

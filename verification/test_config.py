@@ -78,7 +78,7 @@ _VEHICLE_YAML = """
     wet_mass: 26.5
     dry_mass: 14.7
     cg_dry: 1.15
-    cg_propellant: 2.10
+    motor_cg_loaded: 1.82
     I_R_wet: 0.012
     I_R_dry: 0.008
     I_L_wet: 5.2
@@ -208,7 +208,7 @@ def test_vehicle_mass(tmp_path):
     assert v.wet_mass == pytest.approx(26.5)
     assert v.dry_mass == pytest.approx(14.7)
     assert v.cg_dry == pytest.approx(1.15)
-    assert v.cg_propellant == pytest.approx(2.10)
+    assert v.motor_cg_loaded == pytest.approx(1.82)
 
 
 def test_vehicle_moi(tmp_path):

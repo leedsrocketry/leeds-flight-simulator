@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import yaml
 
 
@@ -123,10 +124,13 @@ class VehicleConfig:
     launch_rail_length: float  # m
 
     # Mass
-    wet_mass: float          # kg
-    dry_mass: float          # kg
-    cg_dry: float            # m from nosecone tip
-    cg_propellant: float     # m from nosecone tip
+    wet_mass: float          # kg  (airframe + loaded motor)
+    dry_mass: float          # kg  (airframe + empty motor casing)
+    cg_dry: float            # m from nosecone tip  (dry vehicle incl. empty casing)
+
+    # Motor CG (measured from nosecone tip).  Used in dynamics.py CG assembly:
+    #   CG(t) = (m_dry·cg_dry + m_prop(t)·motor_cg_loaded) / (m_dry + m_prop(t))
+    motor_cg_loaded: float   # m — CG of fully loaded motor ("total weight" in .eng)
 
     # Moments of inertia
     I_R_wet: float           # kg·m²  roll, wet
@@ -268,7 +272,7 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
         wet_mass=float(raw["wet_mass"]),
         dry_mass=float(raw["dry_mass"]),
         cg_dry=float(raw["cg_dry"]),
-        cg_propellant=float(raw["cg_propellant"]),
+        motor_cg_loaded=float(raw["motor_cg_loaded"]),
         I_R_wet=float(raw["I_R_wet"]),
         I_R_dry=float(raw["I_R_dry"]),
         I_L_wet=float(raw["I_L_wet"]),
@@ -278,4 +282,116 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
         CdA_main=float(raw["CdA_main"]),
         deploy_altitude_agl=float(raw["deploy_altitude_agl"]),
         r_fin=float(raw["r_fin"]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Motor data dataclass  (raw parsed output of load_motor)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MotorData:
+    """Raw data parsed from a RASP .eng file.
+
+    Masses are in kg, time in seconds, thrust in Newtons.
+    ``m_motor_kg`` is the total motor mass (casing + propellant) as stated in
+    the .eng header ("total weight" field).
+    """
+    name: str
+    m_prop_kg: float          # propellant mass [kg]
+    m_motor_kg: float         # total motor mass: casing + propellant [kg]
+    time_s: np.ndarray        # (K,) thrust curve time points [s]
+    thrust_n: np.ndarray      # (K,) thrust values [N]
+
+
+# ---------------------------------------------------------------------------
+# Motor loader
+# ---------------------------------------------------------------------------
+
+def load_motor(path: Path | str) -> MotorData:
+    """Parse a RASP .eng file and return a MotorData.
+
+    Format expected::
+
+        ; optional comment lines
+        Name Diam_mm Length_mm Delays PropMass_kg TotalMass_kg Manufacturer
+        time_s  thrust_N
+        ...
+
+    Masses are in kg. Thrust in Newtons. The final data point should have
+    thrust = 0; if absent it is appended automatically.
+
+    Raises
+    ------
+    ValueError
+        If the file cannot be parsed or contains physically implausible values.
+    """
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+
+    # Strip comments and blank lines
+    data_lines = [l.strip() for l in lines
+                  if l.strip() and not l.strip().startswith(";")]
+
+    if len(data_lines) < 2:
+        raise ValueError(f"Motor file {path} has no usable data")
+
+    # --- header line
+    header = data_lines[0].split()
+    if len(header) < 7:
+        raise ValueError(
+            f"Motor file header must have ≥7 fields, got: {data_lines[0]!r}"
+        )
+    name = header[0]
+    try:
+        m_prop_kg = float(header[4])
+        m_motor_kg = float(header[5])
+    except ValueError as exc:
+        raise ValueError(
+            f"Could not parse motor masses from header: {data_lines[0]!r}"
+        ) from exc
+
+    if m_prop_kg <= 0:
+        raise ValueError(f"Propellant mass must be > 0, got {m_prop_kg}")
+    if m_motor_kg <= m_prop_kg:
+        raise ValueError(
+            f"Total motor mass ({m_motor_kg} kg) must exceed propellant mass "
+            f"({m_prop_kg} kg)"
+        )
+
+    # --- thrust curve data points
+    times: list[float] = []
+    thrusts: list[float] = []
+    for line in data_lines[1:]:
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            t, f = float(parts[0]), float(parts[1])
+        except ValueError:
+            continue
+        times.append(t)
+        thrusts.append(f)
+
+    if len(times) < 2:
+        raise ValueError(f"Motor file {path} must have ≥2 thrust data points")
+
+    time_arr = np.asarray(times, dtype=np.float64)
+    thrust_arr = np.asarray(thrusts, dtype=np.float64)
+
+    if not np.all(np.diff(time_arr) > 0):
+        raise ValueError("Thrust curve time points must be strictly increasing")
+    if np.any(thrust_arr < 0):
+        raise ValueError("Thrust values must be non-negative")
+
+    # Ensure burnout point has thrust = 0
+    if thrust_arr[-1] != 0.0:
+        time_arr = np.append(time_arr, time_arr[-1])
+        thrust_arr = np.append(thrust_arr, 0.0)
+
+    return MotorData(
+        name=name,
+        m_prop_kg=m_prop_kg,
+        m_motor_kg=m_motor_kg,
+        time_s=time_arr,
+        thrust_n=thrust_arr,
     )

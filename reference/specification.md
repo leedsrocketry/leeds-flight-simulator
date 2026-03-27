@@ -205,12 +205,22 @@ F(t) = F_nominal(t) · k_impulse, where k_impulse ~ Normal(1.0, whatever is in t
 ### 7.3 Mass Properties
 
 ```
-m_prop(t) = m_prop_0 · (1 − ∫₀ᵗF(τ)dτ / I_total)
-ṁ(t) = m_prop_0 · F(t) / I_total
-CG(t) = (m_dry·CG_dry + m_prop(t)·CG_prop) / (m_dry + m_prop(t))
+m_prop(t)  = m_prop_0 · (1 − ∫₀ᵗF(τ)dτ / I_total)
+ṁ(t)       = m_prop_0 · F(t) / I_total
+m_total(t) = m_dry + m_prop(t)
+
+CG(t) = (m_dry · cg_dry  +  m_prop(t) · motor_cg_loaded)
+        ─────────────────────────────────────────────────
+                        m_dry + m_prop(t)
 ```
 
-CG_prop specified by operator. I_R(t) and I_L(t) interpolated between wet/dry values by propellant fraction.
+where:
+- `cg_dry` — dry vehicle CG (airframe + empty casing) from nosecone tip, from `vehicle.yaml`
+- `motor_cg_loaded` — CG of fully loaded motor from nosecone tip, from `vehicle.yaml`; serves as the effective propellant CG.  Exact when the casing is massless; an excellent approximation for high-mass-fraction solid motors.
+- `m_prop_0` ("prop weight") and `m_motor_wet` ("total weight") from the `.eng` file header
+
+Vehicle CG assembly is performed in `dynamics.py`.
+I_R(t) and I_L(t) are whole-vehicle values, interpolated linearly between wet/dry by propellant fraction.
 
 ### 7.4 Nozzle Exit
 
@@ -586,7 +596,7 @@ Optional. Coordinates in `simulation.yaml`. Added to map figure(s).
 
 | File | Format | Content |
 |------|--------|---------|
-| `vehicle.yaml` | YAML | Mass (wet/dry), CG (dry, propellant), MoI (I_R/I_L wet/dry), nozzle exit distance, geometry (diameter, length, reference area), CdA (drogue/main), deployment altitude AGL, launch rail length, fin roll geometry (r_fin) |
+| `vehicle.yaml` | YAML | Mass (wet/dry), CG (dry vehicle, loaded motor, dry motor casing), MoI (I_R/I_L wet/dry), nozzle exit distance, geometry (diameter, length, reference area), CdA (drogue/main), deployment altitude AGL, launch rail length, fin roll geometry (r_fin) |
 | `motor.eng` | .eng | Thrust curve, propellant mass |
 | `aero_tables/*.csv` | CSV | Per-component C_A, C_N, CP_m vs M, Re, AoA |
 | `wind_profiles.npz` | NumPy `.npz` | Ensemble of perturbed wind profiles (§5.1) |
