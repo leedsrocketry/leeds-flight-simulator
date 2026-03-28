@@ -124,6 +124,8 @@ Defines the vehicle's physical properties. All distances are in metres from the 
 
 The aerodynamic reference area is defined as A_ref = pi * d**2 / 4, where d is the reference diameter. This is the same as RASAero.
 
+The rocket's overall length is used as the reference length for Reynolds number calculation. This is the same as RASAero.
+
 See `example/vehicle.yaml` for a fully annotated example.
 
 ### `motor.eng`
@@ -134,8 +136,8 @@ Standard RASP/RockSim `.eng` file. Downloadable from [thrustcurve.org](https://w
 
 The `aero_tables` field in `vehicle.yaml` can point to either a **single CSV file** or a **directory of CSV files**:
 
-- **Single file** — treated as full-vehicle data; roll torques and pitch/yaw damping are not computed. A warning is issued.
-- **Directory** — one CSV per aerodynamic component (nosecone, body tube, fin set, boattail, etc.), enabling full 6-DoF simulation with per-component damping and roll torques.
+- **Single file** — treated as full-vehicle data; per-component force and moment computation is disabled (forces act at the whole-vehicle CP). A warning is issued.
+- **Directory** — one CSV per aerodynamic component (nosecone, body tube, fin set, boattail, etc.), enabling full 6-DoF simulation with per-component local angle-of-attack forces and moments, pitch/yaw damping, and roll torques.
 
 Each CSV must contain:
 
@@ -154,8 +156,6 @@ Useful tools:
 - Online GeoJSON editor: [geojson.io](https://geojson.io) — for drawing and editing polygons
 
 ### `coastline.geojson`
-
-> **Configurable check direction not yet implemented.** The `coastline_mode` parameter described below is planned; currently only `"sea"` behaviour is available.
 
 Optional. A GeoJSON polygon delineating the **on-land** area. The direction of the compliance check is set by `coastline_mode` under `site` in `simulation.yaml`:
 
@@ -204,8 +204,6 @@ When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`
 
 
 ## Multi-Day Wind
-
-> **Not yet implemented.** This section documents the planned interface.
 
 `wind_profiles` in `simulation.yaml` can point to either a single `.npz` file or a directory of `.npz` files:
 
@@ -259,12 +257,10 @@ At the start of execution, the simulator runs a small run of samples at very tig
 
 ## Warnings
 
-> **Not yet implemented.** This section documents the planned interface.
-
 Warnings are raised when the simulator detects a configuration that is unusual but not an error (e.g. a single aero table is provided, falling back to 3-DoF mode). By default, warnings are **blocking**: the simulator pauses and prompts you to acknowledge each one before continuing.
 
 ```
-WARNING: Only one aeroplot CSV found. Roll torques and pitch/yaw damping will not be computed.
+WARNING: Only one aeroplot CSV found. Per-component force and moment computation disabled; forces will act at the whole-vehicle CP.
 Press Enter to continue, or Ctrl-C to abort.
 ```
 
@@ -289,11 +285,9 @@ Before relying on the simulator for a safety case, verify it against an independ
 python -m pytest verification/
 ```
 
-Checks ISA against published tables, quaternion maths, launch rail exit velocity, terminal descent, aero interpolation, damping coefficients, the `.eng` parser, AoA computation, and wind `.npz` loading.
+Checks ISA against published tables, quaternion maths, launch rail exit velocity, terminal descent, aero interpolation and per-component local AoA damping, the `.eng` parser, AoA computation, and wind `.npz` loading.
 
 **Trajectory verification tool:**
-
-> **Not yet implemented.** This section documents the planned interface.
 
 Before the main MC run, you can supply a reference CSV from any other flight simulator for a single-trajectory comparison. Add the path under `verification` in `simulation.yaml`:
 

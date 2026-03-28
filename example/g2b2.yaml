@@ -1,14 +1,14 @@
-motor: "motor.eng"          # RASP .eng thrust curve file (path relative to this file)
-aero_tables: "aero_tables"  # path to a single RASAero II Aeroplot CSV, or a directory of CSVs
-                            # (path relative to this file); a single file runs in 3-DoF mode (with warning)
+motor: "o3400.eng"          # RASP .eng thrust curve file (path relative to this file)
+aero_tables: "aero_tables"  # path to a single RASAero II Aeroplot CSV, or a directory of CSVs;
+                            # a single file runs without pitch/yaw damping or roll modelled (with warning)
 # fins_aero_table: "aero_tables/fins.csv"  # uncomment to identify the fins component explicitly;
-                                            # if omitted, the file whose name contains "fin" is used (case insensitive)
+                                           # if omitted, the file whose name contains "fin" is used (case insensitive)
 
 geometry:
-  diameter: 0.130        # reference diameter (m)
+  diameter: 0.130        # body diameter (m)
   length: 2.6            # total length (m)
   nozzle_position: 2.55  # nozzle exit plane from nosecone tip (m)
-  nozzle_diameter: 0.08  # nozzle exit diameter (m) — used for thrust altitude correction
+  nozzle_diameter: 0.08  # nozzle exit diameter (m)
   fin_cp_radius: 0.095   # fin CP spanwise distance from centreline (m)
 
 mass:
@@ -22,12 +22,12 @@ mass:
 
 recovery:
   # Omit a parachute section entirely to disable that stage.
-  # See documentation §9 for which descent scenarios are active for each configuration.
+  # See documentation for which descent scenarios are active for each configuration.
   drogue:
-    cd: 2.0
+    cd: 0.97
     area: 0.15          # reference area (m²)
     threshold: apogee   # "apogee" or altitude in metres AGL
   main:
-    cd: 2.0
+    cd: 2.2
     area: 2.8           # reference area (m²)
     threshold: 305      # metres AGL

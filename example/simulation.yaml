@@ -1,28 +1,27 @@
-vehicle: "vehicle.yaml"   # path to vehicle.yaml (relative to this file);
-                          # motor and aero_tables paths are specified inside vehicle.yaml
+vehicle: "g2b2.yaml"  # path to vehicle.yaml (relative to this file);
+                      # motor and aero_tables paths are specified inside vehicle.yaml
 
 site:
   latitude: 58.6104700    # degrees — WGS-84 latitude of launch site
   longitude: -4.9434804   # degrees — WGS-84 longitude of launch site
 
-  ballistic_exclusion_radius: 500   # metres — minimum acceptable ballistic landing distance
-                                    # from the launch site; used during inclination optimisation
-                                    # (§13.2); has no effect when inclination is not "auto"
+  ballistic_exclusion_radius: 1000  # metres — minimum acceptable ballistic landing distance
+                                    # from the launch site; used during inclination optimisation;
+                                    # has no effect when inclination is not "auto"
 
-  launch_observation_radius: 200    # metres — radius of the automatic observation station
+  launch_observation_radius: 5000   # metres — radius of the automatic observation station
                                     # placed at the launch site; added to every LOS check in
                                     # addition to any stations listed below
 
-  altitude_ceiling: 16764           # metres — peak altitude must not exceed this value;
-                                    # 16764 m ≈ 55,000 ft (typical UK CAA ceiling)
+  altitude_ceiling: 16764           # metres — danger area ceiling;
 
-  danger_area: "danger_area.geojson"  # GeoJSON polygon defining the danger area footprint;
+  danger_area: "d802.geojson"         # GeoJSON polygon defining the danger area footprint;
                                       # coordinates must be [longitude, latitude] per the GeoJSON spec
 
   # coastline: "coastline.geojson"  # optional — GeoJSON polygon of the on-land area;
                                     # omit this key entirely to disable the coastline check
   # coastline_mode: "sea"           # optional — direction of the coastline compliance check:
-                                    #   "sea"  (default) — landing must be outside the polygon
+                                    #   "sea"            — landing must be outside the polygon
                                     #                      (at sea)
                                     #   "land"           — landing must be inside the polygon
                                     #                      (on land)
@@ -32,14 +31,10 @@ site:
     - name: "MOD Range Control"
       latitude: 58.40               # degrees
       longitude: -4.76              # degrees
-      radius: 10000                 # metres — landing must be within this radius
+      radius: 10000                 # metres
 
-  # map_markers:                    # optional — additional points of interest overlaid on the
-  #   - name: "Label"               # dispersion map; no compliance check attached
-  #     latitude: 58.40
-  #     longitude: -4.76
-  map_markers:
-    - name: "Durness"
+  map_markers:                      # optional — additional points of interest overlaid on the
+    - name: "Durness"               # dispersion map; no compliance check attached
       latitude: 58.40
       longitude: -4.76
 
@@ -54,14 +49,14 @@ launch:
                                   # required when inclination is "auto"; ignored otherwise
     length: 4.0                   # metres — distance the CG travels along the rail before free flight
 
-  wind_profiles: "wind_profiles.npz"  # path to wind profile ensemble (.npz);
+  wind_profiles: "wind_profiles.npz"  # path to wind profile ensemble (.npz or a directory of .npz);
                                       # must contain arrays: altitude_m (M,), wind_east_ms (N,M),
                                       # wind_north_ms (N,M); N must be >= samples below
 
   surface_wind:                   # optional — override the lower portion of every wind profile
                                   # with a measured surface reading; omit this section to disable
     speed_ms: 5.0                 # m/s — surface wind speed
-    bearing_deg: 270.0            # degrees clockwise from North — direction the wind is blowing FROM
+    bearing_deg: 0.0              # degrees clockwise from North — direction the wind is blowing FROM
     blend_height_m: 300           # metres AGL — surface wind blends linearly into profile wind
                                   # between 0 and this altitude; above this altitude, profile is unchanged
 
@@ -84,8 +79,8 @@ monte_carlo:
                                   # containment checking; full trajectory must be inside the buffered volume
 
     sm_transition_mach: 0.91      # Mach — threshold separating subsonic and supersonic SM checks;
-                                  # the definition of this boundary varies between tools; the default
-                                  # value (0.91) follows the RASAero II convention
+                                  # the definition of this boundary varies between tools; the value
+                                  # used here follows the RASAero II convention
     sm_subsonic_min: 1.0          # calibres — minimum acceptable static margin when M < sm_transition_mach
     sm_supersonic_min: 2.0        # calibres — minimum acceptable static margin when M >= sm_transition_mach
     aoa_max: 12.0                 # degrees — maximum acceptable angle of attack at any point in flight
@@ -93,7 +88,7 @@ monte_carlo:
                                   # naturally excludes rail-exit and apogee transients
 
     # Scenarios to apply the coastline check to (requires coastline above to be set).
-    # Scenarios not active for the current vehicle configuration are silently skipped.
+    # Scenarios not active for the current vehicle configuration are skipped with a warning.
     sea_check_scenarios:
       - nominal
       - ballistic
@@ -101,16 +96,16 @@ monte_carlo:
       - premature_main
 
     # Scenarios to check for observation station coverage (LOS check).
-    # Scenarios not active for the current vehicle configuration are silently skipped.
+    # Scenarios not active for the current vehicle configuration are skipped with a warning.
     los_check_scenarios:
       - ballistic
       - drogue_only
 
-# verification:                          # optional — single-trajectory comparison against a
-#   reference_trajectory: "ref.csv"      # reference CSV from any other flight simulator;
-#                                        # omit this section to skip the verification check
-#   altitude_tol_m: 50                   # metres — tolerance band on altitude
-#   mach_tol: 0.05                       # — tolerance band on Mach number
-#   sm_tol_cal: 0.3                      # calibres — tolerance band on static margin
-#   mass_tol_kg: 0.1                     # kg — tolerance band on vehicle mass
-#   inertia_tol_pct: 5.0                 # % — tolerance band on lateral inertia
+verification:     # optional — single-trajectory comparison against a
+                  # reference CSV from any other flight simulator;
+                  # omit this section to skip the verification check
+  reference_trajectory: "rasaero-nominal-simulation.csv" # path to reference CSV
+  altitude_tolerance: 0.05  # fraction in [0, 1] — tolerance band on altitude
+  mach_tolerance: 0.05      # fraction in [0, 1] — tolerance band on Mach number
+  sm_tolerance: 0.05        # fraction in [0, 1] — tolerance band on static margin
+  mass_tolerance: 0.05      # fraction in [0, 1] — tolerance band on vehicle mass
