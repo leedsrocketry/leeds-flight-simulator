@@ -54,6 +54,7 @@ class SiteConfig:
     altitude_ceiling: float                        # metres
     danger_area: Path
     coastline: Path | None                         # None → sea-landing check disabled
+    coastline_mode: str                            # "sea" or "land" (§14.2)
     observation_stations: tuple[ObservationStation, ...]
     map_markers: tuple[MapMarker, ...]
 
@@ -113,11 +114,21 @@ class MonteCarloConfig:
 
 
 @dataclass(frozen=True)
+class VerificationConfig:
+    reference_trajectory: Path  # resolved path to reference CSV
+    altitude_tolerance: float   # fractional tolerance on altitude
+    mach_tolerance: float       # fractional tolerance on Mach number
+    sm_tolerance: float         # fractional tolerance on static margin
+    mass_tolerance: float       # fractional tolerance on vehicle mass
+
+
+@dataclass(frozen=True)
 class SimulationConfig:
     vehicle: Path           # resolved path to vehicle.yaml
     site: SiteConfig
     launch: LaunchConfig
     monte_carlo: MonteCarloConfig
+    verification: VerificationConfig | None  # None → trajectory comparison skipped
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +269,11 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     markers_raw = site_raw.get("map_markers") or []
     coastline_raw = site_raw.get("coastline")
     coastline: Path | None = None if coastline_raw is None else _resolve(coastline_raw)
+    coastline_mode_raw = str(site_raw.get("coastline_mode", "sea"))
+    if coastline_mode_raw not in ("sea", "land"):
+        raise ValueError(
+            f"coastline_mode must be 'sea' or 'land', got: {coastline_mode_raw!r}"
+        )
 
     site = SiteConfig(
         latitude=float(site_raw["latitude"]),
@@ -267,6 +283,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         altitude_ceiling=float(site_raw["altitude_ceiling"]),
         danger_area=_resolve(site_raw["danger_area"]),
         coastline=coastline,
+        coastline_mode=coastline_mode_raw,
         observation_stations=tuple(
             ObservationStation(
                 name=str(s["name"]),
@@ -367,11 +384,26 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         ),
     )
 
+    # -- verification (optional)
+    ver_raw = raw.get("verification")
+    verification: VerificationConfig | None
+    if ver_raw is not None:
+        verification = VerificationConfig(
+            reference_trajectory=_resolve(str(ver_raw["reference_trajectory"])),
+            altitude_tolerance=float(ver_raw["altitude_tolerance"]),
+            mach_tolerance=float(ver_raw["mach_tolerance"]),
+            sm_tolerance=float(ver_raw["sm_tolerance"]),
+            mass_tolerance=float(ver_raw["mass_tolerance"]),
+        )
+    else:
+        verification = None
+
     return SimulationConfig(
         vehicle=vehicle,
         site=site,
         launch=launch,
         monte_carlo=monte_carlo,
+        verification=verification,
     )
 
 

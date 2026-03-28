@@ -499,9 +499,9 @@ def test_real_simulation_yaml_loads():
 
 
 def test_real_vehicle_yaml_loads():
-    """The committed example/vehicle.yaml must parse without errors."""
-    real = Path(__file__).parent.parent / "example" / "vehicle.yaml"
+    """The committed example/g2b2.yaml must parse without errors."""
+    real = Path(__file__).parent.parent / "example" / "g2b2.yaml"
     if not real.exists():
-        pytest.skip("example/vehicle.yaml not present")
+        pytest.skip("example/g2b2.yaml not present")
     v = load_vehicle_config(real)
     assert v.geometry.diameter == pytest.approx(0.130)

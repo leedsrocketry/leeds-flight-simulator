@@ -618,10 +618,7 @@ def aero_forces_moments(
 
     # Bulk lateral speed and AoA — used for axial force and lever-arm reference
     V_lat_bulk = (v_rel * v_rel + w_rel * w_rel) ** 0.5
-    if u_rel > EPS:
-        alpha_bulk_deg = math.atan2(V_lat_bulk, u_rel) * _RAD_TO_DEG
-    else:
-        alpha_bulk_deg = 90.0
+    alpha_bulk_deg = math.atan2(V_lat_bulk, u_rel) * _RAD_TO_DEG
 
     # Axial force — whole-vehicle C_A at bulk AoA (§6.4)
     C_A = _interp3(mach_g, re_g, alpha_g, ca_tbl, M, Re, alpha_bulk_deg)
@@ -653,10 +650,7 @@ def aero_forces_moments(
             w_loc = w_rel + q_rate * arm_ref
 
             V_lat_i = (v_loc * v_loc + w_loc * w_loc) ** 0.5
-            if u_rel > EPS:
-                alpha_local_deg = math.atan2(V_lat_i, u_rel) * _RAD_TO_DEG
-            else:
-                alpha_local_deg = 90.0
+            alpha_local_deg = math.atan2(V_lat_i, u_rel) * _RAD_TO_DEG
 
             # C_N and CP at local AoA
             cn_i = _interp3(mach_g, re_g, alpha_g, cn_comp[i], M, Re,

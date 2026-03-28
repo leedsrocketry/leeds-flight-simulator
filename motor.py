@@ -68,6 +68,7 @@ class MotorModel:
     m_casing: float          # motor casing mass = m_motor − m_prop_0 [kg]
     total_impulse: float     # ∫F dt [N·s]
     nozzle_area: float       # π·dₑ²/4 [m²] — for pressure thrust correction
+    nozzle_position: float   # m from nosecone tip — for jet damping (§8.3.4)
 
     # Dry vehicle properties (derived from wet + propellant in build_motor_model)
     m_dry: float             # dry vehicle mass [kg]
@@ -134,6 +135,7 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
         m_casing=m_casing,
         total_impulse=total_impulse,
         nozzle_area=geom.nozzle_area,
+        nozzle_position=geom.nozzle_position,
         m_dry=m_dry,
         cg_dry=cg_dry,
         motor_cg_loaded=mass.wet_motor_cg,
