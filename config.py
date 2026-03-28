@@ -4,9 +4,8 @@ Two public functions:
     load_simulation_config(path)  →  SimulationConfig
     load_vehicle_config(path)     →  VehicleConfig
 
-All paths inside SimulationConfig are resolved relative to the simulation.yaml
-file itself, so the caller can pass an absolute or relative path and the
-referenced input files will be found correctly.
+Paths inside SimulationConfig are resolved relative to the simulation.yaml
+file itself; paths inside VehicleConfig are resolved relative to vehicle.yaml.
 """
 
 from __future__ import annotations
@@ -44,18 +43,14 @@ class MapMarker:
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class VehicleFilesConfig:
-    """Paths to the vehicle-related input files."""
-    config: Path       # vehicle.yaml
-    motor: Path        # motor.eng
-    aero_tables: Path  # aero tables directory
-
-
-@dataclass(frozen=True)
 class SiteConfig:
     latitude: float                                # degrees
     longitude: float                               # degrees
-    min_safe_radius: float                         # metres
+    ballistic_exclusion_radius: float              # metres — minimum ballistic landing distance
+                                                   # from launch site; used during inclination
+                                                   # optimisation (§13.2)
+    launch_observation_radius: float               # metres — radius of the automatic launch site
+                                                   # observation station added to every LOS check
     altitude_ceiling: float                        # metres
     danger_area: Path
     coastline: Path | None                         # None → sea-landing check disabled
@@ -65,9 +60,13 @@ class SiteConfig:
 
 @dataclass(frozen=True)
 class RailConfig:
-    azimuth: float | Literal["auto"]      # degrees clockwise from North, or "auto"
-    inclination: float | Literal["auto"]  # degrees from horizontal, or "auto"
-    length: float                         # metres
+    azimuth: float | Literal["auto"]              # degrees clockwise from North, or "auto"
+    azimuth_range: tuple[float, float] | None     # [min, max] integer search range;
+                                                   # required when azimuth == "auto"
+    inclination: float | Literal["auto"]          # degrees from horizontal, or "auto"
+    inclination_range: tuple[float, float] | None  # [min, max] integer search range;
+                                                   # required when inclination == "auto"
+    length: float                                  # metres
 
 
 @dataclass(frozen=True)
@@ -115,7 +114,7 @@ class MonteCarloConfig:
 
 @dataclass(frozen=True)
 class SimulationConfig:
-    vehicle: VehicleFilesConfig
+    vehicle: Path           # resolved path to vehicle.yaml
     site: SiteConfig
     launch: LaunchConfig
     monte_carlo: MonteCarloConfig
@@ -184,12 +183,28 @@ class VehicleRecovery:
     drogue: ParachuteConfig | None  # None → no drogue stage
     main: ParachuteConfig | None    # None → no main stage
 
+    @property
+    def active_scenarios(self) -> tuple[str, ...]:
+        """Return the tuple of active descent scenario names for this recovery config."""
+        scenarios: list[str] = ["nominal"]
+        if self.drogue is not None or self.main is not None:
+            scenarios.append("ballistic")
+        if self.drogue is not None and self.main is not None:
+            scenarios.append("drogue_only")
+        if self.main is not None and isinstance(self.main.threshold, float):
+            scenarios.append("premature_main")
+        return tuple(scenarios)
+
 
 @dataclass(frozen=True)
 class VehicleConfig:
     geometry: VehicleGeometry
     mass: VehicleMass
     recovery: VehicleRecovery
+    motor: Path               # resolved path to .eng file
+    aero_tables: Path         # resolved path to aero tables directory
+    fins_aero_table: Path | None  # resolved path to fins component CSV, or None to
+                                  # use the filename heuristic in aerodynamics.py
 
     @property
     def reference_area(self) -> float:
@@ -213,6 +228,12 @@ def _parse_threshold(value: object) -> float | Literal["apogee"]:
     return float(value)
 
 
+def _parse_range(value: object) -> tuple[float, float] | None:
+    if value is None:
+        return None
+    return (float(value[0]), float(value[1]))
+
+
 def load_simulation_config(path: Path | str) -> SimulationConfig:
     """Parse *path* (simulation.yaml) and return a SimulationConfig.
 
@@ -228,13 +249,8 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     def _resolve(p: str) -> Path:
         return (base_dir / p).resolve()
 
-    # -- vehicle files
-    veh_raw = raw["vehicle"]
-    vehicle = VehicleFilesConfig(
-        config=_resolve(veh_raw["config"]),
-        motor=_resolve(veh_raw["motor"]),
-        aero_tables=_resolve(veh_raw["aero_tables"]),
-    )
+    # -- vehicle path
+    vehicle = _resolve(str(raw["vehicle"]))
 
     # -- site
     site_raw = raw["site"]
@@ -246,7 +262,8 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     site = SiteConfig(
         latitude=float(site_raw["latitude"]),
         longitude=float(site_raw["longitude"]),
-        min_safe_radius=float(site_raw["min_safe_radius"]),
+        ballistic_exclusion_radius=float(site_raw["ballistic_exclusion_radius"]),
+        launch_observation_radius=float(site_raw["launch_observation_radius"]),
         altitude_ceiling=float(site_raw["altitude_ceiling"]),
         danger_area=_resolve(site_raw["danger_area"]),
         coastline=coastline,
@@ -284,10 +301,26 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     else:
         surface_wind = None
 
+    rail_azimuth = _parse_auto(rail_raw["azimuth"])
+    rail_inclination = _parse_auto(rail_raw["inclination"])
+    azimuth_range = _parse_range(rail_raw.get("azimuth_range"))
+    inclination_range = _parse_range(rail_raw.get("inclination_range"))
+
+    if rail_azimuth == "auto" and azimuth_range is None:
+        raise ValueError(
+            "launch.rail.azimuth_range is required when azimuth is 'auto'"
+        )
+    if rail_inclination == "auto" and inclination_range is None:
+        raise ValueError(
+            "launch.rail.inclination_range is required when inclination is 'auto'"
+        )
+
     launch = LaunchConfig(
         rail=RailConfig(
-            azimuth=_parse_auto(rail_raw["azimuth"]),
-            inclination=_parse_auto(rail_raw["inclination"]),
+            azimuth=rail_azimuth,
+            azimuth_range=azimuth_range,
+            inclination=rail_inclination,
+            inclination_range=inclination_range,
             length=float(rail_raw["length"]),
         ),
         wind_profiles=_resolve(launch_raw["wind_profiles"]),
@@ -334,9 +367,19 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
 
 
 def load_vehicle_config(path: Path | str) -> VehicleConfig:
-    """Parse *path* (vehicle.yaml) and return a VehicleConfig."""
-    with Path(path).open("r", encoding="utf-8") as fh:
+    """Parse *path* (vehicle.yaml) and return a VehicleConfig.
+
+    All file paths are resolved relative to the directory containing the
+    vehicle.yaml file.
+    """
+    path = Path(path).resolve()
+    base_dir = path.parent
+
+    with path.open("r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
+
+    def _resolve(p: str) -> Path:
+        return (base_dir / p).resolve()
 
     geom = raw["geometry"]
     mass = raw["mass"]
@@ -361,6 +404,9 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
             "and main, main only, or neither."
         )
 
+    fins_raw = raw.get("fins_aero_table")
+    fins_aero_table: Path | None = _resolve(fins_raw) if fins_raw is not None else None
+
     return VehicleConfig(
         geometry=VehicleGeometry(
             diameter=float(geom["diameter"]),
@@ -382,6 +428,9 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
             drogue=drogue,
             main=main,
         ),
+        motor=_resolve(raw["motor"]),
+        aero_tables=_resolve(raw["aero_tables"]),
+        fins_aero_table=fins_aero_table,
     )
 
 
@@ -395,7 +444,7 @@ class MotorData:
 
     Masses are in kg, time in seconds, thrust in Newtons.
     ``m_motor_kg`` is the total motor mass (casing + propellant) as stated in
-    the .eng header ("total weight" field).
+    the .eng header (\"total weight\" field).
     """
     name: str
     m_prop_kg: float          # propellant mass [kg]

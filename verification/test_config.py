@@ -24,14 +24,12 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
 
 
 _MINIMAL_SIM_YAML = """
-    vehicle:
-      config: "vehicle.yaml"
-      motor: "motor.eng"
-      aero_tables: "aero_tables"
+    vehicle: "vehicle.yaml"
     site:
       latitude: 58.61
       longitude: -4.94
-      min_safe_radius: 500
+      ballistic_exclusion_radius: 500
+      launch_observation_radius: 200
       altitude_ceiling: 16764
       danger_area: "danger_area.geojson"
       observation_stations:
@@ -78,6 +76,8 @@ _MINIMAL_SIM_YAML = """
     """
 
 _VEHICLE_YAML = """
+    motor: "motor.eng"
+    aero_tables: "aero_tables"
     geometry:
       diameter: 0.130
       length: 2.6
@@ -114,18 +114,18 @@ def test_simulation_config_loads(tmp_path):
     assert isinstance(cfg, SimulationConfig)
 
 
-def test_vehicle_files(tmp_path):
+def test_vehicle_path(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
-    assert cfg.vehicle.config.is_absolute()
-    assert cfg.vehicle.config == (tmp_path / "vehicle.yaml").resolve()
-    assert cfg.vehicle.aero_tables == (tmp_path / "aero_tables").resolve()
+    assert cfg.vehicle.is_absolute()
+    assert cfg.vehicle == (tmp_path / "vehicle.yaml").resolve()
 
 
 def test_site_values(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
     assert cfg.site.latitude == pytest.approx(58.61)
     assert cfg.site.longitude == pytest.approx(-4.94)
-    assert cfg.site.min_safe_radius == pytest.approx(500.0)
+    assert cfg.site.ballistic_exclusion_radius == pytest.approx(500.0)
+    assert cfg.site.launch_observation_radius == pytest.approx(200.0)
     assert cfg.site.altitude_ceiling == pytest.approx(16764.0)
 
 
@@ -145,14 +145,36 @@ def test_launch_rail_numeric(tmp_path):
     assert cfg.launch.rail.azimuth == pytest.approx(45.0)
     assert cfg.launch.rail.inclination == pytest.approx(87.0)
     assert cfg.launch.rail.length == pytest.approx(4.0)
+    assert cfg.launch.rail.azimuth_range is None
+    assert cfg.launch.rail.inclination_range is None
 
 
 def test_launch_rail_auto(tmp_path):
     content = _MINIMAL_SIM_YAML.replace("azimuth: 45.0", 'azimuth: "auto"')
     content = content.replace("inclination: 87.0", 'inclination: "auto"')
+    content = content.replace(
+        "        length: 4.0",
+        "        azimuth_range: [-90, 90]\n        inclination_range: [85, 90]\n        length: 4.0",
+    )
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", content))
     assert cfg.launch.rail.azimuth == "auto"
     assert cfg.launch.rail.inclination == "auto"
+    assert cfg.launch.rail.azimuth_range == pytest.approx((-90.0, 90.0))
+    assert cfg.launch.rail.inclination_range == pytest.approx((85.0, 90.0))
+
+
+def test_launch_rail_auto_requires_azimuth_range(tmp_path):
+    """azimuth='auto' without azimuth_range must raise ValueError."""
+    content = _MINIMAL_SIM_YAML.replace("azimuth: 45.0", 'azimuth: "auto"')
+    with pytest.raises(ValueError, match="azimuth_range"):
+        load_simulation_config(_write(tmp_path, "s.yaml", content))
+
+
+def test_launch_rail_auto_requires_inclination_range(tmp_path):
+    """inclination='auto' without inclination_range must raise ValueError."""
+    content = _MINIMAL_SIM_YAML.replace("inclination: 87.0", 'inclination: "auto"')
+    with pytest.raises(ValueError, match="inclination_range"):
+        load_simulation_config(_write(tmp_path, "s.yaml", content))
 
 
 def test_launch_wind_profiles_resolved(tmp_path):
@@ -220,6 +242,25 @@ def test_config_is_frozen(tmp_path):
         cfg.monte_carlo.samples = 9999  # type: ignore[misc]
 
 
+def test_acceptance_scenario_lists(tmp_path):
+    cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
+    acc = cfg.monte_carlo.acceptance
+    assert "nominal" in acc.sea_check_scenarios
+    assert "ballistic" in acc.sea_check_scenarios
+    assert "ballistic" in acc.los_check_scenarios
+    assert "drogue_only" in acc.los_check_scenarios
+
+
+def test_acceptance_scenario_lists_empty_when_omitted(tmp_path):
+    """Omitting scenario lists gives empty tuples — no check runs."""
+    lines = [l for l in _MINIMAL_SIM_YAML.splitlines()
+             if not any(k in l for k in ("sea_check", "los_check", "- nominal",
+                                         "- ballistic", "- drogue_only"))]
+    cfg = load_simulation_config(_write(tmp_path, "s.yaml", "\n".join(lines)))
+    assert cfg.monte_carlo.acceptance.sea_check_scenarios == ()
+    assert cfg.monte_carlo.acceptance.los_check_scenarios == ()
+
+
 # ---------------------------------------------------------------------------
 # VehicleConfig tests
 # ---------------------------------------------------------------------------
@@ -228,6 +269,33 @@ def test_vehicle_config_loads(tmp_path):
     p = _write(tmp_path, "vehicle.yaml", _VEHICLE_YAML)
     v = load_vehicle_config(p)
     assert isinstance(v, VehicleConfig)
+
+
+def test_vehicle_file_paths(tmp_path):
+    """motor and aero_tables are resolved to absolute paths."""
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    assert v.motor.is_absolute()
+    assert v.motor == (tmp_path / "motor.eng").resolve()
+    assert v.aero_tables.is_absolute()
+    assert v.aero_tables == (tmp_path / "aero_tables").resolve()
+
+
+def test_fins_aero_table_absent(tmp_path):
+    """fins_aero_table defaults to None when not specified."""
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    assert v.fins_aero_table is None
+
+
+def test_fins_aero_table_specified(tmp_path):
+    """fins_aero_table is resolved to an absolute path when specified."""
+    yaml_with_fins = _VEHICLE_YAML.replace(
+        'motor: "motor.eng"',
+        'motor: "motor.eng"\n    fins_aero_table: "aero_tables/fins.csv"',
+    )
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_with_fins))
+    assert v.fins_aero_table is not None
+    assert v.fins_aero_table.is_absolute()
+    assert v.fins_aero_table == (tmp_path / "aero_tables" / "fins.csv").resolve()
 
 
 def test_vehicle_geometry(tmp_path):
@@ -317,7 +385,7 @@ def test_recovery_drogue_without_main_raises(tmp_path):
 
 
 def test_recovery_main_only(tmp_path):
-    """Omitting the drogue and main configured gives main-only vehicle."""
+    """Omitting the drogue gives main-only vehicle."""
     yaml_main_only = _VEHICLE_YAML.replace(
         "    recovery:\n"
         "      drogue:\n"
@@ -350,25 +418,6 @@ def test_recovery_no_chutes(tmp_path):
     assert v.recovery.main is None
 
 
-def test_acceptance_scenario_lists(tmp_path):
-    cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
-    acc = cfg.monte_carlo.acceptance
-    assert "nominal" in acc.sea_check_scenarios
-    assert "ballistic" in acc.sea_check_scenarios
-    assert "ballistic" in acc.los_check_scenarios
-    assert "drogue_only" in acc.los_check_scenarios
-
-
-def test_acceptance_scenario_lists_empty_when_omitted(tmp_path):
-    """Omitting scenario lists gives empty tuples — no check runs."""
-    lines = [l for l in _MINIMAL_SIM_YAML.splitlines()
-             if not any(k in l for k in ("sea_check", "los_check", "- nominal",
-                                         "- ballistic", "- drogue_only"))]
-    cfg = load_simulation_config(_write(tmp_path, "s.yaml", "\n".join(lines)))
-    assert cfg.monte_carlo.acceptance.sea_check_scenarios == ()
-    assert cfg.monte_carlo.acceptance.los_check_scenarios == ()
-
-
 def test_vehicle_is_frozen(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     with pytest.raises(Exception):
@@ -376,22 +425,77 @@ def test_vehicle_is_frozen(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# active_scenarios property tests
+# ---------------------------------------------------------------------------
+
+def test_active_scenarios_both_numeric_main(tmp_path):
+    """Both drogue and main with numeric main threshold → all four scenarios."""
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    assert set(v.recovery.active_scenarios) == {
+        "nominal", "ballistic", "drogue_only", "premature_main"
+    }
+
+
+def test_active_scenarios_both_apogee_main(tmp_path):
+    """Both drogue and main with apogee main threshold → no premature_main."""
+    yaml_apogee_main = _VEHICLE_YAML.replace("threshold: 305", "threshold: apogee")
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_apogee_main))
+    assert set(v.recovery.active_scenarios) == {
+        "nominal", "ballistic", "drogue_only"
+    }
+
+
+def test_active_scenarios_main_only_numeric(tmp_path):
+    """Main only with numeric threshold → nominal, ballistic, premature_main."""
+    yaml_main_only = _VEHICLE_YAML.replace(
+        "    recovery:\n"
+        "      drogue:\n"
+        "        cd: 2.0\n"
+        "        area: 0.15\n"
+        "        threshold: apogee\n",
+        "    recovery:\n",
+    )
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_main_only))
+    assert set(v.recovery.active_scenarios) == {
+        "nominal", "ballistic", "premature_main"
+    }
+
+
+def test_active_scenarios_no_chutes(tmp_path):
+    """No parachutes → nominal only."""
+    yaml_no_chutes = _VEHICLE_YAML.replace(
+        "    recovery:\n"
+        "      drogue:\n"
+        "        cd: 2.0\n"
+        "        area: 0.15\n"
+        "        threshold: apogee\n"
+        "      main:\n"
+        "        cd: 2.0\n"
+        "        area: 2.8\n"
+        "        threshold: 305\n",
+        "    recovery:\n",
+    )
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_no_chutes))
+    assert v.recovery.active_scenarios == ("nominal",)
+
+
+# ---------------------------------------------------------------------------
 # Round-trip test against the real input files
 # ---------------------------------------------------------------------------
 
 def test_real_simulation_yaml_loads():
-    """The committed input/simulation.yaml must parse without errors."""
-    real = Path(__file__).parent.parent / "input" / "simulation.yaml"
+    """The committed example/simulation.yaml must parse without errors."""
+    real = Path(__file__).parent.parent / "example" / "simulation.yaml"
     if not real.exists():
-        pytest.skip("input/simulation.yaml not present")
+        pytest.skip("example/simulation.yaml not present")
     cfg = load_simulation_config(real)
     assert cfg.site.latitude == pytest.approx(58.61047)
 
 
 def test_real_vehicle_yaml_loads():
-    """The committed input/vehicle.yaml must parse without errors."""
-    real = Path(__file__).parent.parent / "input" / "vehicle.yaml"
+    """The committed example/vehicle.yaml must parse without errors."""
+    real = Path(__file__).parent.parent / "example" / "vehicle.yaml"
     if not real.exists():
-        pytest.skip("input/vehicle.yaml not present")
+        pytest.skip("example/vehicle.yaml not present")
     v = load_vehicle_config(real)
     assert v.geometry.diameter == pytest.approx(0.130)

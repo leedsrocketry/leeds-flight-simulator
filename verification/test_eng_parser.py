@@ -121,6 +121,7 @@ def test_real_motor_file_loads():
 
 # Vehicle yaml for tests — matches _SIMPLE_ENG (m_prop=5.0 kg)
 _VEHICLE_YAML = (
+    "motor: \"motor.eng\"\naero_tables: \"aero_tables\"\n"
     "geometry:\n  diameter: 0.1\n  length: 2.0\n"
     "  nozzle_position: 1.95\n  nozzle_diameter: 0.05\n  fin_cp_radius: 0.09\n"
     "mass:\n  wet_mass: 20.0\n  wet_cg: 0.90\n  wet_motor_cg: 1.40\n"

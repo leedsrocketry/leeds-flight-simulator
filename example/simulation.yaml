@@ -1,20 +1,20 @@
-vehicle:
-  config: "vehicle.yaml"
-  motor: "motor.eng"
-  aero_tables: "aero_tables"
+vehicle: "vehicle.yaml"   # path to vehicle.yaml (relative to this file)
 
 site:
   latitude: 58.6104700
   longitude: -4.9434804
-  min_safe_radius: 500        # metres — used when inclination is "auto"
+  ballistic_exclusion_radius: 500   # metres — ballistic landing must be outside this radius
+                                    # from the launch site; used when inclination is "auto"
+  launch_observation_radius: 200    # metres — radius of the automatic launch site
+                                    # observation station added to every LOS check
   danger_area: "danger_area.geojson"
-  altitude_ceiling: 16764      # metres (55,000 ft)
+  altitude_ceiling: 16764           # metres (55,000 ft)
   # coastline: "coastline.geojson"  # uncomment to enable sea-landing check
   observation_stations:
     - name: "MOD Range Control"
       latitude: 58.40
       longitude: -4.76
-      radius: 10000
+      radius: 10000                 # metres
   map_markers:
     - name: "Durness"
       latitude: 58.40
@@ -22,14 +22,16 @@ site:
 
 launch:
   rail:
-    azimuth: "auto"         # degrees clockwise from North, or "auto"
-    inclination: "auto"     # degrees from horizontal, or "auto"
-    length: 4.0             # metres
+    azimuth: "auto"               # degrees clockwise from North, or "auto"
+    azimuth_range: [-90, 90]      # [min, max] integer search range — required when azimuth is "auto"
+    inclination: "auto"           # degrees from horizontal, or "auto"
+    inclination_range: [85, 90]   # [min, max] integer search range — required when inclination is "auto"
+    length: 4.0                   # metres
   wind_profiles: "wind_profiles.npz"
-  surface_wind:             # omit this section entirely to disable surface override
-    speed_ms: 5.0           # m/s
-    bearing_deg: 270.0      # degrees clockwise from North
-    blend_height_m: 300     # metres AGL
+  surface_wind:                   # omit this section entirely to disable surface override
+    speed_ms: 5.0                 # m/s
+    bearing_deg: 270.0            # degrees clockwise from North
+    blend_height_m: 300           # metres AGL
 
 monte_carlo:
   samples: 1000

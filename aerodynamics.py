@@ -86,13 +86,21 @@ class AeroModel:
 # Build function
 # ---------------------------------------------------------------------------
 
-def build_aero_model(aero_dir: Path | str) -> AeroModel:
+def build_aero_model(
+    aero_dir: Path | str,
+    fins_override: Path | None = None,
+) -> AeroModel:
     """Load all ``*.csv`` files from *aero_dir* and return an :class:`AeroModel`.
 
     Parameters
     ----------
     aero_dir:
         Directory containing RASAero II Aeroplot CSV files.
+    fins_override:
+        Explicit path to the CSV file for the fins component.  When provided,
+        this file is used as the fins component instead of the filename
+        heuristic (looking for ``"fin"`` in the stem).  Has no effect when
+        only a single CSV is present (whole-vehicle mode).
 
     Raises
     ------
@@ -116,7 +124,7 @@ def build_aero_model(aero_dir: Path | str) -> AeroModel:
         )
         return _build_single(csv_files[0])
 
-    return _build_components(csv_files)
+    return _build_components(csv_files, fins_override=fins_override)
 
 
 # ---------------------------------------------------------------------------
@@ -318,8 +326,14 @@ def _build_single(path: Path) -> AeroModel:
     )
 
 
-def _build_components(csv_files: list[Path]) -> AeroModel:
-    fins_paths = [p for p in csv_files if "fin" in p.stem.lower()]
+def _build_components(
+    csv_files: list[Path],
+    fins_override: Path | None = None,
+) -> AeroModel:
+    if fins_override is not None:
+        fins_paths = [fins_override]
+    else:
+        fins_paths = [p for p in csv_files if "fin" in p.stem.lower()]
     if not fins_paths:
         warnings.warn(
             "No file with 'fin' in its name found among aeroplot CSVs. "
