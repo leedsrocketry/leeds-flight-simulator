@@ -346,19 +346,17 @@ A typical campaign uses the simulator at three stages:
 leeds-flight-simulator/
   __main__.py              # CLI entry point (click)
   cli.py                   # Command definitions, rich output
-  config.py                # YAML -> dataclasses; includes load_motor / MotorData
+  config.py                # YAML -> dataclasses; load_motor / MotorData; active_scenarios
   atmosphere.py            # ISA (Numba)
   wind.py                  # .npz loader, surface_wind blending, interpolation
   aerodynamics.py          # Aero tables, forces, roll torques (Barrowman)
   motor.py                 # Motor physics: thrust/mass/CG/MoI @njit functions
-  dynamics.py              # 6DoF + 3DoF derivatives (Numba)
+  dynamics.py              # 6DoF + 3DoF derivatives (Numba), descent CdA
   integrator.py            # Adaptive RK45 (Numba)
-  recovery.py              # Descent scenarios, CdA switching
   geometry.py              # Polygons, buffer, containment
-  montecarlo.py            # MC orchestration, parallelism, acceptance
+  montecarlo.py            # MC orchestration, parallelism, acceptance, replay
   optimisation.py          # Inclination/azimuth optimisation
   outputs.py               # CSV, YAML, plot generation
-  replay.py                # Single-sample replay
   verification/
     test_config.py         # YAML loading and dataclass construction
     test_isa.py            # ISA vs published tables

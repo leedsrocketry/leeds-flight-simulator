@@ -421,7 +421,7 @@ A drogue parachute without a main parachute is not a valid configuration (loadin
 
 `sea_check_scenarios` and `los_check_scenarios` in `simulation.yaml` are user-supplied lists and may name scenarios that are inactive for the current vehicle configuration (e.g. `drogue_only` listed but no drogue configured). The simulator must not raise an error in this case. Instead:
 
-1. At startup, compute the set of active scenarios from the vehicle configuration (§9.2).
+1. At startup, compute the set of active scenarios via `VehicleRecovery.active_scenarios` (§9.2, implemented in `config.py`).
 2. For each check list, silently drop any scenario name that is not in the active set — only the intersection is checked.
 3. Emit a warning to the simulation output for each dropped scenario, e.g.:
 
@@ -814,7 +814,7 @@ python . replay results/<timestamp>/summary.yaml --non-compliant
 
 `run` is the primary command. First argument is always the simulation configuration file. If `azimuth` or `inclination` is `"auto"`, optimisation runs first, with phase progress displayed, before the main MC analysis.
 
-`replay` is the simulation replay command. First argument is always the simulation results summary file. The data comes from the same directory as this file.
+`replay` is the simulation replay command. First argument is always the simulation results summary file. The data comes from the same directory as this file. Replay is implemented as a function inside `montecarlo.py` and called directly by the CLI.
 
 ### 17.3 Run Output
 
@@ -886,19 +886,17 @@ The git repo root is the Python package root. All modules are imported directly
 leeds-flight-simulator/      ← git repo root = package root
 ├── __main__.py              # CLI entry point (click)
 ├── cli.py                   # Command definitions, rich output
-├── config.py                # YAML → dataclasses; includes load_motor / MotorData
+├── config.py                # YAML → dataclasses; load_motor / MotorData; active_scenarios
 ├── atmosphere.py            # ISA (Numba)
 ├── wind.py                  # .npz loader, surface_wind blending, interpolation
 ├── aerodynamics.py          # Aero tables, C_Nα, forces, roll torques (Barrowman)
 ├── motor.py                 # Motor physics: thrust/mass/CG/MoI @njit functions
-├── dynamics.py              # 6DoF + 3DoF derivatives (Numba), launch rail phase
+├── dynamics.py              # 6DoF + 3DoF derivatives (Numba), launch rail phase, descent CdA
 ├── integrator.py            # Adaptive RK45 (Numba)
-├── recovery.py              # Descent scenarios, CdA switching
 ├── geometry.py              # Polygons, buffer, containment
-├── montecarlo.py            # MC orchestration, parallelism, acceptance checking
+├── montecarlo.py            # MC orchestration, parallelism, acceptance checking, replay
 ├── optimisation.py          # Inclination/azimuth optimisation (§13)
 ├── outputs.py               # CSV, YAML serialisation, plot generation
-├── replay.py                # Single-sample replay
 ├── verification/
 │   ├── test_config.py       # config.py — YAML loading and dataclass construction
 │   ├── test_isa.py          # ISA vs published tables
