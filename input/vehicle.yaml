@@ -1,30 +1,30 @@
 geometry:
-  diameter: 0.130   # reference diameter (m)
-  length: 2.6       # total length (m)
+  diameter: 0.130        # reference diameter (m)
+  length: 2.6            # total length (m)
+  nozzle_position: 2.55  # nozzle exit plane from nosecone tip (m)
+  nozzle_diameter: 0.08  # nozzle exit diameter (m) — used for thrust/altitude correction
+  fin_cp_radius: 0.095   # fin CP spanwise distance from centreline (m)
   # reference_area is derived: π·d²/4
 
 mass:
-  wet: 26.5              # mass at launch — airframe + loaded motor (kg)
-  dry: 14.7              # mass after burnout — airframe + empty casing (kg)
-  cg_dry: 1.15           # dry vehicle CG from nosecone tip (m)
-  motor_cg_loaded: 1.82  # loaded motor CG from nosecone tip (m)
-                         # Used in dynamics.py:
-                         #   CG(t) = (m_dry·cg_dry + m_prop(t)·motor_cg_loaded)
-                         #           / (m_dry + m_prop(t))
-
-inertia:
-  I_R_wet: 0.012  # roll axis, wet (kg·m²)
-  I_R_dry: 0.008  # roll axis, dry (kg·m²)
-  I_L_wet: 5.2    # lateral axis, wet (kg·m²)
-  I_L_dry: 3.1    # lateral axis, dry (kg·m²)
-
-nozzle:
-  exit: 2.55  # nozzle exit plane from nosecone tip (m)
+  wet_mass: 26.5          # total mass at launch — airframe + loaded motor (kg)
+  wet_cg: 1.15            # wet vehicle CG from nosecone tip (m)
+  wet_motor_cg: 1.82      # loaded motor CG from nosecone tip (m)
+                          # assumed equal to propellant CG (inside-out burn model)
+                          # Used in dynamics.py:
+                          #   CG(t) = (m_dry·cg_dry + m_prop(t)·wet_motor_cg)
+                          #           / (m_dry + m_prop(t))
+  propellant_I_roll:    1.4   # propellant roll inertia about roll axis (kg·m²)
+  propellant_I_lateral: 1.3   # propellant lateral inertia about propellant CG (kg·m²)
+  wet_inertia_lateral:  5.2   # wet vehicle lateral inertia about wet CG (kg·m²)
+  wet_inertia_roll:     0.012 # wet vehicle roll inertia about roll axis (kg·m²)
+  # Dry mass, dry CG, and dry inertias are derived from the above
+  # and the propellant mass in the .eng file.
 
 recovery:
-  CdA_drogue: 0.15          # drogue drag area (m²)
-  CdA_main: 2.8             # main parachute drag area (m²)
-  deploy_altitude_agl: 305  # main deploy altitude above launch site (m)
-
-roll:
-  r_fin: 0.095  # fin CP spanwise distance from centreline (m)
+  drogue_cd: 2.0
+  drogue_area: 0.15          # drogue reference area (m²)
+  drogue_threshold: apogee   # deploy at apogee, or enter altitude in metres AGL
+  main_cd: 2.0
+  main_area: 2.8             # main parachute reference area (m²)
+  main_threshold: 305        # main deploy altitude above launch site (m)

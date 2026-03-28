@@ -5,7 +5,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-import yaml
 
 from config import (
     load_simulation_config,
@@ -25,10 +24,16 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
 
 
 _MINIMAL_SIM_YAML = """
+    vehicle:
+      config: "vehicle.yaml"
+      motor: "motor.eng"
+      aero_tables: "aero_tables"
     site:
       latitude: 58.61
       longitude: -4.94
       min_safe_radius: 500
+      altitude_ceiling: 16764
+      danger_area: "danger_area.geojson"
       observation_stations:
         - name: "Station A"
           latitude: 58.40
@@ -43,6 +48,7 @@ _MINIMAL_SIM_YAML = """
         azimuth: 45.0
         inclination: 87.0
         length: 4.0
+      wind_profiles: "wind_profiles.npz"
       surface_wind:
         speed_ms: 5.0
         bearing_deg: 270.0
@@ -56,45 +62,37 @@ _MINIMAL_SIM_YAML = """
         fin_cant_sigma: 0.02
         impulse_factor_sigma: 0.067
       acceptance:
-        compliance_threshold: 99.7
+        compliance_threshold: 0.997
         buffer_distance: 1000
-        altitude_ceiling: 16764
         sm_transition_mach: 0.91
         sm_subsonic_min: 1.0
         sm_supersonic_min: 2.0
         aoa_max: 12.0
         sm_aoa_threshold: 5.0
-    paths:
-      vehicle: "vehicle.yaml"
-      motor: "motor.eng"
-      aero_tables: "aero_tables"
-      wind_profiles: "wind_profiles.npz"
-      danger_area: "danger_area.geojson"
-      coastline: "coastline.geojson"
     """
 
 _VEHICLE_YAML = """
     geometry:
       diameter: 0.130
       length: 2.6
+      nozzle_position: 2.55
+      nozzle_diameter: 0.08
+      fin_cp_radius: 0.095
     mass:
-      wet: 26.5
-      dry: 14.7
-      cg_dry: 1.15
-      motor_cg_loaded: 1.82
-    inertia:
-      I_R_wet: 0.012
-      I_R_dry: 0.008
-      I_L_wet: 5.2
-      I_L_dry: 3.1
-    nozzle:
-      exit: 2.55
+      wet_mass: 26.5
+      wet_cg: 1.15
+      wet_motor_cg: 1.82
+      propellant_I_roll: 0.05
+      propellant_I_lateral: 0.8
+      wet_inertia_lateral: 5.2
+      wet_inertia_roll: 0.012
     recovery:
-      CdA_drogue: 0.15
-      CdA_main: 2.8
-      deploy_altitude_agl: 305
-    roll:
-      r_fin: 0.095
+      drogue_cd: 2.0
+      drogue_area: 0.15
+      drogue_threshold: apogee
+      main_cd: 2.0
+      main_area: 2.8
+      main_threshold: 305
     """
 
 
@@ -108,11 +106,30 @@ def test_simulation_config_loads(tmp_path):
     assert isinstance(cfg, SimulationConfig)
 
 
+def test_vehicle_files(tmp_path):
+    cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
+    assert cfg.vehicle.config.is_absolute()
+    assert cfg.vehicle.config == (tmp_path / "vehicle.yaml").resolve()
+    assert cfg.vehicle.aero_tables == (tmp_path / "aero_tables").resolve()
+
+
 def test_site_values(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
     assert cfg.site.latitude == pytest.approx(58.61)
     assert cfg.site.longitude == pytest.approx(-4.94)
     assert cfg.site.min_safe_radius == pytest.approx(500.0)
+    assert cfg.site.altitude_ceiling == pytest.approx(16764.0)
+
+
+def test_site_danger_area_resolved(tmp_path):
+    cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
+    assert cfg.site.danger_area == (tmp_path / "danger_area.geojson").resolve()
+
+
+def test_coastline_omitted(tmp_path):
+    lines = [l for l in _MINIMAL_SIM_YAML.splitlines() if "coastline" not in l]
+    cfg = load_simulation_config(_write(tmp_path, "s.yaml", "\n".join(lines)))
+    assert cfg.site.coastline is None
 
 
 def test_launch_rail_numeric(tmp_path):
@@ -130,6 +147,11 @@ def test_launch_rail_auto(tmp_path):
     assert cfg.launch.rail.inclination == "auto"
 
 
+def test_launch_wind_profiles_resolved(tmp_path):
+    cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
+    assert cfg.launch.wind_profiles == (tmp_path / "wind_profiles.npz").resolve()
+
+
 def test_monte_carlo_values(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
     assert cfg.monte_carlo.samples == 500
@@ -138,14 +160,15 @@ def test_monte_carlo_values(tmp_path):
 
 def test_uncertainties(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
-    assert cfg.monte_carlo.uncertainties.impulse_factor_sigma == pytest.approx(0.067)
-    assert cfg.monte_carlo.uncertainties.fin_cant_sigma == pytest.approx(0.02)
+    unc = cfg.monte_carlo.uncertainties
+    assert unc.impulse_factor_sigma == pytest.approx(0.067)
+    assert unc.fin_cant_sigma == pytest.approx(0.02)
 
 
 def test_acceptance(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
     acc = cfg.monte_carlo.acceptance
-    assert acc.compliance_threshold == pytest.approx(99.7)
+    assert acc.compliance_threshold == pytest.approx(0.997)
     assert acc.sm_transition_mach == pytest.approx(0.91)
     assert acc.sm_subsonic_min == pytest.approx(1.0)
     assert acc.sm_supersonic_min == pytest.approx(2.0)
@@ -163,19 +186,6 @@ def test_map_markers(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
     assert len(cfg.site.map_markers) == 1
     assert cfg.site.map_markers[0].name == "Pad"
-
-
-def test_paths_resolved(tmp_path):
-    cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
-    assert cfg.paths.vehicle.is_absolute()
-    assert cfg.paths.vehicle == (tmp_path / "vehicle.yaml").resolve()
-    assert cfg.paths.aero_tables == (tmp_path / "aero_tables").resolve()
-
-
-def test_coastline_omitted(tmp_path):
-    lines = [l for l in _MINIMAL_SIM_YAML.splitlines() if "coastline" not in l]
-    cfg = load_simulation_config(_write(tmp_path, "s.yaml", "\n".join(lines)))
-    assert cfg.paths.coastline is None
 
 
 def test_surface_wind_values(tmp_path):
@@ -216,6 +226,9 @@ def test_vehicle_geometry(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.geometry.diameter == pytest.approx(0.130)
     assert v.geometry.length == pytest.approx(2.6)
+    assert v.geometry.nozzle_position == pytest.approx(2.55)
+    assert v.geometry.nozzle_diameter == pytest.approx(0.08)
+    assert v.geometry.fin_cp_radius == pytest.approx(0.095)
 
 
 def test_reference_area_computed(tmp_path):
@@ -226,35 +239,43 @@ def test_reference_area_computed(tmp_path):
     assert v.geometry.reference_area == pytest.approx(expected, rel=1e-6)
 
 
+def test_nozzle_area_computed(tmp_path):
+    """nozzle_area is π·dₑ²/4 — derived from nozzle_diameter."""
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    expected = math.pi * 0.08 ** 2 / 4.0
+    assert v.geometry.nozzle_area == pytest.approx(expected, rel=1e-6)
+
+
 def test_vehicle_mass(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.mass.wet == pytest.approx(26.5)
-    assert v.mass.dry == pytest.approx(14.7)
-    assert v.mass.cg_dry == pytest.approx(1.15)
-    assert v.mass.motor_cg_loaded == pytest.approx(1.82)
+    assert v.mass.wet_mass == pytest.approx(26.5)
+    assert v.mass.wet_cg == pytest.approx(1.15)
+    assert v.mass.wet_motor_cg == pytest.approx(1.82)
 
 
-def test_vehicle_moi(tmp_path):
+def test_vehicle_inertia(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.inertia.I_R_wet == pytest.approx(0.012)
-    assert v.inertia.I_L_dry == pytest.approx(3.1)
-
-
-def test_vehicle_nozzle(tmp_path):
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.nozzle.exit == pytest.approx(2.55)
+    assert v.mass.wet_inertia_roll == pytest.approx(0.012)
+    assert v.mass.wet_inertia_lateral == pytest.approx(5.2)
+    assert v.mass.propellant_I_roll == pytest.approx(0.05)
+    assert v.mass.propellant_I_lateral == pytest.approx(0.8)
 
 
 def test_vehicle_recovery(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.recovery.CdA_drogue == pytest.approx(0.15)
-    assert v.recovery.CdA_main == pytest.approx(2.8)
-    assert v.recovery.deploy_altitude_agl == pytest.approx(305.0)
+    assert v.recovery.drogue_cd == pytest.approx(2.0)
+    assert v.recovery.drogue_area == pytest.approx(0.15)
+    assert v.recovery.drogue_threshold == "apogee"
+    assert v.recovery.main_cd == pytest.approx(2.0)
+    assert v.recovery.main_area == pytest.approx(2.8)
+    assert v.recovery.main_threshold == pytest.approx(305.0)
 
 
-def test_vehicle_roll(tmp_path):
+def test_recovery_numeric_threshold(tmp_path):
+    """main_threshold=305 parses as a float; drogue_threshold='apogee' as literal."""
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.roll.r_fin == pytest.approx(0.095)
+    assert isinstance(v.recovery.main_threshold, float)
+    assert v.recovery.drogue_threshold == "apogee"
 
 
 def test_vehicle_is_frozen(tmp_path):

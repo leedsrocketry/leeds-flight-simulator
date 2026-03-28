@@ -44,10 +44,21 @@ class MapMarker:
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class VehicleFilesConfig:
+    """Paths to the vehicle-related input files."""
+    config: Path       # vehicle.yaml
+    motor: Path        # motor.eng
+    aero_tables: Path  # aero tables directory
+
+
+@dataclass(frozen=True)
 class SiteConfig:
     latitude: float                                # degrees
     longitude: float                               # degrees
     min_safe_radius: float                         # metres
+    altitude_ceiling: float                        # metres
+    danger_area: Path
+    coastline: Path | None                         # None → sea-landing check disabled
     observation_stations: tuple[ObservationStation, ...]
     map_markers: tuple[MapMarker, ...]
 
@@ -69,6 +80,7 @@ class SurfaceWindConfig:
 @dataclass(frozen=True)
 class LaunchConfig:
     rail: RailConfig
+    wind_profiles: Path
     surface_wind: SurfaceWindConfig | None  # None → surface override disabled
 
 
@@ -82,9 +94,8 @@ class UncertaintiesConfig:
 
 @dataclass(frozen=True)
 class AcceptanceConfig:
-    compliance_threshold: float   # percent of landings inside danger area
+    compliance_threshold: float   # fractional (0.0–1.0) of landings inside danger area
     buffer_distance: float        # metres inward from danger area boundary
-    altitude_ceiling: float       # metres
     sm_transition_mach: float     # Mach number dividing subsonic / supersonic SM check
     sm_subsonic_min: float        # calibres (M < sm_transition_mach)
     sm_supersonic_min: float      # calibres (M >= sm_transition_mach)
@@ -101,21 +112,11 @@ class MonteCarloConfig:
 
 
 @dataclass(frozen=True)
-class PathsConfig:
-    vehicle: Path
-    motor: Path
-    aero_tables: Path
-    wind_profiles: Path
-    danger_area: Path
-    coastline: Path | None  # None → sea-landing check disabled
-
-
-@dataclass(frozen=True)
 class SimulationConfig:
+    vehicle: VehicleFilesConfig
     site: SiteConfig
     launch: LaunchConfig
     monte_carlo: MonteCarloConfig
-    paths: PathsConfig
 
 
 # ---------------------------------------------------------------------------
@@ -124,58 +125,50 @@ class SimulationConfig:
 
 @dataclass(frozen=True)
 class VehicleGeometry:
-    diameter: float  # m
-    length: float    # m
+    diameter: float         # m — reference diameter
+    length: float           # m — total length
+    nozzle_position: float  # m from nosecone tip — nozzle exit plane
+    nozzle_diameter: float  # m — nozzle exit diameter (for thrust correction)
+    fin_cp_radius: float    # m — fin CP spanwise distance from centreline
 
     @property
     def reference_area(self) -> float:
         """π·d²/4 [m²] — derived from diameter."""
         return math.pi * self.diameter ** 2 / 4.0
 
+    @property
+    def nozzle_area(self) -> float:
+        """π·dₑ²/4 [m²] — nozzle exit area for pressure thrust correction."""
+        return math.pi * self.nozzle_diameter ** 2 / 4.0
+
 
 @dataclass(frozen=True)
 class VehicleMass:
-    wet: float              # kg — mass at launch (airframe + loaded motor)
-    dry: float              # kg — mass after burnout (airframe + empty casing)
-    cg_dry: float           # m from nosecone tip (dry vehicle incl. empty casing)
-    motor_cg_loaded: float  # m from nosecone tip — used in dynamics.py CG assembly:
-                            #   CG(t) = (m_dry·cg_dry + m_prop(t)·motor_cg_loaded)
-                            #           / (m_dry + m_prop(t))
-
-
-@dataclass(frozen=True)
-class VehicleInertia:
-    I_R_wet: float  # kg·m²  roll axis, wet
-    I_R_dry: float  # kg·m²  roll axis, dry
-    I_L_wet: float  # kg·m²  lateral axis, wet
-    I_L_dry: float  # kg·m²  lateral axis, dry
-
-
-@dataclass(frozen=True)
-class VehicleNozzle:
-    exit: float  # m from nosecone tip
+    wet_mass: float              # kg — total mass at launch
+    wet_cg: float                # m from nosecone tip — wet vehicle CG
+    wet_motor_cg: float          # m from nosecone tip — loaded motor CG
+                                 # used as propellant CG (inside-out burn model)
+    propellant_I_roll: float     # kg·m² — propellant roll inertia about roll axis
+    propellant_I_lateral: float  # kg·m² — propellant lateral inertia about propellant CG
+    wet_inertia_lateral: float   # kg·m² — wet vehicle lateral inertia about wet CG
+    wet_inertia_roll: float      # kg·m² — wet vehicle roll inertia about roll axis
 
 
 @dataclass(frozen=True)
 class VehicleRecovery:
-    CdA_drogue: float           # m²
-    CdA_main: float             # m²
-    deploy_altitude_agl: float  # m above launch site
-
-
-@dataclass(frozen=True)
-class VehicleRoll:
-    r_fin: float  # m — fin CP spanwise distance from centreline
+    drogue_cd: float                              # drogue drag coefficient
+    drogue_area: float                            # m² — drogue reference area
+    drogue_threshold: float | Literal["apogee"]  # m AGL or "apogee"
+    main_cd: float                                # main parachute drag coefficient
+    main_area: float                              # m² — main parachute reference area
+    main_threshold: float | Literal["apogee"]    # m AGL or "apogee"
 
 
 @dataclass(frozen=True)
 class VehicleConfig:
     geometry: VehicleGeometry
     mass: VehicleMass
-    inertia: VehicleInertia
-    nozzle: VehicleNozzle
     recovery: VehicleRecovery
-    roll: VehicleRoll
 
     @property
     def reference_area(self) -> float:
@@ -193,11 +186,17 @@ def _parse_auto(value: object) -> float | Literal["auto"]:
     return float(value)
 
 
+def _parse_threshold(value: object) -> float | Literal["apogee"]:
+    if value == "apogee":
+        return "apogee"
+    return float(value)
+
+
 def load_simulation_config(path: Path | str) -> SimulationConfig:
     """Parse *path* (simulation.yaml) and return a SimulationConfig.
 
-    All file paths in the ``paths`` section are resolved relative to the
-    directory containing the simulation.yaml file.
+    All file paths are resolved relative to the directory containing the
+    simulation.yaml file.
     """
     path = Path(path).resolve()
     base_dir = path.parent
@@ -208,15 +207,28 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     def _resolve(p: str) -> Path:
         return (base_dir / p).resolve()
 
+    # -- vehicle files
+    veh_raw = raw["vehicle"]
+    vehicle = VehicleFilesConfig(
+        config=_resolve(veh_raw["config"]),
+        motor=_resolve(veh_raw["motor"]),
+        aero_tables=_resolve(veh_raw["aero_tables"]),
+    )
+
     # -- site
     site_raw = raw["site"]
     stations_raw = site_raw.get("observation_stations") or []
     markers_raw = site_raw.get("map_markers") or []
+    coastline_raw = site_raw.get("coastline")
+    coastline: Path | None = None if coastline_raw is None else _resolve(coastline_raw)
 
     site = SiteConfig(
         latitude=float(site_raw["latitude"]),
         longitude=float(site_raw["longitude"]),
         min_safe_radius=float(site_raw["min_safe_radius"]),
+        altitude_ceiling=float(site_raw["altitude_ceiling"]),
+        danger_area=_resolve(site_raw["danger_area"]),
+        coastline=coastline,
         observation_stations=tuple(
             ObservationStation(
                 name=str(s["name"]),
@@ -257,6 +269,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             inclination=_parse_auto(rail_raw["inclination"]),
             length=float(rail_raw["length"]),
         ),
+        wind_profiles=_resolve(launch_raw["wind_profiles"]),
         surface_wind=surface_wind,
     )
 
@@ -277,7 +290,6 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         acceptance=AcceptanceConfig(
             compliance_threshold=float(acc_raw["compliance_threshold"]),
             buffer_distance=float(acc_raw["buffer_distance"]),
-            altitude_ceiling=float(acc_raw["altitude_ceiling"]),
             sm_transition_mach=float(acc_raw["sm_transition_mach"]),
             sm_subsonic_min=float(acc_raw["sm_subsonic_min"]),
             sm_supersonic_min=float(acc_raw["sm_supersonic_min"]),
@@ -286,21 +298,12 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         ),
     )
 
-    # -- paths
-    paths_raw = raw["paths"]
-    coastline_raw = paths_raw.get("coastline")
-    coastline: Path | None = None if coastline_raw is None else _resolve(coastline_raw)
-
-    paths = PathsConfig(
-        vehicle=_resolve(paths_raw["vehicle"]),
-        motor=_resolve(paths_raw["motor"]),
-        aero_tables=_resolve(paths_raw["aero_tables"]),
-        wind_profiles=_resolve(paths_raw["wind_profiles"]),
-        danger_area=_resolve(paths_raw["danger_area"]),
-        coastline=coastline,
+    return SimulationConfig(
+        vehicle=vehicle,
+        site=site,
+        launch=launch,
+        monte_carlo=monte_carlo,
     )
-
-    return SimulationConfig(site=site, launch=launch, monte_carlo=monte_carlo, paths=paths)
 
 
 def load_vehicle_config(path: Path | str) -> VehicleConfig:
@@ -310,38 +313,32 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
 
     geom = raw["geometry"]
     mass = raw["mass"]
-    inertia = raw["inertia"]
-    nozzle = raw["nozzle"]
     recovery = raw["recovery"]
-    roll = raw["roll"]
 
     return VehicleConfig(
         geometry=VehicleGeometry(
             diameter=float(geom["diameter"]),
             length=float(geom["length"]),
+            nozzle_position=float(geom["nozzle_position"]),
+            nozzle_diameter=float(geom["nozzle_diameter"]),
+            fin_cp_radius=float(geom["fin_cp_radius"]),
         ),
         mass=VehicleMass(
-            wet=float(mass["wet"]),
-            dry=float(mass["dry"]),
-            cg_dry=float(mass["cg_dry"]),
-            motor_cg_loaded=float(mass["motor_cg_loaded"]),
-        ),
-        inertia=VehicleInertia(
-            I_R_wet=float(inertia["I_R_wet"]),
-            I_R_dry=float(inertia["I_R_dry"]),
-            I_L_wet=float(inertia["I_L_wet"]),
-            I_L_dry=float(inertia["I_L_dry"]),
-        ),
-        nozzle=VehicleNozzle(
-            exit=float(nozzle["exit"]),
+            wet_mass=float(mass["wet_mass"]),
+            wet_cg=float(mass["wet_cg"]),
+            wet_motor_cg=float(mass["wet_motor_cg"]),
+            propellant_I_roll=float(mass["propellant_I_roll"]),
+            propellant_I_lateral=float(mass["propellant_I_lateral"]),
+            wet_inertia_lateral=float(mass["wet_inertia_lateral"]),
+            wet_inertia_roll=float(mass["wet_inertia_roll"]),
         ),
         recovery=VehicleRecovery(
-            CdA_drogue=float(recovery["CdA_drogue"]),
-            CdA_main=float(recovery["CdA_main"]),
-            deploy_altitude_agl=float(recovery["deploy_altitude_agl"]),
-        ),
-        roll=VehicleRoll(
-            r_fin=float(roll["r_fin"]),
+            drogue_cd=float(recovery["drogue_cd"]),
+            drogue_area=float(recovery["drogue_area"]),
+            drogue_threshold=_parse_threshold(recovery["drogue_threshold"]),
+            main_cd=float(recovery["main_cd"]),
+            main_area=float(recovery["main_area"]),
+            main_threshold=_parse_threshold(recovery["main_threshold"]),
         ),
     )
 

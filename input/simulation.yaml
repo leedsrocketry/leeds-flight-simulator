@@ -1,16 +1,20 @@
+vehicle:
+  config: "vehicle.yaml"
+  motor: "motor.eng"
+  aero_tables: "aero_tables"
+
 site:
   latitude: 58.6104700
   longitude: -4.9434804
   min_safe_radius: 500        # metres — used when inclination is "auto"
+  danger_area: "danger_area.geojson"
+  altitude_ceiling: 16764      # metres (55,000 ft)
+  # coastline: "coastline.geojson"  # uncomment to enable sea-landing check
   observation_stations:
-    - name: "Range control"
+    - name: "MOD Range Control"
       latitude: 58.40
       longitude: -4.76
       radius: 10000
-    - name: "Cliff station"
-      latitude: 58.60
-      longitude: -4.95
-      radius: 5000
   map_markers:
     - name: "Durness"
       latitude: 58.40
@@ -21,6 +25,7 @@ launch:
     azimuth: "auto"         # degrees clockwise from North, or "auto"
     inclination: "auto"     # degrees from horizontal, or "auto"
     length: 4.0             # metres
+  wind_profiles: "wind_profiles.npz"
   surface_wind:             # omit this section entirely to disable surface override
     speed_ms: 5.0           # m/s
     bearing_deg: 270.0      # degrees clockwise from North
@@ -33,21 +38,12 @@ monte_carlo:
     azimuth_sigma: 1.0            # degrees
     inclination_sigma: 0.5        # degrees
     fin_cant_sigma: 0.02          # degrees
-    impulse_factor_sigma: 0.067   # fractional (0.067 = 6.7 %)
+    impulse_factor_sigma: 0.067   # fraction of total impulse
   acceptance:
-    compliance_threshold: 99.7   # percent of landings inside danger area
+    compliance_threshold: 0.997  # fraction of landings inside danger area
     buffer_distance: 1000        # metres inward from danger area boundary
-    altitude_ceiling: 16764      # metres (55,000 ft)
     sm_transition_mach: 0.91     # Mach dividing subsonic / supersonic SM check
     sm_subsonic_min: 1.0         # calibres (M < sm_transition_mach)
     sm_supersonic_min: 2.0       # calibres (M >= sm_transition_mach)
     aoa_max: 12.0                # degrees
     sm_aoa_threshold: 5.0        # degrees: SM check applies when AoA < this
-
-paths:
-  vehicle: "vehicle.yaml"
-  motor: "motor.eng"
-  aero_tables: "aero_tables"
-  wind_profiles: "wind_profiles.npz"
-  danger_area: "danger_area.geojson"
-  # coastline: "coastline.geojson"  # uncomment to enable sea-landing check
