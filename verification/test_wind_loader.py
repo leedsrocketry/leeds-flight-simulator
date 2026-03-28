@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from config import SurfaceOverrideConfig
+from config import SurfaceWindConfig
 from wind import WindEnsemble, load_wind_ensemble, interpolate_wind
 
 
@@ -107,17 +107,16 @@ def test_mean_profile_correct(tmp_path):
 # Surface override
 # ---------------------------------------------------------------------------
 
-def _override(speed: float, bearing: float, blend: float) -> SurfaceOverrideConfig:
-    return SurfaceOverrideConfig(speed_ms=speed, bearing_deg=bearing,
-                                 blend_height_m=blend)
+def _surface_wind(speed: float, bearing: float, blend: float) -> SurfaceWindConfig:
+    return SurfaceWindConfig(speed_ms=speed, bearing_deg=bearing,
+                             blend_height_m=blend)
 
 
-def test_override_disabled_when_blend_none(tmp_path):
-    """No override applied when blend_height_m is None."""
+def test_override_disabled_when_none(tmp_path):
+    """No override applied when surface_wind=None (the default)."""
     p = _make_npz(tmp_path, seed=7)
     ens_no_ov = load_wind_ensemble(p, num_samples=5)
-    cfg = SurfaceOverrideConfig(speed_ms=10.0, bearing_deg=90.0, blend_height_m=None)
-    ens_ov = load_wind_ensemble(p, num_samples=5, surface_override=cfg)
+    ens_ov = load_wind_ensemble(p, num_samples=5, surface_wind=None)
     np.testing.assert_array_equal(ens_no_ov.wind_east_ms, ens_ov.wind_east_ms)
 
 
@@ -131,8 +130,8 @@ def test_override_at_zero_altitude(tmp_path):
     np.savez(p, altitude_m=alt, wind_east_ms=east, wind_north_ms=north)
 
     # bearing=0 (north): east component = 0, north component = speed
-    cfg = _override(speed=8.0, bearing=0.0, blend=1000.0)
-    ens = load_wind_ensemble(p, num_samples=5, surface_override=cfg)
+    cfg = _surface_wind(speed=8.0, bearing=0.0, blend=1000.0)
+    ens = load_wind_ensemble(p, num_samples=5, surface_wind=cfg)
 
     np.testing.assert_allclose(ens.wind_east_ms[:, 0], 0.0, atol=1e-10)
     np.testing.assert_allclose(ens.wind_north_ms[:, 0], 8.0, atol=1e-10)
@@ -147,8 +146,8 @@ def test_override_vector_east(tmp_path):
     p = tmp_path / "w.npz"
     np.savez(p, altitude_m=alt, wind_east_ms=east, wind_north_ms=north)
 
-    cfg = _override(speed=10.0, bearing=90.0, blend=500.0)
-    ens = load_wind_ensemble(p, num_samples=3, surface_override=cfg)
+    cfg = _surface_wind(speed=10.0, bearing=90.0, blend=500.0)
+    ens = load_wind_ensemble(p, num_samples=3, surface_wind=cfg)
 
     np.testing.assert_allclose(ens.wind_east_ms[:, 0], 10.0, atol=1e-10)
     np.testing.assert_allclose(ens.wind_north_ms[:, 0], 0.0, atol=1e-10)
@@ -165,8 +164,8 @@ def test_override_unchanged_above_blend(tmp_path):
     np.savez(p, altitude_m=alt, wind_east_ms=east, wind_north_ms=north)
 
     blend = 2000.0
-    cfg = _override(speed=5.0, bearing=45.0, blend=blend)
-    ens = load_wind_ensemble(p, num_samples=4, surface_override=cfg)
+    cfg = _surface_wind(speed=5.0, bearing=45.0, blend=blend)
+    ens = load_wind_ensemble(p, num_samples=4, surface_wind=cfg)
 
     above = alt >= blend
     np.testing.assert_array_equal(ens.wind_east_ms[:, above], east[:, above])
@@ -184,8 +183,8 @@ def test_override_blend_is_linear(tmp_path):
     p = tmp_path / "w.npz"
     np.savez(p, altitude_m=alt, wind_east_ms=east, wind_north_ms=north)
 
-    cfg = _override(speed=10.0, bearing=90.0, blend=blend)  # ov_east=10, ov_north=0
-    ens = load_wind_ensemble(p, num_samples=1, surface_override=cfg)
+    cfg = _surface_wind(speed=10.0, bearing=90.0, blend=blend)  # ov_east=10, ov_north=0
+    ens = load_wind_ensemble(p, num_samples=1, surface_wind=cfg)
 
     # At h=500 (alpha=0.5): blended_east = 0.5*10 + 0.5*0 = 5.0
     np.testing.assert_allclose(ens.wind_east_ms[0, 1], 5.0, atol=1e-10)

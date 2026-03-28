@@ -83,10 +83,10 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
         m_prop_0=motor_data.m_prop_kg,
         m_casing=m_casing,
         total_impulse=total_impulse,
-        I_R_wet=vehicle_cfg.I_R_wet,
-        I_R_dry=vehicle_cfg.I_R_dry,
-        I_L_wet=vehicle_cfg.I_L_wet,
-        I_L_dry=vehicle_cfg.I_L_dry,
+        I_R_wet=vehicle_cfg.inertia.I_R_wet,
+        I_R_dry=vehicle_cfg.inertia.I_R_dry,
+        I_L_wet=vehicle_cfg.inertia.I_L_wet,
+        I_L_dry=vehicle_cfg.inertia.I_L_dry,
     )
 
 

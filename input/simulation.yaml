@@ -1,68 +1,53 @@
-# Launch site
-launch_site:
+site:
   latitude: 58.6104700
   longitude: -4.9434804
+  min_safe_radius: 500        # metres — used when inclination is "auto"
+  observation_stations:
+    - name: "Range control"
+      latitude: 58.40
+      longitude: -4.76
+      radius: 10000
+    - name: "Cliff station"
+      latitude: 58.60
+      longitude: -4.95
+      radius: 5000
+  map_markers:
+    - name: "Durness"
+      latitude: 58.40
+      longitude: -4.76
 
-# Launch rail orientation (nominal).
-# Both fields required. Set to "auto" for optimisation.
-launch_rail:
-  azimuth: "auto"         # degrees clockwise from North, or "auto"
-  inclination: "auto"     # degrees from horizontal, or "auto"
+launch:
+  rail:
+    azimuth: "auto"         # degrees clockwise from North, or "auto"
+    inclination: "auto"     # degrees from horizontal, or "auto"
+    length: 4.0             # metres
+  surface_wind:             # omit this section entirely to disable surface override
+    speed_ms: 5.0           # m/s
+    bearing_deg: 270.0      # degrees clockwise from North
+    blend_height_m: 300     # metres AGL
 
-# Monte Carlo
-mc:
-  num_samples: 1000       # per scenario
-  master_seed: 42
+monte_carlo:
+  samples: 1000
+  seed: 42
+  uncertainties:
+    azimuth_sigma: 1.0            # degrees
+    inclination_sigma: 0.5        # degrees
+    fin_cant_sigma: 0.02          # degrees
+    impulse_factor_sigma: 0.067   # fractional (0.067 = 6.7 %)
+  acceptance:
+    compliance_threshold: 99.7   # percent of landings inside danger area
+    buffer_distance: 1000        # metres inward from danger area boundary
+    altitude_ceiling: 16764      # metres (55,000 ft)
+    sm_transition_mach: 0.91     # Mach dividing subsonic / supersonic SM check
+    sm_subsonic_min: 1.0         # calibres (M < sm_transition_mach)
+    sm_supersonic_min: 2.0       # calibres (M >= sm_transition_mach)
+    aoa_max: 12.0                # degrees
+    sm_aoa_threshold: 5.0        # degrees: SM check applies when AoA < this
 
-# Stochastic distributions
-distributions:
-  azimuth_sigma: 1.0            # degrees
-  inclination_sigma: 0.5        # degrees
-  fin_cant_sigma: 0.02          # degrees
-  impulse_factor_sigma: 6.7     # percent
-
-# Acceptance criteria
-acceptance:
-  compliance_threshold: 99.7  # percent
-  buffer_distance: 1000       # metres inward from danger area
-  altitude_ceiling: 16764     # metres (55,000 ft)
-  sm_subsonic_min: 1.0        # calibres (M < 0.91)
-  sm_supersonic_min: 2.0      # calibres (M >= 0.91)
-  aoa_max: 12.0               # degrees
-  sm_aoa_threshold: 5.0       # degrees: SM check applies when AoA < this
-
-# Optimisation (required only when azimuth or inclination is "auto")
-optimisation:
-  min_safe_radius: 500        # metres -- only used when inclination is "auto"
-
-# Observation stations
-observation_stations:
-  - name: "Range control"
-    latitude: 58.40
-    longitude: -4.76
-    radius: 10000
-  - name: "Cliff station"
-    latitude: 58.60
-    longitude: -4.95
-    radius: 5000
-
-# Map markers
-map_markers:
-  - name: "Durness"
-    latitude: 58.40
-    longitude: -4.76
-
-# Input file paths
 paths:
-  vehicle: "input/vehicle.yaml"
-  motor: "input/motor.eng"
-  aero_dir: "input/aero_tables/"
-  wind_profiles: "input/wind_profiles.npz"
-  danger_area: "input/danger_area.geojson"
-  coastline: "input/coastline.geojson"  # omit this line to disable sea-landing check
-
-# Surface wind override
-surface_override:
-  speed_ms: 5.0             # m/s
-  bearing_deg: 270.0        # degrees clockwise from North
-  blend_height_m: 300       # metres AGL; omit to disable surface override
+  vehicle: "vehicle.yaml"
+  motor: "motor.eng"
+  aero_tables: "aero_tables"
+  wind_profiles: "wind_profiles.npz"
+  danger_area: "danger_area.geojson"
+  # coastline: "coastline.geojson"  # uncomment to enable sea-landing check

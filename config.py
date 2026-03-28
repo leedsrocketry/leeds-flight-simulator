@@ -11,6 +11,7 @@ referenced input files will be found correctly.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -20,50 +21,8 @@ import yaml
 
 
 # ---------------------------------------------------------------------------
-# Simulation config dataclasses
+# Shared geographic sub-types
 # ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class LaunchSiteConfig:
-    latitude: float   # degrees
-    longitude: float  # degrees
-
-
-@dataclass(frozen=True)
-class LaunchRailConfig:
-    azimuth: float | Literal["auto"]      # degrees clockwise from North
-    inclination: float | Literal["auto"]  # degrees from horizontal
-
-
-@dataclass(frozen=True)
-class MCConfig:
-    num_samples: int
-    master_seed: int
-
-
-@dataclass(frozen=True)
-class DistributionsConfig:
-    azimuth_sigma: float      # degrees
-    inclination_sigma: float  # degrees
-    fin_cant_sigma: float     # degrees
-    impulse_factor_sigma: float  # percent
-
-
-@dataclass(frozen=True)
-class AcceptanceConfig:
-    compliance_threshold: float  # percent
-    buffer_distance: float       # metres inward
-    altitude_ceiling: float      # metres
-    sm_subsonic_min: float       # calibres (M < 0.91)
-    sm_supersonic_min: float     # calibres (M >= 0.91)
-    aoa_max: float               # degrees
-    sm_aoa_threshold: float      # degrees
-
-
-@dataclass(frozen=True)
-class OptimisationConfig:
-    min_safe_radius: float  # metres
-
 
 @dataclass(frozen=True)
 class ObservationStation:
@@ -80,79 +39,159 @@ class MapMarker:
     longitude: float  # degrees
 
 
+# ---------------------------------------------------------------------------
+# Simulation config dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SiteConfig:
+    latitude: float                                # degrees
+    longitude: float                               # degrees
+    min_safe_radius: float                         # metres
+    observation_stations: tuple[ObservationStation, ...]
+    map_markers: tuple[MapMarker, ...]
+
+
+@dataclass(frozen=True)
+class RailConfig:
+    azimuth: float | Literal["auto"]      # degrees clockwise from North, or "auto"
+    inclination: float | Literal["auto"]  # degrees from horizontal, or "auto"
+    length: float                         # metres
+
+
+@dataclass(frozen=True)
+class SurfaceWindConfig:
+    speed_ms: float        # m/s
+    bearing_deg: float     # degrees clockwise from North
+    blend_height_m: float  # metres AGL — always required when section is present
+
+
+@dataclass(frozen=True)
+class LaunchConfig:
+    rail: RailConfig
+    surface_wind: SurfaceWindConfig | None  # None → surface override disabled
+
+
+@dataclass(frozen=True)
+class UncertaintiesConfig:
+    azimuth_sigma: float          # degrees
+    inclination_sigma: float      # degrees
+    fin_cant_sigma: float         # degrees
+    impulse_factor_sigma: float   # fractional (e.g. 0.067 for 6.7 %)
+
+
+@dataclass(frozen=True)
+class AcceptanceConfig:
+    compliance_threshold: float   # percent of landings inside danger area
+    buffer_distance: float        # metres inward from danger area boundary
+    altitude_ceiling: float       # metres
+    sm_transition_mach: float     # Mach number dividing subsonic / supersonic SM check
+    sm_subsonic_min: float        # calibres (M < sm_transition_mach)
+    sm_supersonic_min: float      # calibres (M >= sm_transition_mach)
+    aoa_max: float                # degrees
+    sm_aoa_threshold: float       # degrees: SM check applies when AoA < this
+
+
+@dataclass(frozen=True)
+class MonteCarloConfig:
+    samples: int
+    seed: int
+    uncertainties: UncertaintiesConfig
+    acceptance: AcceptanceConfig
+
+
 @dataclass(frozen=True)
 class PathsConfig:
     vehicle: Path
     motor: Path
-    aero_dir: Path
+    aero_tables: Path
     wind_profiles: Path
     danger_area: Path
     coastline: Path | None  # None → sea-landing check disabled
 
 
 @dataclass(frozen=True)
-class SurfaceOverrideConfig:
-    speed_ms: float    # m/s
-    bearing_deg: float  # degrees clockwise from North
-    blend_height_m: float | None  # metres AGL; None → override disabled
+class SimulationConfig:
+    site: SiteConfig
+    launch: LaunchConfig
+    monte_carlo: MonteCarloConfig
+    paths: PathsConfig
+
+
+# ---------------------------------------------------------------------------
+# Vehicle config dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class VehicleGeometry:
+    diameter: float  # m
+    length: float    # m
+
+    @property
+    def reference_area(self) -> float:
+        """π·d²/4 [m²] — derived from diameter."""
+        return math.pi * self.diameter ** 2 / 4.0
 
 
 @dataclass(frozen=True)
-class SimulationConfig:
-    launch_site: LaunchSiteConfig
-    launch_rail: LaunchRailConfig
-    mc: MCConfig
-    distributions: DistributionsConfig
-    acceptance: AcceptanceConfig
-    optimisation: OptimisationConfig
-    observation_stations: tuple[ObservationStation, ...]
-    map_markers: tuple[MapMarker, ...]
-    paths: PathsConfig
-    surface_override: SurfaceOverrideConfig
+class VehicleMass:
+    wet: float              # kg — mass at launch (airframe + loaded motor)
+    dry: float              # kg — mass after burnout (airframe + empty casing)
+    cg_dry: float           # m from nosecone tip (dry vehicle incl. empty casing)
+    motor_cg_loaded: float  # m from nosecone tip — used in dynamics.py CG assembly:
+                            #   CG(t) = (m_dry·cg_dry + m_prop(t)·motor_cg_loaded)
+                            #           / (m_dry + m_prop(t))
 
 
-# ---------------------------------------------------------------------------
-# Vehicle config dataclass
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class VehicleInertia:
+    I_R_wet: float  # kg·m²  roll axis, wet
+    I_R_dry: float  # kg·m²  roll axis, dry
+    I_L_wet: float  # kg·m²  lateral axis, wet
+    I_L_dry: float  # kg·m²  lateral axis, dry
+
+
+@dataclass(frozen=True)
+class VehicleNozzle:
+    exit: float  # m from nosecone tip
+
+
+@dataclass(frozen=True)
+class VehicleRecovery:
+    CdA_drogue: float           # m²
+    CdA_main: float             # m²
+    deploy_altitude_agl: float  # m above launch site
+
+
+@dataclass(frozen=True)
+class VehicleRoll:
+    r_fin: float  # m — fin CP spanwise distance from centreline
+
 
 @dataclass(frozen=True)
 class VehicleConfig:
-    # Geometry
-    diameter: float          # m
-    length: float            # m
-    reference_area: float    # m²
-    launch_rail_length: float  # m
+    geometry: VehicleGeometry
+    mass: VehicleMass
+    inertia: VehicleInertia
+    nozzle: VehicleNozzle
+    recovery: VehicleRecovery
+    roll: VehicleRoll
 
-    # Mass
-    wet_mass: float          # kg  (airframe + loaded motor)
-    dry_mass: float          # kg  (airframe + empty motor casing)
-    cg_dry: float            # m from nosecone tip  (dry vehicle incl. empty casing)
-
-    # Motor CG (measured from nosecone tip).  Used in dynamics.py CG assembly:
-    #   CG(t) = (m_dry·cg_dry + m_prop(t)·motor_cg_loaded) / (m_dry + m_prop(t))
-    motor_cg_loaded: float   # m — CG of fully loaded motor ("total weight" in .eng)
-
-    # Moments of inertia
-    I_R_wet: float           # kg·m²  roll, wet
-    I_R_dry: float           # kg·m²  roll, dry
-    I_L_wet: float           # kg·m²  lateral, wet
-    I_L_dry: float           # kg·m²  lateral, dry
-
-    # Nozzle
-    nozzle_exit: float       # m from nosecone tip
-
-    # Recovery
-    CdA_drogue: float        # m²
-    CdA_main: float          # m²
-    deploy_altitude_agl: float  # m above launch site
-
-    # Roll model
-    r_fin: float             # m — fin CP spanwise distance from centreline
+    @property
+    def reference_area(self) -> float:
+        """Convenience accessor — delegates to geometry.reference_area."""
+        return self.geometry.reference_area
 
 
 # ---------------------------------------------------------------------------
 # Loaders
 # ---------------------------------------------------------------------------
+
+def _parse_auto(value: object) -> float | Literal["auto"]:
+    if value == "auto":
+        return "auto"
+    return float(value)
+
 
 def load_simulation_config(path: Path | str) -> SimulationConfig:
     """Parse *path* (simulation.yaml) and return a SimulationConfig.
@@ -169,63 +208,15 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     def _resolve(p: str) -> Path:
         return (base_dir / p).resolve()
 
-    ls = raw["launch_site"]
-    lr = raw["launch_rail"]
-    mc = raw["mc"]
-    dist = raw["distributions"]
-    acc = raw["acceptance"]
-    opt = raw.get("optimisation", {})
-    stations_raw = raw.get("observation_stations") or []
-    markers_raw = raw.get("map_markers") or []
-    paths_raw = raw["paths"]
-    so = raw.get("surface_override", {})
+    # -- site
+    site_raw = raw["site"]
+    stations_raw = site_raw.get("observation_stations") or []
+    markers_raw = site_raw.get("map_markers") or []
 
-    def _parse_auto(value: object) -> float | Literal["auto"]:
-        if value == "auto":
-            return "auto"
-        return float(value)
-
-    coastline_raw = paths_raw.get("coastline")
-    coastline: Path | None = (
-        None if coastline_raw is None else _resolve(coastline_raw)
-    )
-
-    blend_raw = so.get("blend_height_m")
-    blend: float | None = (
-        None if blend_raw is None else float(blend_raw)
-    )
-
-    return SimulationConfig(
-        launch_site=LaunchSiteConfig(
-            latitude=float(ls["latitude"]),
-            longitude=float(ls["longitude"]),
-        ),
-        launch_rail=LaunchRailConfig(
-            azimuth=_parse_auto(lr["azimuth"]),
-            inclination=_parse_auto(lr["inclination"]),
-        ),
-        mc=MCConfig(
-            num_samples=int(mc["num_samples"]),
-            master_seed=int(mc["master_seed"]),
-        ),
-        distributions=DistributionsConfig(
-            azimuth_sigma=float(dist["azimuth_sigma"]),
-            inclination_sigma=float(dist["inclination_sigma"]),
-            fin_cant_sigma=float(dist["fin_cant_sigma"]),
-            impulse_factor_sigma=float(dist["impulse_factor_sigma"]),
-        ),
-        acceptance=AcceptanceConfig(
-            compliance_threshold=float(acc["compliance_threshold"]),
-            buffer_distance=float(acc["buffer_distance"]),
-            altitude_ceiling=float(acc["altitude_ceiling"]),
-            sm_subsonic_min=float(acc["sm_subsonic_min"]),
-            sm_supersonic_min=float(acc["sm_supersonic_min"]),
-            aoa_max=float(acc["aoa_max"]),
-            sm_aoa_threshold=float(acc["sm_aoa_threshold"]),
-        ),
-        optimisation=OptimisationConfig(
-            min_safe_radius=float(opt.get("min_safe_radius", 0.0)),
-        ),
+    site = SiteConfig(
+        latitude=float(site_raw["latitude"]),
+        longitude=float(site_raw["longitude"]),
+        min_safe_radius=float(site_raw["min_safe_radius"]),
         observation_stations=tuple(
             ObservationStation(
                 name=str(s["name"]),
@@ -243,20 +234,73 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             )
             for m in markers_raw
         ),
-        paths=PathsConfig(
-            vehicle=_resolve(paths_raw["vehicle"]),
-            motor=_resolve(paths_raw["motor"]),
-            aero_dir=_resolve(paths_raw["aero_dir"]),
-            wind_profiles=_resolve(paths_raw["wind_profiles"]),
-            danger_area=_resolve(paths_raw["danger_area"]),
-            coastline=coastline,
+    )
+
+    # -- launch
+    launch_raw = raw["launch"]
+    rail_raw = launch_raw["rail"]
+    sw_raw = launch_raw.get("surface_wind")
+
+    surface_wind: SurfaceWindConfig | None
+    if sw_raw is not None:
+        surface_wind = SurfaceWindConfig(
+            speed_ms=float(sw_raw["speed_ms"]),
+            bearing_deg=float(sw_raw["bearing_deg"]),
+            blend_height_m=float(sw_raw["blend_height_m"]),
+        )
+    else:
+        surface_wind = None
+
+    launch = LaunchConfig(
+        rail=RailConfig(
+            azimuth=_parse_auto(rail_raw["azimuth"]),
+            inclination=_parse_auto(rail_raw["inclination"]),
+            length=float(rail_raw["length"]),
         ),
-        surface_override=SurfaceOverrideConfig(
-            speed_ms=float(so.get("speed_ms", 0.0)),
-            bearing_deg=float(so.get("bearing_deg", 0.0)),
-            blend_height_m=blend,
+        surface_wind=surface_wind,
+    )
+
+    # -- monte_carlo
+    mc_raw = raw["monte_carlo"]
+    unc_raw = mc_raw["uncertainties"]
+    acc_raw = mc_raw["acceptance"]
+
+    monte_carlo = MonteCarloConfig(
+        samples=int(mc_raw["samples"]),
+        seed=int(mc_raw["seed"]),
+        uncertainties=UncertaintiesConfig(
+            azimuth_sigma=float(unc_raw["azimuth_sigma"]),
+            inclination_sigma=float(unc_raw["inclination_sigma"]),
+            fin_cant_sigma=float(unc_raw["fin_cant_sigma"]),
+            impulse_factor_sigma=float(unc_raw["impulse_factor_sigma"]),
+        ),
+        acceptance=AcceptanceConfig(
+            compliance_threshold=float(acc_raw["compliance_threshold"]),
+            buffer_distance=float(acc_raw["buffer_distance"]),
+            altitude_ceiling=float(acc_raw["altitude_ceiling"]),
+            sm_transition_mach=float(acc_raw["sm_transition_mach"]),
+            sm_subsonic_min=float(acc_raw["sm_subsonic_min"]),
+            sm_supersonic_min=float(acc_raw["sm_supersonic_min"]),
+            aoa_max=float(acc_raw["aoa_max"]),
+            sm_aoa_threshold=float(acc_raw["sm_aoa_threshold"]),
         ),
     )
+
+    # -- paths
+    paths_raw = raw["paths"]
+    coastline_raw = paths_raw.get("coastline")
+    coastline: Path | None = None if coastline_raw is None else _resolve(coastline_raw)
+
+    paths = PathsConfig(
+        vehicle=_resolve(paths_raw["vehicle"]),
+        motor=_resolve(paths_raw["motor"]),
+        aero_tables=_resolve(paths_raw["aero_tables"]),
+        wind_profiles=_resolve(paths_raw["wind_profiles"]),
+        danger_area=_resolve(paths_raw["danger_area"]),
+        coastline=coastline,
+    )
+
+    return SimulationConfig(site=site, launch=launch, monte_carlo=monte_carlo, paths=paths)
 
 
 def load_vehicle_config(path: Path | str) -> VehicleConfig:
@@ -264,24 +308,41 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
     with Path(path).open("r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
 
+    geom = raw["geometry"]
+    mass = raw["mass"]
+    inertia = raw["inertia"]
+    nozzle = raw["nozzle"]
+    recovery = raw["recovery"]
+    roll = raw["roll"]
+
     return VehicleConfig(
-        diameter=float(raw["diameter"]),
-        length=float(raw["length"]),
-        reference_area=float(raw["reference_area"]),
-        launch_rail_length=float(raw["launch_rail_length"]),
-        wet_mass=float(raw["wet_mass"]),
-        dry_mass=float(raw["dry_mass"]),
-        cg_dry=float(raw["cg_dry"]),
-        motor_cg_loaded=float(raw["motor_cg_loaded"]),
-        I_R_wet=float(raw["I_R_wet"]),
-        I_R_dry=float(raw["I_R_dry"]),
-        I_L_wet=float(raw["I_L_wet"]),
-        I_L_dry=float(raw["I_L_dry"]),
-        nozzle_exit=float(raw["nozzle_exit"]),
-        CdA_drogue=float(raw["CdA_drogue"]),
-        CdA_main=float(raw["CdA_main"]),
-        deploy_altitude_agl=float(raw["deploy_altitude_agl"]),
-        r_fin=float(raw["r_fin"]),
+        geometry=VehicleGeometry(
+            diameter=float(geom["diameter"]),
+            length=float(geom["length"]),
+        ),
+        mass=VehicleMass(
+            wet=float(mass["wet"]),
+            dry=float(mass["dry"]),
+            cg_dry=float(mass["cg_dry"]),
+            motor_cg_loaded=float(mass["motor_cg_loaded"]),
+        ),
+        inertia=VehicleInertia(
+            I_R_wet=float(inertia["I_R_wet"]),
+            I_R_dry=float(inertia["I_R_dry"]),
+            I_L_wet=float(inertia["I_L_wet"]),
+            I_L_dry=float(inertia["I_L_dry"]),
+        ),
+        nozzle=VehicleNozzle(
+            exit=float(nozzle["exit"]),
+        ),
+        recovery=VehicleRecovery(
+            CdA_drogue=float(recovery["CdA_drogue"]),
+            CdA_main=float(recovery["CdA_main"]),
+            deploy_altitude_agl=float(recovery["deploy_altitude_agl"]),
+        ),
+        roll=VehicleRoll(
+            r_fin=float(roll["r_fin"]),
+        ),
     )
 
 

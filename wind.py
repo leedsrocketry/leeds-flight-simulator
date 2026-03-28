@@ -1,9 +1,9 @@
-"""Wind model: .npz ensemble loader, surface override, and runtime interpolation.
+"""Wind model: .npz ensemble loader, surface wind override, and runtime interpolation.
 
 Public API
 ----------
-load_wind_ensemble(path, num_samples, surface_override)  →  WindEnsemble
-interpolate_wind(altitude_m, wind_east, wind_north, h)   →  (v_north, v_east)
+load_wind_ensemble(path, num_samples, surface_wind)    →  WindEnsemble
+interpolate_wind(altitude_m, wind_east, wind_north, h) →  (v_north, v_east)
 
 WindEnsemble holds the full profile array (N × M) and the mean profile (M,).
 interpolate_wind is Numba @njit compiled; pass a single profile row at call time.
@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import numba as nb
 
-from config import SurfaceOverrideConfig
+from config import SurfaceWindConfig
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ class WindEnsemble:
 def load_wind_ensemble(
     path: Path | str,
     num_samples: int,
-    surface_override: SurfaceOverrideConfig | None = None,
+    surface_wind: SurfaceWindConfig | None = None,
 ) -> WindEnsemble:
     """Load wind profiles from a .npz file and return a WindEnsemble.
 
@@ -66,9 +66,10 @@ def load_wind_ensemble(
         Path to the .npz file.
     num_samples:
         Required minimum number of profiles (N >= num_samples).
-    surface_override:
-        If provided and ``blend_height_m`` is not None, replace the lower
-        portion of every profile with the surface wind vector.
+    surface_wind:
+        If provided, replace the lower portion of every profile with the
+        surface wind vector, blended linearly up to ``blend_height_m``.
+        Pass ``None`` to leave all profiles unmodified.
 
     Raises
     ------
@@ -110,9 +111,9 @@ def load_wind_ensemble(
         raise ValueError("altitude_m must be monotonically increasing")
 
     # --- apply surface wind override (modifies copies, not original arrays)
-    if surface_override is not None and surface_override.blend_height_m is not None:
-        wind_east_ms, wind_north_ms = _apply_surface_override(
-            altitude_m, wind_east_ms, wind_north_ms, surface_override
+    if surface_wind is not None:
+        wind_east_ms, wind_north_ms = _apply_surface_wind(
+            altitude_m, wind_east_ms, wind_north_ms, surface_wind
         )
 
     mean_east_ms = np.ascontiguousarray(wind_east_ms.mean(axis=0))
@@ -127,13 +128,13 @@ def load_wind_ensemble(
     )
 
 
-def _apply_surface_override(
+def _apply_surface_wind(
     altitude_m: np.ndarray,
     wind_east_ms: np.ndarray,
     wind_north_ms: np.ndarray,
-    cfg: SurfaceOverrideConfig,
+    cfg: SurfaceWindConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return new east/north arrays with the surface override blended in."""
+    """Return new east/north arrays with the surface wind blended in."""
     bearing_rad = np.radians(cfg.bearing_deg)
     ov_east = cfg.speed_ms * np.sin(bearing_rad)
     ov_north = cfg.speed_ms * np.cos(bearing_rad)

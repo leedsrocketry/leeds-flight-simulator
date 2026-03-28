@@ -120,12 +120,12 @@ def _make_model(tmp_path):
     """Build a MotorModel from the simple eng + a matching vehicle config."""
     vehicle_yaml = tmp_path / "vehicle.yaml"
     vehicle_yaml.write_text(
-        "diameter: 0.1\nlength: 2.0\nreference_area: 0.00785\n"
-        "launch_rail_length: 4.0\nwet_mass: 20.0\ndry_mass: 15.0\n"
-        "cg_dry: 1.0\nmotor_cg_loaded: 1.8\n"
-        "I_R_wet: 0.01\nI_R_dry: 0.008\nI_L_wet: 4.0\nI_L_dry: 3.0\n"
-        "nozzle_exit: 1.95\nCdA_drogue: 0.15\nCdA_main: 2.8\n"
-        "deploy_altitude_agl: 305\nr_fin: 0.09\n",
+        "geometry:\n  diameter: 0.1\n  length: 2.0\n"
+        "mass:\n  wet: 20.0\n  dry: 15.0\n  cg_dry: 1.0\n  motor_cg_loaded: 1.8\n"
+        "inertia:\n  I_R_wet: 0.01\n  I_R_dry: 0.008\n  I_L_wet: 4.0\n  I_L_dry: 3.0\n"
+        "nozzle:\n  exit: 1.95\n"
+        "recovery:\n  CdA_drogue: 0.15\n  CdA_main: 2.8\n  deploy_altitude_agl: 305\n"
+        "roll:\n  r_fin: 0.09\n",
         encoding="utf-8",
     )
     md = load_motor(_write_eng(tmp_path, _SIMPLE_ENG))
@@ -234,8 +234,8 @@ def test_inertia_at_zero_is_wet(tmp_path):
                            model.total_impulse,
                            model.I_R_wet, model.I_R_dry,
                            model.I_L_wet, model.I_L_dry, 0.0)
-    assert I_R == pytest.approx(vc.I_R_wet)
-    assert I_L == pytest.approx(vc.I_L_wet)
+    assert I_R == pytest.approx(vc.inertia.I_R_wet)
+    assert I_L == pytest.approx(vc.inertia.I_L_wet)
 
 
 def test_inertia_at_burnout_is_dry(tmp_path):
@@ -244,8 +244,8 @@ def test_inertia_at_burnout_is_dry(tmp_path):
                            model.total_impulse,
                            model.I_R_wet, model.I_R_dry,
                            model.I_L_wet, model.I_L_dry, 2.0)
-    assert I_R == pytest.approx(vc.I_R_dry, abs=1e-10)
-    assert I_L == pytest.approx(vc.I_L_dry, abs=1e-10)
+    assert I_R == pytest.approx(vc.inertia.I_R_dry, abs=1e-10)
+    assert I_L == pytest.approx(vc.inertia.I_L_dry, abs=1e-10)
 
 
 def test_inertia_decreasing(tmp_path):
