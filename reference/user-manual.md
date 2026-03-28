@@ -2,7 +2,7 @@
 
 A six-degree-of-freedom Monte Carlo flight simulator for single-stage, passively stabilised, axisymmetric sounding rockets. Generates flight safety analysis evidence suitable for a CAA large rocket permission safety case under Article 96 of the Air Navigation Order 2016.
 
-The simulator covers launch rail exit to landing. It evaluates four descent failure scenarios and checks trajectory containment, sea-landing exclusion, observation coverage, and aerodynamic stability against configurable acceptance criteria. It can automatically optimise launch azimuth and inclination when these are set to `"auto"`.
+The simulator covers launch rail exit to landing. It evaluates between one and four descent scenarios (depending on the vehicle's recovery system configuration) and checks trajectory containment, sea-landing exclusion, observation coverage, and aerodynamic stability against configurable acceptance criteria. It can automatically optimise launch azimuth and inclination when these are set to `"auto"`.
 
 ---
 
@@ -47,7 +47,7 @@ The simulator runs entirely offline. No network access is required.
 python . run input/simulation.yaml
 ```
 
-This runs all four descent scenarios (4,000 samples by default) and prints a results table to the terminal:
+This runs all active descent scenarios (up to 4,000 samples by default — 1,000 per scenario) and prints a results table to the terminal:
 
 ```
 +-----------------+---------+-----------+---------------+---------+
@@ -77,20 +77,20 @@ On a 2020-era laptop, a standard run completes in under 3 minutes. Optimisation 
 
 ### Monte Carlo Analysis
 
-Rather than simulating a single trajectory, the simulator runs thousands of trajectories with randomised conditions -- different wind profiles, motor impulse, launch rail alignment, and fin cant -- producing a cloud of landing points. The acceptance criteria (default: 99.7% of samples compliant) determine whether the flight is safe.
+Rather than simulating a single trajectory, the simulator runs thousands of trajectories with randomised conditions -- different wind profiles, motor impulse, launch rail alignment, and fin cant -- producing a cloud of landing points. The acceptance criteria (default: 99.7% compliant, i.e. `compliance_threshold: 0.997`) determine whether the flight is safe.
 
 ### Descent Scenarios
 
-Every sample shares the same ascent. At apogee, the sample follows one of four descent branches:
+Every sample shares the same ascent. At apogee, the sample follows one of up to four descent branches:
 
 | Scenario | Description | Significance |
 |----------|-------------|--------------|
-| Nominal | Drogue at apogee, main at deployment altitude | Expected case |
-| Ballistic | No parachutes | Worst-case impact energy, minimal drift |
-| Drogue-only | Drogue deploys, main fails | Moderate drift, high descent rate |
-| Premature main | Main opens at apogee | Maximum drift -- bounding case for containment |
+| `nominal` | Drogue at apogee (if present), main at deployment altitude | Expected case |
+| `ballistic` | No parachutes | Worst-case impact energy, minimal drift |
+| `drogue_only` | Drogue deploys, main fails | Moderate drift, high descent rate |
+| `premature_main` | Main opens at apogee | Maximum drift -- bounding case for containment |
 
-Each scenario runs as a separate batch (default: 1,000 samples each).
+Which scenarios are active depends on the vehicle's recovery configuration (see `vehicle.yaml`). Each active scenario runs as a separate batch (default: 1,000 samples each).
 
 ### Wind Profiles
 
@@ -104,7 +104,7 @@ The `.npz` file must contain:
 | `wind_east_ms` | `(N, M)` | Eastward wind component per profile (m/s) |
 | `wind_north_ms` | `(N, M)` | Northward wind component per profile (m/s) |
 
-`N` must be >= `num_samples` in `simulation.yaml`. Sample `i` uses profile `i`.
+`N` must be >= `samples` under `monte_carlo` in `simulation.yaml`. Sample `i` uses profile `i`.
 
 
 ## Input Files
@@ -113,38 +113,37 @@ The simulator requires six input files. Example files are provided in `input/`.
 
 ### `vehicle.yaml`
 
-Defines the vehicle's physical properties. All distances are in metres from the nosecone tip.
+Defines the vehicle's physical properties. All distances are in metres from the nosecone tip. Dry mass properties are **derived automatically** from the wet properties and propellant data — you do not need to specify them.
 
 ```yaml
-# Vehicle geometry
-diameter: 0.130          # Reference diameter (m)
-length: 2.6              # Total length (m)
-reference_area: 0.01327  # Pi * d^2 / 4 (m^2)
-launch_rail_length: 4.0  # Launch rail length (m)
+geometry:
+  diameter: 0.130           # m — reference diameter (A_ref = π·d²/4 is derived)
+  length: 2.6               # m — total vehicle length
+  nozzle_position: 2.55     # m — nozzle exit plane from nosecone tip
+  nozzle_diameter: 0.08     # m — nozzle exit diameter (for thrust altitude correction)
+  fin_cp_radius: 0.095      # m — fin CP spanwise distance from centreline (for roll)
 
-# Mass properties
-wet_mass: 26.5           # Mass at launch (kg)
-dry_mass: 14.7           # Mass after burnout (kg)
-cg_dry: 1.15             # Dry vehicle CG from nosecone (airframe + empty casing) (m)
-motor_cg_loaded: 1.82    # Loaded motor CG from nosecone (matches "total weight" in .eng) (m)
+mass:
+  wet_mass: 26.5            # kg — total launch mass (vehicle + propellant)
+  wet_cg: 1.15              # m — wet vehicle CG from nosecone tip
+  wet_motor_cg: 1.82        # m — loaded motor CG from nosecone tip
+  propellant_inertia_roll: 0.05     # kg·m² — propellant roll inertia about roll axis
+  propellant_inertia_lateral: 0.8  # kg·m² — propellant lateral inertia about prop CG
+  wet_inertia_lateral: 5.2         # kg·m² — wet vehicle lateral inertia about wet CG
+  wet_inertia_roll: 0.012          # kg·m² — wet vehicle roll inertia about roll axis
 
-# Moments of inertia (kg*m^2)
-I_R_wet: 0.012           # Roll, wet
-I_R_dry: 0.008           # Roll, dry
-I_L_wet: 5.2             # Lateral, wet
-I_L_dry: 3.1             # Lateral, dry
-
-# Nozzle
-nozzle_exit: 2.55        # Nozzle exit from nosecone (m)
-
-# Recovery
-CdA_drogue: 0.15         # Drogue drag area (m^2)
-CdA_main: 2.8            # Main drag area (m^2)
-deploy_altitude_agl: 305 # Main deploy altitude above launch site (m)
-
-# Roll model (Barrowman)
-r_fin: 0.095             # Fin CP spanwise distance from centreline (m)
+recovery:
+  drogue:                   # omit this section for no drogue
+    cd: 2.0                 # drag coefficient
+    area: 0.15              # m² (CdA_drogue = cd × area)
+    threshold: apogee       # "apogee" or numeric altitude in m AGL
+  main:                     # omit this section for no main parachute
+    cd: 2.0
+    area: 2.8               # m²
+    threshold: 305          # m AGL (or "apogee")
 ```
+
+Valid recovery configurations are: both drogue and main, main only, or neither. A drogue without a main is not permitted.
 
 ### `motor.eng`
 
@@ -166,82 +165,73 @@ A GeoJSON polygon defining the danger area footprint. Coordinates are `[longitud
 
 ### `coastline.geojson`
 
-Optional GeoJSON polygon delineating land from sea. Set the path to `none` in `simulation.yaml` to disable the sea-landing compliance check.
+Optional GeoJSON polygon delineating land from sea. Omit the `coastline` key from the `site` section of `simulation.yaml` to disable the sea-landing compliance check.
 
 ### `simulation.yaml`
 
-Main simulation configuration:
+Main simulation configuration. The file is divided into four top-level sections. All file paths are resolved relative to the directory containing `simulation.yaml`.
 
 ```yaml
-# Launch site
-launch_site:
-  latitude: 58.6104700
-  longitude: -4.9434804
+vehicle:
+  config: "vehicle.yaml"        # path to vehicle.yaml
+  motor: "motor.eng"            # path to RASP .eng file
+  aero_tables: "aero_tables"    # path to aero tables directory
 
-# Launch rail orientation (nominal).
-# Both fields required. Set to "auto" for optimisation.
-launch_rail:
-  azimuth: "auto"         # degrees clockwise from North, or "auto"
-  inclination: "auto"     # degrees from horizontal, or "auto"
+site:
+  latitude: 58.6104700          # degrees
+  longitude: -4.9434804         # degrees
+  min_safe_radius: 500          # metres — minimum ballistic range (inclination "auto")
+  altitude_ceiling: 16764       # metres (55,000 ft)
+  danger_area: "danger_area.geojson"
+  # coastline: "coastline.geojson"  # omit to disable sea-landing check
+  observation_stations:
+    - name: "MOD Range Control"
+      latitude: 58.40
+      longitude: -4.76
+      radius: 10000             # metres
+  map_markers:
+    - name: "Durness"
+      latitude: 58.40
+      longitude: -4.76
 
-# Monte Carlo
-mc:
-  num_samples: 1000       # per scenario
-  master_seed: 42
+launch:
+  rail:
+    azimuth: "auto"             # degrees clockwise from North, or "auto"
+    inclination: "auto"         # degrees from horizontal, or "auto"
+    length: 4.0                 # metres
+  wind_profiles: "wind_profiles.npz"
+  surface_wind:                 # omit this section entirely to disable surface override
+    speed_ms: 5.0               # m/s
+    bearing_deg: 270.0          # degrees clockwise from North
+    blend_height_m: 300         # metres AGL
 
-# Stochastic distributions
-distributions:
-  azimuth_sigma: 1.0            # degrees
-  inclination_sigma: 0.5        # degrees
-  fin_cant_sigma: 0.02          # degrees
-  impulse_factor_sigma: 6.7     # percent
-
-# Acceptance criteria
-acceptance:
-  compliance_threshold: 99.7  # percent
-  buffer_distance: 1000       # metres inward from danger area
-  altitude_ceiling: 16764     # metres (55,000 ft)
-  sm_subsonic_min: 1.0        # calibres (M < 0.91)
-  sm_supersonic_min: 2.0      # calibres (M >= 0.91)
-  aoa_max: 12.0               # degrees
-  sm_aoa_threshold: 5.0       # degrees: SM check applies when AoA < this
-
-# Optimisation (required only when azimuth or inclination is "auto")
-optimisation:
-  min_safe_radius: 500        # metres -- only used when inclination is "auto"
-
-# Observation stations
-observation_stations:
-  - name: "Range control"
-    latitude: 58.40
-    longitude: -4.76
-    radius: 10000
-  - name: "Cliff station"
-    latitude: 58.60
-    longitude: -4.95
-    radius: 5000
-
-# Map markers
-map_markers:
-  - name: "Durness"
-    latitude: 58.40
-    longitude: -4.76
-
-# Input file paths
-paths:
-  vehicle: "input/vehicle.yaml"
-  motor: "input/motor.eng"
-  aero_dir: "input/aero_tables/"
-  wind_profiles: "input/wind_profiles.npz"
-  danger_area: "input/danger_area.geojson"
-  coastline: "input/coastline.geojson"  # omit to disable sea-landing check
-
-# Surface wind override
-surface_override:
-  speed_ms: 5.0             # m/s
-  bearing_deg: 270.0        # degrees clockwise from North
-  blend_height_m: 300       # metres AGL; omit to disable surface override
+monte_carlo:
+  samples: 1000                 # per scenario
+  seed: 42
+  uncertainties:
+    azimuth_sigma: 1.0          # degrees
+    inclination_sigma: 0.5      # degrees
+    fin_cant_sigma: 0.02        # degrees
+    impulse_factor_sigma: 0.067 # fraction of total impulse (e.g. 0.067 = 6.7%)
+  acceptance:
+    compliance_threshold: 0.997 # fraction (e.g. 0.997 = 99.7%)
+    buffer_distance: 1000       # metres inward from danger area boundary
+    sm_transition_mach: 0.91    # Mach dividing subsonic / supersonic SM check
+    sm_subsonic_min: 1.0        # calibres (M < sm_transition_mach)
+    sm_supersonic_min: 2.0      # calibres (M >= sm_transition_mach)
+    aoa_max: 12.0               # degrees
+    sm_aoa_threshold: 5.0       # degrees: SM check applies when AoA < this
+    sea_check_scenarios:        # which scenarios must land on land (if coastline provided)
+      - nominal
+      - ballistic
+      - drogue_only
+      - premature_main
+    los_check_scenarios:        # which scenarios must be visible from an observation station
+      - ballistic
+      - drogue_only
 ```
+
+Scenarios listed in `sea_check_scenarios` or `los_check_scenarios` that are not active for the current vehicle configuration are silently skipped with a warning (see Descent Scenarios).
 
 
 ## Acceptance Criteria
@@ -251,9 +241,9 @@ A sample is compliant if **all** of the following hold:
 - **Stability and AoA** -- during powered and coasting flight, whenever AoA < `sm_aoa_threshold`: static margin >= `sm_subsonic_min` calibres (M < 0.91) or >= `sm_supersonic_min` calibres (M >= 0.91). AoA must not exceed `aoa_max` at any point. Violation terminates the sample immediately.
 - **Containment** -- landing point inside the buffered danger area and peak altitude below the altitude ceiling.
 - **Sea landing** -- if a coastline file is provided, landing point must be outside the coastline polygon (i.e. on land).
-- **Observation coverage** (ballistic and drogue-only scenarios only) -- landing within the configured radius of at least one observation station.
+- **Observation coverage** -- landing within the configured radius of at least one observation station. Applied only to scenarios listed in `los_check_scenarios`.
 
-A run passes if >= `compliance_threshold` percent of samples are compliant. All four scenario runs must pass.
+A run passes if >= `compliance_threshold` fraction of samples are compliant (default 0.997 = 99.7%). All active scenario runs must pass.
 
 
 ## Optimisation
@@ -275,7 +265,7 @@ The total optimisation budget is roughly 4,500 simulations, bringing the combine
 
 ## Surface Wind Override
 
-When `surface_override` is configured in `simulation.yaml`, a user-specified surface wind replaces the lower portion of each wind profile. The override is specified as a speed (m/s) and bearing (degrees clockwise from North) and blends linearly into the profile wind between ground level and `blend_height_m`. Set `blend_height_m` to `none` to disable. This is useful on launch day when you have an anemometer reading at the pad but are using forecast or balloon data for the upper atmosphere.
+When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`, a user-specified surface wind replaces the lower portion of each wind profile. The override is specified as a speed (m/s) and bearing (degrees clockwise from North) and blends linearly into the profile wind between ground level and `blend_height_m`. Omit the `surface_wind` section entirely to disable the override. This is useful on launch day when you have an anemometer reading at the pad but are using forecast or balloon data for the upper atmosphere.
 
 
 ## Replaying Samples
@@ -356,11 +346,11 @@ A typical campaign uses the simulator at three stages:
 leeds-flight-simulator/
   __main__.py              # CLI entry point (click)
   cli.py                   # Command definitions, rich output
-  config.py                # YAML -> dataclasses
+  config.py                # YAML -> dataclasses; includes load_motor / MotorData
   atmosphere.py            # ISA (Numba)
-  wind.py                  # .npz loader, surface override, interpolation
+  wind.py                  # .npz loader, surface_wind blending, interpolation
   aerodynamics.py          # Aero tables, forces, roll torques (Barrowman)
-  propulsion.py            # .eng parser, mass/CG/MoI
+  motor.py                 # Motor physics: thrust/mass/CG/MoI @njit functions
   dynamics.py              # 6DoF + 3DoF derivatives (Numba)
   integrator.py            # Adaptive RK45 (Numba)
   recovery.py              # Descent scenarios, CdA switching
@@ -370,16 +360,17 @@ leeds-flight-simulator/
   outputs.py               # CSV, YAML, plot generation
   replay.py                # Single-sample replay
   verification/
-    test_isa.py
-    test_frames.py
-    test_launch_rail.py
-    test_descent.py
-    test_aero_interp.py
-    test_c2_damping.py
-    test_eng_parser.py
-    test_dynamics.py
-    test_wind_loader.py
-    compare_rasaero.py
+    test_config.py         # YAML loading and dataclass construction
+    test_isa.py            # ISA vs published tables
+    test_aero_interp.py    # aero table interpolation
+    test_c2_damping.py     # C₂A/C₂R hand calculations
+    test_eng_parser.py     # .eng parser and motor physics
+    test_wind_loader.py    # .npz loading, surface wind blending
+    test_frames.py         # quaternion/DCM/frame transforms
+    test_launch_rail.py    # launch rail exit velocity
+    test_descent.py        # terminal descent
+    test_dynamics.py       # 6DoF dynamics
+    compare_rasaero.py     # full trajectory comparison vs RASAero
   input/
     vehicle.yaml
     motor.eng

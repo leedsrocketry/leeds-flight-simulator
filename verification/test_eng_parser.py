@@ -126,8 +126,9 @@ _VEHICLE_YAML = (
     "mass:\n  wet_mass: 20.0\n  wet_cg: 0.90\n  wet_motor_cg: 1.40\n"
     "  propellant_inertia_roll: 0.001\n  propellant_inertia_lateral: 0.20\n"
     "  wet_inertia_lateral: 4.0\n  wet_inertia_roll: 0.010\n"
-    "recovery:\n  drogue_cd: 1.5\n  drogue_area: 0.05\n  drogue_threshold: apogee\n"
-    "  main_cd: 2.2\n  main_area: 2.5\n  main_threshold: 305\n"
+    "recovery:\n"
+    "  drogue:\n    cd: 1.5\n    area: 0.05\n    threshold: apogee\n"
+    "  main:\n    cd: 2.2\n    area: 2.5\n    threshold: 305\n"
 )
 # Derived values for hand-checking (m_prop=5.0 from _SIMPLE_ENG):
 #   m_dry = 20.0 - 5.0 = 15.0 kg

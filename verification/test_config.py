@@ -69,6 +69,12 @@ _MINIMAL_SIM_YAML = """
         sm_supersonic_min: 2.0
         aoa_max: 12.0
         sm_aoa_threshold: 5.0
+        sea_check_scenarios:
+          - nominal
+          - ballistic
+        los_check_scenarios:
+          - ballistic
+          - drogue_only
     """
 
 _VEHICLE_YAML = """
@@ -87,12 +93,14 @@ _VEHICLE_YAML = """
       wet_inertia_lateral: 5.2
       wet_inertia_roll: 0.012
     recovery:
-      drogue_cd: 2.0
-      drogue_area: 0.15
-      drogue_threshold: apogee
-      main_cd: 2.0
-      main_area: 2.8
-      main_threshold: 305
+      drogue:
+        cd: 2.0
+        area: 0.15
+        threshold: apogee
+      main:
+        cd: 2.0
+        area: 2.8
+        threshold: 305
     """
 
 
@@ -263,19 +271,102 @@ def test_vehicle_inertia(tmp_path):
 
 def test_vehicle_recovery(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.recovery.drogue_cd == pytest.approx(2.0)
-    assert v.recovery.drogue_area == pytest.approx(0.15)
-    assert v.recovery.drogue_threshold == "apogee"
-    assert v.recovery.main_cd == pytest.approx(2.0)
-    assert v.recovery.main_area == pytest.approx(2.8)
-    assert v.recovery.main_threshold == pytest.approx(305.0)
+    assert v.recovery.drogue is not None
+    assert v.recovery.drogue.cd == pytest.approx(2.0)
+    assert v.recovery.drogue.area == pytest.approx(0.15)
+    assert v.recovery.drogue.threshold == "apogee"
+    assert v.recovery.main is not None
+    assert v.recovery.main.cd == pytest.approx(2.0)
+    assert v.recovery.main.area == pytest.approx(2.8)
+    assert v.recovery.main.threshold == pytest.approx(305.0)
 
 
 def test_recovery_numeric_threshold(tmp_path):
-    """main_threshold=305 parses as a float; drogue_threshold='apogee' as literal."""
+    """main threshold=305 parses as float; drogue threshold='apogee' as literal."""
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert isinstance(v.recovery.main_threshold, float)
-    assert v.recovery.drogue_threshold == "apogee"
+    assert isinstance(v.recovery.main.threshold, float)
+    assert v.recovery.drogue.threshold == "apogee"
+
+
+def test_recovery_drogue_optional(tmp_path):
+    """Omitting the drogue key gives drogue=None."""
+    yaml_no_drogue = _VEHICLE_YAML.replace(
+        "    recovery:\n"
+        "      drogue:\n"
+        "        cd: 2.0\n"
+        "        area: 0.15\n"
+        "        threshold: apogee\n",
+        "    recovery:\n",
+    )
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_no_drogue))
+    assert v.recovery.drogue is None
+    assert v.recovery.main is not None
+
+
+def test_recovery_drogue_without_main_raises(tmp_path):
+    """Drogue present but main absent is an invalid configuration."""
+    yaml_no_main = _VEHICLE_YAML.replace(
+        "      main:\n"
+        "        cd: 2.0\n"
+        "        area: 2.8\n"
+        "        threshold: 305\n",
+        "",
+    )
+    with pytest.raises(ValueError, match="drogue"):
+        load_vehicle_config(_write(tmp_path, "v.yaml", yaml_no_main))
+
+
+def test_recovery_main_only(tmp_path):
+    """Omitting the drogue and main configured gives main-only vehicle."""
+    yaml_main_only = _VEHICLE_YAML.replace(
+        "    recovery:\n"
+        "      drogue:\n"
+        "        cd: 2.0\n"
+        "        area: 0.15\n"
+        "        threshold: apogee\n",
+        "    recovery:\n",
+    )
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_main_only))
+    assert v.recovery.drogue is None
+    assert v.recovery.main is not None
+
+
+def test_recovery_no_chutes(tmp_path):
+    """Omitting both parachutes gives drogue=None, main=None."""
+    yaml_no_chutes = _VEHICLE_YAML.replace(
+        "    recovery:\n"
+        "      drogue:\n"
+        "        cd: 2.0\n"
+        "        area: 0.15\n"
+        "        threshold: apogee\n"
+        "      main:\n"
+        "        cd: 2.0\n"
+        "        area: 2.8\n"
+        "        threshold: 305\n",
+        "    recovery:\n",
+    )
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_no_chutes))
+    assert v.recovery.drogue is None
+    assert v.recovery.main is None
+
+
+def test_acceptance_scenario_lists(tmp_path):
+    cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
+    acc = cfg.monte_carlo.acceptance
+    assert "nominal" in acc.sea_check_scenarios
+    assert "ballistic" in acc.sea_check_scenarios
+    assert "ballistic" in acc.los_check_scenarios
+    assert "drogue_only" in acc.los_check_scenarios
+
+
+def test_acceptance_scenario_lists_empty_when_omitted(tmp_path):
+    """Omitting scenario lists gives empty tuples — no check runs."""
+    lines = [l for l in _MINIMAL_SIM_YAML.splitlines()
+             if not any(k in l for k in ("sea_check", "los_check", "- nominal",
+                                         "- ballistic", "- drogue_only"))]
+    cfg = load_simulation_config(_write(tmp_path, "s.yaml", "\n".join(lines)))
+    assert cfg.monte_carlo.acceptance.sea_check_scenarios == ()
+    assert cfg.monte_carlo.acceptance.los_check_scenarios == ()
 
 
 def test_vehicle_is_frozen(tmp_path):

@@ -94,13 +94,15 @@ class UncertaintiesConfig:
 
 @dataclass(frozen=True)
 class AcceptanceConfig:
-    compliance_threshold: float   # fractional (0.0–1.0) of landings inside danger area
-    buffer_distance: float        # metres inward from danger area boundary
-    sm_transition_mach: float     # Mach number dividing subsonic / supersonic SM check
-    sm_subsonic_min: float        # calibres (M < sm_transition_mach)
-    sm_supersonic_min: float      # calibres (M >= sm_transition_mach)
-    aoa_max: float                # degrees
-    sm_aoa_threshold: float       # degrees: SM check applies when AoA < this
+    compliance_threshold: float        # fractional (0.0–1.0) of landings inside danger area
+    buffer_distance: float             # metres inward from danger area boundary
+    sm_transition_mach: float          # Mach number dividing subsonic / supersonic SM check
+    sm_subsonic_min: float             # calibres (M < sm_transition_mach)
+    sm_supersonic_min: float           # calibres (M >= sm_transition_mach)
+    aoa_max: float                     # degrees
+    sm_aoa_threshold: float            # degrees: SM check applies when AoA < this
+    sea_check_scenarios: tuple[str, ...]  # scenarios checked for sea landing
+    los_check_scenarios: tuple[str, ...]  # scenarios checked for observation-station LOS
 
 
 @dataclass(frozen=True)
@@ -155,13 +157,32 @@ class VehicleMass:
 
 
 @dataclass(frozen=True)
+class ParachuteConfig:
+    """Configuration for a single parachute stage."""
+    cd: float                                  # drag coefficient
+    area: float                                # m² — reference area
+    threshold: float | Literal["apogee"]       # deploy altitude [m AGL] or "apogee"
+
+
+@dataclass(frozen=True)
 class VehicleRecovery:
-    drogue_cd: float                              # drogue drag coefficient
-    drogue_area: float                            # m² — drogue reference area
-    drogue_threshold: float | Literal["apogee"]  # m AGL or "apogee"
-    main_cd: float                                # main parachute drag coefficient
-    main_area: float                              # m² — main parachute reference area
-    main_threshold: float | Literal["apogee"]    # m AGL or "apogee"
+    """Recovery system configuration.
+
+    Valid configurations (drogue without main is not permitted):
+
+        both drogue and main  — all up to four scenarios may be active
+        main only             — ``drogue_only`` never generated
+        neither               — only ``nominal`` generated
+
+    Active descent scenarios derived from this configuration (§9):
+
+        ``nominal``        — always
+        ``ballistic``      — at least one parachute configured
+        ``drogue_only``    — both drogue AND main configured
+        ``premature_main`` — main configured AND ``main.threshold`` is numeric
+    """
+    drogue: ParachuteConfig | None  # None → no drogue stage
+    main: ParachuteConfig | None    # None → no main stage
 
 
 @dataclass(frozen=True)
@@ -295,6 +316,12 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             sm_supersonic_min=float(acc_raw["sm_supersonic_min"]),
             aoa_max=float(acc_raw["aoa_max"]),
             sm_aoa_threshold=float(acc_raw["sm_aoa_threshold"]),
+            sea_check_scenarios=tuple(
+                str(s) for s in (acc_raw.get("sea_check_scenarios") or [])
+            ),
+            los_check_scenarios=tuple(
+                str(s) for s in (acc_raw.get("los_check_scenarios") or [])
+            ),
         ),
     )
 
@@ -313,7 +340,26 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
 
     geom = raw["geometry"]
     mass = raw["mass"]
-    recovery = raw["recovery"]
+    recovery_raw = raw.get("recovery") or {}
+
+    def _parse_chute(key: str) -> ParachuteConfig | None:
+        r = recovery_raw.get(key)
+        if r is None:
+            return None
+        return ParachuteConfig(
+            cd=float(r["cd"]),
+            area=float(r["area"]),
+            threshold=_parse_threshold(r["threshold"]),
+        )
+
+    drogue = _parse_chute("drogue")
+    main = _parse_chute("main")
+    if drogue is not None and main is None:
+        raise ValueError(
+            "Recovery configuration error: a drogue parachute is configured but "
+            "no main parachute is present. Valid configurations are: both drogue "
+            "and main, main only, or neither."
+        )
 
     return VehicleConfig(
         geometry=VehicleGeometry(
@@ -333,12 +379,8 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
             wet_inertia_roll=float(mass["wet_inertia_roll"]),
         ),
         recovery=VehicleRecovery(
-            drogue_cd=float(recovery["drogue_cd"]),
-            drogue_area=float(recovery["drogue_area"]),
-            drogue_threshold=_parse_threshold(recovery["drogue_threshold"]),
-            main_cd=float(recovery["main_cd"]),
-            main_area=float(recovery["main_area"]),
-            main_threshold=_parse_threshold(recovery["main_threshold"]),
+            drogue=drogue,
+            main=main,
         ),
     )
 

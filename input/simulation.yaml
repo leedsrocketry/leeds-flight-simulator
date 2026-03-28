@@ -47,3 +47,12 @@ monte_carlo:
     sm_supersonic_min: 2.0       # calibres (M >= sm_transition_mach)
     aoa_max: 12.0                # degrees
     sm_aoa_threshold: 5.0        # degrees: SM check applies when AoA < this
+    # Descent scenarios: nominal, ballistic, drogue_only, premature_main (see §9)
+    sea_check_scenarios:         # landing must not be at sea
+      - nominal
+      - ballistic
+      - drogue_only
+      - premature_main
+    los_check_scenarios:         # landing must be visible from at least one station
+      - ballistic
+      - drogue_only

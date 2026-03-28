@@ -15,9 +15,14 @@ mass:
   wet_inertia_roll:     0.012 # wet vehicle roll inertia about roll axis (kg·m²)
 
 recovery:
-  drogue_cd: 2.0
-  drogue_area: 0.15          # drogue reference area (m²)
-  drogue_threshold: apogee   # deploy at apogee, or enter altitude in metres AGL
-  main_cd: 2.0
-  main_area: 2.8             # main parachute reference area (m²)
-  main_threshold: 305        # main deploy altitude above launch site (m)
+  # Omit a parachute section entirely to remove it from the simulation.
+  # Scenarios generated: nominal, total_fail (always);
+  #   drogue_fail / main_fail only when both stages are present.
+  drogue:
+    cd: 2.0
+    area: 0.15          # reference area (m²)
+    threshold: apogee   # "apogee" or altitude in metres AGL
+  main:
+    cd: 2.0
+    area: 2.8           # reference area (m²)
+    threshold: 305      # metres AGL

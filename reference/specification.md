@@ -130,7 +130,7 @@ The `.npz` file must contain the following arrays:
 
 ### 5.2 Surface Wind Override
 
-When `surface_override` is configured in `simulation.yaml`, a user-specified surface wind (speed in m/s, bearing in degrees clockwise from north) replaces the lower portion of each profile up to a configurable blend height. If `blend_height_m` is `none`, the override is disabled.
+When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`, a user-specified surface wind (speed in m/s, bearing in degrees clockwise from north) replaces the lower portion of each profile up to a configurable blend height. Omit the `surface_wind` section entirely to disable the override.
 
 ```
 if h ≤ 0:              wind = override_vector
@@ -204,27 +204,57 @@ F(t) = F_nominal(t) · k_impulse, where k_impulse ~ Normal(1.0, whatever is in t
 
 ### 7.3 Mass Properties
 
+The user supplies wet vehicle properties and propellant properties in `vehicle.yaml`. Dry properties are derived at startup and never specified by the user.
+
+**Dry mass and CG** (derived in `motor.py`):
+
+```
+m_dry  = wet_mass − m_prop_0
+cg_dry = (wet_mass · wet_cg − m_prop_0 · wet_motor_cg) / m_dry
+```
+
+where `m_prop_0` is the propellant mass from the `.eng` header and `wet_motor_cg` (the loaded motor CG from `vehicle.yaml`) is used as the fixed propellant CG throughout the burn (inside-out burn model — exact when the casing is massless, an excellent approximation for high-mass-fraction solid motors).
+
+**Dry inertias** (derived via parallel-axis theorem):
+
+```
+I_roll_dry = wet_inertia_roll − propellant_inertia_roll
+
+I_lateral_dry = wet_inertia_lateral
+              − (propellant_inertia_lateral + m_prop_0 · (wet_motor_cg − wet_cg)²)
+              − m_dry · (cg_dry − wet_cg)²
+```
+
+**Time-varying mass, CG, and inertia** (evaluated at each integration timestep in `motor.py`):
+
 ```
 m_prop(t)  = m_prop_0 · (1 − ∫₀ᵗF(τ)dτ / I_total)
 ṁ(t)       = m_prop_0 · F(t) / I_total
 m_total(t) = m_dry + m_prop(t)
 
-CG(t) = (m_dry · cg_dry  +  m_prop(t) · motor_cg_loaded)
-        ─────────────────────────────────────────────────
-                        m_dry + m_prop(t)
+CG(t) = (m_dry · cg_dry  +  m_prop(t) · wet_motor_cg) / m_total(t)
 ```
 
-where:
-- `cg_dry` — dry vehicle CG (airframe + empty casing) from nosecone tip, from `vehicle.yaml`
-- `motor_cg_loaded` — CG of fully loaded motor from nosecone tip, from `vehicle.yaml`; serves as the effective propellant CG.  Exact when the casing is massless; an excellent approximation for high-mass-fraction solid motors.
-- `m_prop_0` ("prop weight") and `m_motor_wet` ("total weight") from the `.eng` file header
+Inertias at each timestep are computed via the parallel-axis theorem, transferring the dry and propellant contributions to the instantaneous CG:
 
-Vehicle CG assembly is performed in `dynamics.py`.
-I_R(t) and I_L(t) are whole-vehicle values, interpolated linearly between wet/dry by propellant fraction.
+```
+I_roll(t) = I_roll_dry + propellant_inertia_roll · f(t)
 
-### 7.4 Nozzle Exit
+I_lateral(t) = (I_lateral_dry + m_dry · (cg_dry − CG(t))²)
+             + (propellant_inertia_lateral · f(t) + m_prop(t) · (wet_motor_cg − CG(t))²)
+```
 
-L_ne (distance from nosecone tip) is a deterministic input for C₂R.
+where `f(t) = m_prop(t) / m_prop_0`.
+
+### 7.4 Nozzle and Thrust Altitude Correction
+
+`nozzle_position` (distance from nosecone tip, metres) is the deterministic input for C₂R. `nozzle_diameter` gives the nozzle exit area Aₑ = π·dₑ²/4, used for altitude thrust correction:
+
+```
+F(h) = F₀(t) + Aₑ · (p₀ − p_ISA(h))
+```
+
+where p₀ = 101 325 Pa and p_ISA(h) is the ISA ambient pressure (§4.1). The `.eng` thrust curve is assumed to be measured at sea level. `thrust_corrected_at` is used in the dynamics hot loop; `thrust_at` returns the raw sea-level value.
 
 ### 7.5 Thrust Misalignment
 
@@ -248,7 +278,7 @@ Launch rail axis (azimuth ψ, inclination θ, both stochastic):
 F_along = F_thrust − ½ρV²A_ref C_A(M,Re,0) − mg sinθ
 ```
 
-Vehicle accelerates until CG travels the launch rail length (from `vehicle.yaml`). Phase 2 initial conditions: v_b = [V_exit, 0, 0], quaternion from launch rail orientation, ω = 0.
+Vehicle accelerates until CG travels the launch rail length (from `simulation.yaml`, `launch.rail.length`). Phase 2 initial conditions: v_b = [V_exit, 0, 0], quaternion from launch rail orientation, ω = 0.
 
 ### 8.3 Free Flight (6DoF)
 
@@ -343,10 +373,10 @@ Point-mass: dv/dt = F_drag/m + g, dr/dt = v.
 F_drag = −½ρ|v_rel|²·CdA_eff·(v_rel/|v_rel|)
 ```
 
-**Ballistic:** CdA = A_ref·C_A(M,Re,0) — varies with speed/altitude (lawn-dart, α≈0).  
-**Drogue-only:** CdA_drogue.  
-**Premature main:** CdA_drogue + CdA_main (both from apogee).  
-**Nominal:** CdA_drogue → CdA_drogue + CdA_main at deployment altitude.
+**`ballistic`:** CdA = A_ref·C_A(M,Re,0) — varies with speed/altitude (lawn-dart, α≈0).
+**`drogue_only`:** CdA = CdA_drogue.
+**`premature_main`:** CdA = CdA_drogue + CdA_main (both open at apogee).
+**`nominal`:** CdA = CdA_drogue → CdA_drogue + CdA_main at configured deployment altitude.
 
 Drogue drag always adds to main when main is deployed. Main deploys at the configured deployment altitude above launch site elevation (flight computers zero at power-on). Descent terminates at r_D ≥ 0.
 
@@ -357,12 +387,50 @@ A reduced 3-DOF ascent mode is available for use by the optimisation routine (§
 
 ## 9 Descent Scenarios
 
-| Scenario | Drogue? | Main? | CdA_eff |
-|----------|---------|-------|---------|
-| Nominal | Apogee | Deploy alt AGL | CdA_drogue → CdA_drogue+CdA_main |
-| Ballistic | No | No | A_ref·C_A(M,Re,0) |
-| Drogue-only | Apogee | No | CdA_drogue |
-| Premature main | Apogee | Apogee | CdA_drogue+CdA_main |
+| Scenario | Drogue | Main | CdA_eff |
+|----------|--------|------|---------|
+| `nominal` | Apogee | Configured deploy alt | CdA_drogue → CdA_drogue+CdA_main |
+| `ballistic` | No | No | A_ref·C_A(M,Re,0) |
+| `drogue_only` | Apogee | Fails | CdA_drogue |
+| `premature_main` | Apogee | Apogee | CdA_drogue+CdA_main |
+
+### 9.1 Valid Recovery Configurations
+
+A drogue parachute without a main parachute is not a valid configuration (loading `vehicle.yaml` will raise an error). The three valid configurations and their active scenarios are:
+
+| Recovery config | `nominal` | `ballistic` | `drogue_only` | `premature_main` |
+|----------------|-----------|-------------|---------------|-----------------|
+| Both, `main.threshold` = numeric | ✓ | ✓ | ✓ | ✓ |
+| Both, `main.threshold` = `"apogee"` | ✓ | ✓ | ✓ | — |
+| Main only, `main.threshold` = numeric | ✓ | ✓ | — | ✓ |
+| Main only, `main.threshold` = `"apogee"` | ✓ | ✓ | — | — |
+| No parachutes | ✓ | — | — | — |
+
+### 9.2 Scenario Generation Rules
+
+| Scenario | Condition |
+|----------|-----------|
+| `nominal` | Always |
+| `ballistic` | At least one parachute is configured |
+| `drogue_only` | Both drogue **and** main are configured |
+| `premature_main` | Main is configured **and** `main.threshold` is a numeric altitude (not `"apogee"`) |
+
+`premature_main` is suppressed when `main.threshold = "apogee"` because apogee deployment is the earliest possible main deployment — no earlier failure mode exists.
+
+### 9.3 Inactive Scenario Filtering and Warnings
+
+`sea_check_scenarios` and `los_check_scenarios` in `simulation.yaml` are user-supplied lists and may name scenarios that are inactive for the current vehicle configuration (e.g. `drogue_only` listed but no drogue configured). The simulator must not raise an error in this case. Instead:
+
+1. At startup, compute the set of active scenarios from the vehicle configuration (§9.2).
+2. For each check list, silently drop any scenario name that is not in the active set — only the intersection is checked.
+3. Emit a warning to the simulation output for each dropped scenario, e.g.:
+
+   ```
+   WARNING: 'drogue_only' in sea_check_scenarios is not an active scenario for
+   this vehicle configuration and will be skipped.
+   ```
+
+Warnings are emitted once per run, before the Monte Carlo loop begins. They do not affect the compliance result.
 
 
 ## 10 Numerical Integration
@@ -399,11 +467,11 @@ A sample is compliant iff **all** of:
 
 **Sea landing** — if a coastline file is provided, landing point must be outside the coastline polygon. If no coastline file is provided, this check is skipped.
 
-**Observation coverage** (ballistic/drogue-only only) — landing within the configured radius of at least one observation station.
+**Observation coverage** — landing within the configured radius of at least one observation station. Applied only to scenarios listed in `los_check_scenarios` (§9).
 
 ### 11.2 Run-Level
 
-Pass iff ≥ `compliance_threshold` compliant (configurable, default 99.7%). All four runs must pass.
+Pass iff ≥ `compliance_threshold` fraction compliant (configurable, default 0.997). All active scenario runs must pass (§9).
 
 
 ## 12 Monte Carlo Framework
@@ -426,20 +494,20 @@ Each sample's random draws are deterministic from (master_seed, run_index, sampl
 
 ### 12.3 Structure
 
-Four runs (one per scenario) × N samples (default 1,000). Parallel across runs via `multiprocessing`.
+One run per active scenario (§9) × N samples (default 1,000). Parallel across runs via `multiprocessing`. Between one and four scenarios are active depending on which parachutes are configured.
 
 ### 12.4 Automatic Optimisation Trigger
 
-If `azimuth` or `inclination` in the `launch_rail` config section is set to `"auto"`, the optimisation routine (§13) runs before the main Monte Carlo analysis. The routine selects optimal integer values for whichever parameters are set to `"auto"`, then the main MC analysis proceeds using those values as the nominal μ. See §13 for details.
+If `azimuth` or `inclination` in the `launch.rail` config section is set to `"auto"`, the optimisation routine (§13) runs before the main Monte Carlo analysis. The routine selects optimal integer values for whichever parameters are set to `"auto"`, then the main MC analysis proceeds using those values as the nominal μ. See §13 for details.
 
 
 ## 13 Inclination/Azimuth Optimisation
 
 ### 13.1 Overview
 
-A four-phase routine to select optimal integer launch azimuth and inclination, maximising the probability that all four descent scenarios remain within the buffered danger area. Uses a deterministic worst-case ascent, analytical pre-filtering, and 1D Bayesian optimisation over azimuth. Implemented in `optimisation.py`.
+A four-phase routine to select optimal integer launch azimuth and inclination, maximising the probability that all active descent scenarios remain within the buffered danger area. Uses a deterministic worst-case ascent, analytical pre-filtering, and 1D Bayesian optimisation over azimuth. Implemented in `optimisation.py`.
 
-The routine runs automatically when `azimuth` and/or `inclination` are set to `"auto"` in `simulation.yaml` (§12.4). If only inclination is `"auto"`, only Phase 1 runs and the provided azimuth is used directly. If only azimuth is `"auto"`, the provided inclination is used and Phases 2–4 run. If both are `"auto"`, all four phases run.
+The routine runs automatically when `azimuth` and/or `inclination` are set to `"auto"` in `simulation.yaml` under `launch.rail` (§12.4). If only inclination is `"auto"`, only Phase 1 runs and the provided azimuth is used directly. If only azimuth is `"auto"`, the provided inclination is used and Phases 2–4 run. If both are `"auto"`, all four phases run.
 
 Once the optimisation completes, the standard Monte Carlo analysis (§12) runs with the determined values as the nominal azimuth and inclination. The acceptance criteria and thresholds are the same as for any other run (§11).
 
@@ -583,7 +651,7 @@ All trajectory containment checks (§11.1) and optimisation containment checks (
 
 ### 14.2 Coastline
 
-Optional. GeoJSON polygon delineating land from sea. If the coastline path is set to `none` in `simulation.yaml`, the sea-landing compliance check (§11.1) is skipped.
+Optional. GeoJSON polygon delineating land from sea. If the `coastline` key is omitted from the `site` section of `simulation.yaml`, the sea-landing compliance check (§11.1) is skipped.
 
 ### 14.3 Observation Stations
 
@@ -596,86 +664,112 @@ Optional. Coordinates in `simulation.yaml`. Added to map figure(s).
 
 | File | Format | Content |
 |------|--------|---------|
-| `vehicle.yaml` | YAML | Mass (wet/dry), CG (dry vehicle, loaded motor, dry motor casing), MoI (I_R/I_L wet/dry), nozzle exit distance, geometry (diameter, length, reference area), CdA (drogue/main), deployment altitude AGL, launch rail length, fin roll geometry (r_fin) |
-| `motor.eng` | .eng | Thrust curve, propellant mass |
+| `vehicle.yaml` | YAML | See §15.2 |
+| `motor.eng` | .eng | Thrust curve, propellant mass, motor mass |
 | `aero_tables/*.csv` | CSV | Per-component C_A, C_N, CP_m vs M, Re, AoA |
 | `wind_profiles.npz` | NumPy `.npz` | Ensemble of perturbed wind profiles (§5.1) |
 | `danger_area.geojson` | GeoJSON | Danger area footprint polygon |
-| `coastline.geojson` | GeoJSON | Land/sea delineation (optional — set path to `none` to disable) |
+| `coastline.geojson` | GeoJSON | Land/sea delineation (optional — omit `coastline` key in `simulation.yaml` to disable) |
 | `simulation.yaml` | YAML | See §15.1 |
 
 ### 15.1 Simulation Config (`simulation.yaml`)
 
+The file is divided into four top-level sections. All file paths are resolved relative to the directory containing `simulation.yaml`.
+
 ```yaml
-# Launch site
-launch_site:
-  latitude: 58.6104700
-  longitude: -4.9434804
+vehicle:
+  config: "vehicle.yaml"        # path to vehicle.yaml
+  motor: "motor.eng"            # path to RASP .eng file
+  aero_tables: "aero_tables"    # path to aero tables directory
 
-# Launch rail orientation (nominal).
-# Both fields required. Set to "auto" for optimisation.
-launch_rail:
-  azimuth: "auto"         # degrees clockwise from North, or "auto"
-  inclination: "auto"     # degrees from horizontal, or "auto"
+site:
+  latitude: 58.6104700          # degrees
+  longitude: -4.9434804         # degrees
+  min_safe_radius: 500          # metres — minimum ballistic range (inclination "auto")
+  altitude_ceiling: 16764       # metres (55,000 ft)
+  danger_area: "danger_area.geojson"
+  # coastline: "coastline.geojson"  # omit to disable sea-landing check
+  observation_stations:
+    - name: "MOD Range Control"
+      latitude: 58.40
+      longitude: -4.76
+      radius: 10000             # metres
+  map_markers:
+    - name: "Durness"
+      latitude: 58.40
+      longitude: -4.76
 
-# Monte Carlo
-mc:
-  num_samples: 1000       # per scenario
-  master_seed: 42
+launch:
+  rail:
+    azimuth: "auto"             # degrees clockwise from North, or "auto"
+    inclination: "auto"         # degrees from horizontal, or "auto"
+    length: 4.0                 # metres
+  wind_profiles: "wind_profiles.npz"
+  surface_wind:                 # omit this section entirely to disable surface override
+    speed_ms: 5.0               # m/s
+    bearing_deg: 270.0          # degrees clockwise from North
+    blend_height_m: 300         # metres AGL
 
-# Stochastic distributions
-distributions:
-  azimuth_sigma: 1.0            # degrees
-  inclination_sigma: 0.5        # degrees
-  fin_cant_sigma: 0.02          # degrees
-  impulse_factor_sigma: 6.7     # percent
-
-# Acceptance criteria
-acceptance:
-  compliance_threshold: 99.7  # percent
-  buffer_distance: 1000       # metres inward from danger area
-  altitude_ceiling: 16764     # metres (55,000 ft)
-  sm_subsonic_min: 1.0        # calibres (M < 0.8)
-  sm_supersonic_min: 2.0      # calibres (M >= 0.8)
-  aoa_max: 12.0               # degrees
-  sm_aoa_threshold: 5.0       # degrees: SM check applies when AoA < this
-
-# Optimisation (required only when azimuth or inclination is "auto")
-optimisation:
-  min_safe_radius: 500        # metres — only used when inclination is "auto"
-
-# Observation stations
-observation_stations:
-  - name: "Range control"
-    latitude: 58.40
-    longitude: -4.76
-    radius: 10000
-  - name: "Cliff station"
-    latitude: 58.60
-    longitude: -4.95
-    radius: 5000
-
-# Map markers
-map_markers:
-  - name: "Durness"
-    latitude: 58.40
-    longitude: -4.76
-
-# Input file paths
-paths:
-  vehicle: "input/vehicle.yaml"
-  motor: "input/motor.eng"
-  aero_dir: "input/aero_tables/"
-  wind_profiles: "input/wind_profiles.npz"
-  danger_area: "input/danger_area.geojson"
-  coastline: "input/coastline.geojson"  # omit to disable sea-landing check
-
-# Surface wind override
-surface_override:
-  speed_ms: 5.0             # m/s
-  bearing_deg: 270.0        # degrees clockwise from North
-  blend_height_m: 300       # metres AGL; omit to disable surface override
+monte_carlo:
+  samples: 1000                 # per scenario
+  seed: 42
+  uncertainties:
+    azimuth_sigma: 1.0          # degrees
+    inclination_sigma: 0.5      # degrees
+    fin_cant_sigma: 0.02        # degrees
+    impulse_factor_sigma: 0.067 # fraction of total impulse (e.g. 0.067 = 6.7%)
+  acceptance:
+    compliance_threshold: 0.997 # fraction (e.g. 0.997 = 99.7%)
+    buffer_distance: 1000       # metres inward from danger area boundary
+    sm_transition_mach: 0.91    # Mach dividing subsonic / supersonic SM check
+    sm_subsonic_min: 1.0        # calibres (M < sm_transition_mach)
+    sm_supersonic_min: 2.0      # calibres (M >= sm_transition_mach)
+    aoa_max: 12.0               # degrees
+    sm_aoa_threshold: 5.0       # degrees: SM check applies when AoA < this
+    sea_check_scenarios:        # landing must not be at sea (§9.3)
+      - nominal
+      - ballistic
+      - drogue_only
+      - premature_main
+    los_check_scenarios:        # landing must be visible from at least one station (§9.3)
+      - ballistic
+      - drogue_only
 ```
+
+### 15.2 Vehicle Config (`vehicle.yaml`)
+
+All distances are from the nosecone tip in metres. Dry mass properties are derived automatically from wet + propellant — the user never specifies dry values.
+
+```yaml
+geometry:
+  diameter: 0.130           # m — reference diameter (A_ref = π·d²/4 is derived)
+  length: 2.6               # m — total vehicle length
+  nozzle_position: 2.55     # m — nozzle exit plane from nosecone tip (for C₂R)
+  nozzle_diameter: 0.08     # m — nozzle exit diameter (for thrust altitude correction)
+  fin_cp_radius: 0.095      # m — fin CP spanwise distance from centreline (for roll)
+
+mass:
+  wet_mass: 26.5            # kg — total launch mass (vehicle + propellant)
+  wet_cg: 1.15              # m — wet vehicle CG from nosecone tip
+  wet_motor_cg: 1.82        # m — loaded motor CG from nosecone tip; used as
+                            #     fixed propellant CG (inside-out burn model)
+  propellant_inertia_roll: 0.05     # kg·m² — propellant roll inertia about roll axis
+  propellant_inertia_lateral: 0.8  # kg·m² — propellant lateral inertia about propellant CG
+  wet_inertia_lateral: 5.2         # kg·m² — wet vehicle lateral inertia about wet CG
+  wet_inertia_roll: 0.012          # kg·m² — wet vehicle roll inertia about roll axis
+
+recovery:
+  drogue:                   # omit this section for no drogue (main-only is valid)
+    cd: 2.0                 # drag coefficient
+    area: 0.15              # m² — reference area (CdA_drogue = cd × area)
+    threshold: apogee       # deploy at apogee, or numeric altitude in m AGL
+  main:                     # omit this section for no main parachute
+    cd: 2.0
+    area: 2.8               # m²
+    threshold: 305          # m AGL (or "apogee")
+```
+
+**Validation:** a drogue without a main is not a valid configuration and will raise an error at load time.
 
 
 ## 16 Outputs
@@ -792,11 +886,11 @@ The git repo root is the Python package root. All modules are imported directly
 leeds-flight-simulator/      ← git repo root = package root
 ├── __main__.py              # CLI entry point (click)
 ├── cli.py                   # Command definitions, rich output
-├── config.py                # YAML → dataclasses
+├── config.py                # YAML → dataclasses; includes load_motor / MotorData
 ├── atmosphere.py            # ISA (Numba)
-├── wind.py                  # .npz loader, surface override, interpolation
+├── wind.py                  # .npz loader, surface_wind blending, interpolation
 ├── aerodynamics.py          # Aero tables, C_Nα, forces, roll torques (Barrowman)
-├── propulsion.py            # .eng parser, mass/CG/MoI
+├── motor.py                 # Motor physics: thrust/mass/CG/MoI @njit functions
 ├── dynamics.py              # 6DoF + 3DoF derivatives (Numba), launch rail phase
 ├── integrator.py            # Adaptive RK45 (Numba)
 ├── recovery.py              # Descent scenarios, CdA switching
@@ -806,16 +900,17 @@ leeds-flight-simulator/      ← git repo root = package root
 ├── outputs.py               # CSV, YAML serialisation, plot generation
 ├── replay.py                # Single-sample replay
 ├── verification/
-│   ├── test_isa.py
-│   ├── test_frames.py
-│   ├── test_launch_rail.py
-│   ├── test_descent.py
-│   ├── test_aero_interp.py
-│   ├── test_c2_damping.py
-│   ├── test_eng_parser.py
-│   ├── test_dynamics.py
-│   ├── test_wind_loader.py
-│   └── compare_rasaero.py
+│   ├── test_config.py       # config.py — YAML loading and dataclass construction
+│   ├── test_isa.py          # ISA vs published tables
+│   ├── test_aero_interp.py  # aero table interpolation spot checks
+│   ├── test_c2_damping.py   # C₂A/C₂R hand calculations
+│   ├── test_eng_parser.py   # .eng parser and motor physics
+│   ├── test_wind_loader.py  # .npz loading, surface wind blending
+│   ├── test_frames.py       # quaternion/DCM/frame transforms
+│   ├── test_launch_rail.py  # launch rail exit velocity (analytical)
+│   ├── test_descent.py      # terminal descent (analytical)
+│   ├── test_dynamics.py     # 6DoF dynamics
+│   └── compare_rasaero.py   # full trajectory comparison vs RASAero
 └── input/
     ├── vehicle.yaml
     ├── motor.eng
