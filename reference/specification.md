@@ -28,15 +28,15 @@ The simulator covers launch rail exit to landing. It does not model ground handl
 | β | Sideslip = asin(v_rel / V) |
 | M, Re | Mach number, Reynolds number |
 | C_A, C_N | Axial and normal force coefficients |
-| C_Nα | Normal force slope ∂C_N/∂α (per rad), used for damping only |
+| C_Nα | Normal force slope ∂C_N/∂α (per rad), used for roll torques (fins only) |
 | CP | Centre of pressure from nosecone tip (m) |
 | CG | Centre of gravity from nosecone tip (m) |
+| aᵢ | Lever arm of component i = CPᵢ − CG (m; positive aft, negative forward) |
 | SM | Static margin = (CP − CG) / d (calibres) |
 | d | Reference diameter (from vehicle config) |
 | A_ref | Reference area = πd²/4 |
 | I_R | Roll moment of inertia (= I_xx) (kg·m²) |
 | I_L | Lateral moment of inertia (= I_yy = I_zz) (kg·m²) |
-| C₂, C₂A, C₂R | Damping coefficient: total, aerodynamic, propulsive (N·m·s) |
 
 The vehicle is axisymmetric: I_yy = I_zz = I_L. Aerodynamic coefficients depend only on total AoA magnitude, not roll orientation.
 
@@ -128,7 +128,7 @@ The `.npz` file must contain the following arrays:
 
 `N` must be ≥ `num_samples` in `simulation.yaml`. Sample `i` uses profile `i`. The mean wind profile (used in optimisation Phase 2, §13.3) is computed at load time as the arithmetic mean across all `N` profiles.
 
-> **Planned behaviour (not yet implemented):** `wind_profiles` in `simulation.yaml` may also point to a directory of `.npz` files. The full analysis runs independently for each file; output folders are suffixed with the wind profile filename when more than one is present.
+`wind_profiles` in `simulation.yaml` may also point to a directory of `.npz` files. The full analysis runs independently for each file; output folders are suffixed with the wind profile filename when more than one is present.
 
 ### 5.2 Surface Wind Override
 
@@ -151,7 +151,7 @@ During integration, wind at the current altitude is linearly interpolated from t
 
 ### 6.1 Data Source
 
-Aeroplot CSV files specified via `aero_tables` in `vehicle.yaml`. The value may be either a **single CSV file** (whole-vehicle mode) or a **directory of CSV files** (per-component mode). Per-component data is required for C₂ damping (§8.3.5) and roll torques (§6.5). If only a single file is provided (whether passed directly or as the sole file in a directory), assume it covers the full vehicle, disable roll and damping assessment, and warn the user.
+Aeroplot CSV files specified via `aero_tables` in `vehicle.yaml`. The value may be either a **single CSV file** (whole-vehicle mode) or a **directory of CSV files** (per-component mode). Per-component data is required for distributed aerodynamic force and moment computation (§6.4, §8.3.4) and roll torques (§6.5). If only a single file is provided (whether passed directly or as the sole file in a directory), assume it covers the full vehicle, disable per-component force/moment computation and roll, and warn the user.
 
 ### 6.2 CSV Format
 
@@ -163,24 +163,96 @@ CP_m in metres from nosecone tip. Grid may be irregular in all three dimensions.
 
 ### 6.3 Table Construction
 
-At startup:
+All CSV data resampled onto a shared regular (Mach, Re, AoA) grid at startup for Numba-compatible `np.searchsorted` interpolation. Clamped at boundaries.
 
-1. **Per-component:** C_Nα(M, Re) and CP(M, Re) for C₂ and roll. C_Nα derived by least-squares fit through origin for α ≤ 5°.
-2. **Whole-vehicle:** C_A(M, Re, α), C_N(M, Re, α), CP(M, Re, α) by summing components.
+**Per-component mode** (directory of CSVs):
 
-Irregular tables resampled onto a regular grid at startup for Numba-compatible `np.searchsorted` interpolation. Clamped at boundaries.
+1. Each component i contributes three 3-D tables on the shared grid: `C_N_i(M, Re, α)`, `CP_i(M, Re, α)`, `C_A_i(M, Re, α)`. These are stored separately (not pre-summed) and used directly in the hot loop (§6.4).
+2. Whole-vehicle axial drag: `C_A(M, Re, α) = Σᵢ C_A_i` (summed at startup; used for axial force in §6.4).
+3. Whole-vehicle CP for stability margin reporting: `CP(M, Re, α) = Σᵢ(C_N_i · CP_i) / Σᵢ C_N_i` (evaluated per step; at near-zero C_N, fall back to C_Nα-weighted linear CP). Whole-vehicle C_N = Σᵢ C_N_i is not stored; it is accumulated during the per-component hot loop.
+4. **Fin component only:** C_Nα(M, Re) fitted by least-squares slope through origin for α ≤ 5° — used exclusively for roll torques (§6.5).
 
-### 6.4 Forces
+**Single-file (whole-vehicle) mode:**
 
-Body-frame aerodynamic forces at the actual current α (no linearisation):
+Whole-vehicle `C_A(M, Re, α)`, `C_N(M, Re, α)`, `CP(M, Re, α)` stored directly. Per-component force/moment computation is unavailable; pitch/yaw damping is not modelled. A warning is issued.
+
+### 6.4 Forces and Moments (Per-component Mode)
+
+**Per-component mode** — executed for each component i in the hot loop.
+
+**Local velocity at component i's aerodynamic centre** (body frame):
+
+The aerodynamic centre of component i is located at `aᵢ = CPᵢ − CG` from the CG along the body x-axis (positive aft). When the vehicle rotates at angular rates (q, r), each component sees a local airflow different from the bulk CG velocity:
 
 ```
-F_aero_x = −½ρV²A_ref C_A(M,Re,α)
-F_aero_y =  ½ρV²A_ref C_N(M,Re,α)·(−v_rel/√(v_rel²+w_rel²))
-F_aero_z =  ½ρV²A_ref C_N(M,Re,α)·(−w_rel/√(v_rel²+w_rel²))
+u_local_i = u_rel
+v_local_i = v_rel + r · (CG − CPᵢ)    [= v_rel − r · aᵢ]
+w_local_i = w_rel − q · (CG − CPᵢ)    [= w_rel + q · aᵢ]
+
+V_lat_i   = √(v_local_i² + w_local_i²)
+α_local_i = atan2(V_lat_i, u_local_i)     [rad, ≥ 0]
 ```
 
-Normal force direction factors distribute C_N into yaw (y) and pitch (z) planes. Normal force vanishes at zero AoA.
+The rotational correction (q·aᵢ, r·aᵢ) is the velocity of the component's aero centre relative to the CG due to the vehicle's pitch/yaw rate. Aft components (aᵢ > 0) experience increased local AoA when pitching/yawing, which is the source of aerodynamic damping — no separate damping term is required.
+
+**Mach and Reynolds numbers** for table lookup are computed from bulk airspeed V (the rotational correction to speed is negligible: ω·L ≪ V).
+
+**Force from component i** (body frame):
+
+```
+C_N_i = C_N_i(M, Re, α_local_i)           [from component table]
+CP_i  = CP_i (M, Re, α_local_i)           [m from nosecone tip; used for moment arm]
+
+F_N_i = ½ρV² A_ref C_N_i                  [N, normal force magnitude]
+
+# Normal force resolved into body-y and body-z using local lateral direction:
+F_y_i = F_N_i · (−v_local_i / max(V_lat_i, ε))
+F_z_i = F_N_i · (−w_local_i / max(V_lat_i, ε))
+```
+
+ε = 1×10⁻⁶ m/s guards against division by zero at zero AoA; F_y_i = F_z_i = 0 when V_lat_i < ε.
+
+**Axial force** (whole-vehicle, evaluated at bulk α):
+
+```
+F_aero_x = −½ρV² A_ref C_A(M, Re, α)
+```
+
+**Total body-frame aerodynamic force** (sum over all N components):
+
+```
+F_aero_y = Σᵢ F_y_i
+F_aero_z = Σᵢ F_z_i
+```
+
+**Moment about CG from component i** (body-frame cross product r_i × F_i, where r_i = [CG−CPᵢ, 0, 0]):
+
+```
+aᵢ = CPᵢ(M, Re, α_local_i) − CG(t)    [lever arm, m; positive aft]
+
+τ_pitch_i =  aᵢ · F_z_i               [pitch moment, N·m]
+τ_yaw_i   = −aᵢ · F_y_i               [yaw moment, N·m]
+```
+
+**Total aerodynamic pitch and yaw moments:**
+
+```
+τ_pitch_aero = Σᵢ τ_pitch_i    (restoring + damping unified)
+τ_yaw_aero   = Σᵢ τ_yaw_i
+```
+
+**Single-file (whole-vehicle) fallback** — when per-component tables are unavailable:
+
+```
+F_aero_x = −½ρV² A_ref C_A(M,Re,α)
+F_aero_y =  ½ρV² A_ref C_N(M,Re,α)·(−v_rel / V_lat)
+F_aero_z =  ½ρV² A_ref C_N(M,Re,α)·(−w_rel / V_lat)
+
+τ_pitch_aero = ½ρV² A_ref C_N(M,Re,α)·(CP(M,Re,α)−CG(t))·(−w_rel / V_lat)
+τ_yaw_aero   = ½ρV² A_ref C_N(M,Re,α)·(CP(M,Re,α)−CG(t))·( v_rel / V_lat)
+```
+
+Bulk α = atan2(V_lat, u_rel). No pitch/yaw damping in this mode.
 
 ### 6.5 Roll (Barrowman)
 
@@ -250,7 +322,7 @@ where `f(t) = m_prop(t) / m_prop_0`.
 
 ### 7.4 Nozzle and Thrust Altitude Correction
 
-`nozzle_position` (distance from nosecone tip, metres) is the deterministic input for C₂R. `nozzle_diameter` gives the nozzle exit area Aₑ = π·dₑ²/4, used for altitude thrust correction:
+`nozzle_position` (distance from nosecone tip, metres) is the reference point for jet damping (§8.3.4). `nozzle_diameter` gives the nozzle exit area Aₑ = π·dₑ²/4, used for altitude thrust correction:
 
 ```
 F(h) = F₀(t) + Aₑ · (p₀ − p_ISA(h))
@@ -318,35 +390,31 @@ I_L dr/dt = (I_R−I_L)pq + τ_yaw
 
 #### 8.3.4 Aerodynamic Moments
 
-**Restoring (nonlinear):**
+Pitch and yaw moments are computed by the per-component hot loop defined in §6.4. Restoring and damping effects are not separated: each component's moment contribution already contains both, because the local angle of attack at each component depends on both the bulk vehicle AoA (restoring) and the vehicle's pitch/yaw rate scaled by the component's lever arm (damping).
+
+<!-- The Mandell linearisation C₂ = ½VA_ref Σᵢ(C_Nα)ᵢ(CPᵢ−CG)² is the small-perturbation limit of the aerodynamic part of this formulation. The per-component approach is valid at all AoA and pitch/yaw rates. -->
+
+**Jet damping** (during burn only):
+
+Propellant ejection at the nozzle exit exerts a reaction torque that resists pitching and yawing. This is a distinct physical mechanism from aerodynamic local AoA and must be added explicitly:
+
+<!-- Ref: Mandell, Caporaso, Bengen, "Topics in Advanced Model Rocketry" (1973), Eq. 101 -->
 
 ```
-M_restore = ½ρV²A_ref C_N(M,Re,α)·(CP(M,Re,α) − CG(t))
-τ_pitch_restore = M_restore·(−w_rel/√(v_rel²+w_rel²))
-τ_yaw_restore   = M_restore·(−v_rel/√(v_rel²+w_rel²))
+C₂R = ṁ(t) · (nozzle_position − CG(t))²    [N·m·s]
+
+τ_pitch_jet = −C₂R · q
+τ_yaw_jet   = −C₂R · r
 ```
 
-**Damping (Mandell per-component):**
-
-<!-- Ref: Mandell, Caporaso, Bengen, "Topics in Advanced Model Rocketry" (1973), Eq. 97, 99, 101 -->
-
-```
-C₂A = ½VA_ref Σᵢ(C_Nα)ᵢ·(CPᵢ − CG)²
-C₂R = ṁ(t)·(L_ne − CG)²                  (burn only)
-C₂  = C₂A + C₂R  (thrust) or C₂A (coast)
-
-τ_pitch_damp = −C₂·q
-τ_yaw_damp   = −C₂·r
-```
-
-**Roll:** §6.5.
+ṁ(t) is the propellant mass flow rate from §7.3. C₂R = 0 during coast.
 
 **Totals:**
 
 ```
-τ_roll  = τ_cant + τ_damp
-τ_pitch = τ_pitch_restore + τ_pitch_damp
-τ_yaw   = τ_yaw_restore + τ_yaw_damp
+τ_roll  = τ_cant + τ_roll_damp             (§6.5)
+τ_pitch = τ_pitch_aero + τ_pitch_jet
+τ_yaw   = τ_yaw_aero   + τ_yaw_jet
 ```
 
 #### 8.3.5 Kinematics
@@ -434,7 +502,7 @@ A drogue parachute without a main parachute is not a valid configuration (loadin
 
 Warnings are emitted once per run, before the Monte Carlo loop begins. They do not affect the compliance result.
 
-> **Planned behaviour (not yet implemented):** all warnings are blocking — the simulator pauses and prompts the user to acknowledge before continuing. `--no-warn` (§17.2) suppresses the interactive prompt; warnings still appear in the log and results summary.
+All warnings are blocking — the simulator pauses and prompts the user to acknowledge before continuing. `--no-warn` (§17.2) suppresses the interactive prompt; warnings still appear in the log and results summary.
 
 
 ## 10 Numerical Integration
@@ -664,7 +732,6 @@ The direction of the check is controlled by `coastline_mode` in `simulation.yaml
 | `"sea"` (default) | Landing point is **outside** the polygon (at sea) |
 | `"land"` | Landing point is **inside** the polygon (on land) |
 
-> **Not yet implemented.** `coastline_mode` is a planned parameter; only `"sea"` behaviour is currently available.
 
 ### 14.3 Observation Stations
 
@@ -753,7 +820,7 @@ monte_carlo:
       - drogue_only
 
 # verification:                       # optional — single-trajectory pre-run comparison (§18.1)
-#   reference_trajectory: "ref.csv"   # CSV from any flight simulator (not yet implemented)
+#   reference_trajectory: "ref.csv"   # CSV from any flight simulator
 #   altitude_tol_m: 50
 #   mach_tol: 0.05
 #   sm_tol_cal: 0.3
@@ -774,7 +841,7 @@ aero_tables: "aero_tables"  # path to aeroplot CSV file or directory of CSV file
 geometry:
   diameter: 0.130           # m — reference diameter (A_ref = π·d²/4 is derived)
   length: 2.6               # m — total vehicle length
-  nozzle_position: 2.55     # m — nozzle exit plane from nosecone tip (for C₂R)
+  nozzle_position: 2.55     # m — nozzle exit plane from nosecone tip (for jet damping)
   nozzle_diameter: 0.08     # m — nozzle exit diameter (for thrust altitude correction)
   fin_cp_radius: 0.095      # m — fin CP spanwise distance from centreline (for roll)
 
@@ -825,7 +892,7 @@ No full trajectories saved by default. Replay any sample by (master_seed, run_in
 
 ### 16.5 Saved Plots
 
-`dispersion_plot.png` and `altitude_plot.png`. Visual style from existing plotting scripts (to be provided to implementer). All outputs saved to `./results/<timestamp>/`.
+`dispersion_plot.png` and `altitude_plot.png`. Visual style from existing plotting scripts in `reference/`. All outputs saved to `./results/<timestamp>/`.
 
 
 ## 17 Command-Line Interface
@@ -848,7 +915,7 @@ python . replay results/<timestamp>/summary.yaml --non-compliant
 
 `run` is the primary command. First argument is always the simulation configuration file. If `azimuth` or `inclination` is `"auto"`, optimisation runs first, with phase progress displayed, before the main MC analysis.
 
-`--no-warn` suppresses the interactive blocking prompt for warnings; warnings still appear in the log and results summary. *(Not yet implemented — see §9.3.)*
+`--no-warn` suppresses the interactive blocking prompt for warnings; warnings still appear in the log and results summary.
 
 `replay` is the simulation replay command. First argument is always the simulation results summary file. The data comes from the same directory as this file. Replay is implemented as a function inside `montecarlo.py` and called directly by the CLI.
 
@@ -882,8 +949,6 @@ PASS rendered in green, FAIL in red.
 
 ### 18.1 Trajectory Comparison Tool
 
-> **Not yet implemented.**
-
 Before the main MC run, an optional single-trajectory comparison against any external flight simulator output. Configured via a `verification:` block in `simulation.yaml` (§15.1). The reference CSV may come from any tool; columns are matched case-insensitively. Quantities compared: altitude, Mach, stability margin, mass, lateral inertia vs time. Tolerance bands are configurable per-quantity.
 
 Reference data plotted in grey with the configured tolerance band; simulator output overlaid in green (all within tolerance) or red (any out of tolerance). Pass/fail printed to console and recorded in `summary.yaml`. On failure, the figure opens and the user is prompted whether to continue.
@@ -900,7 +965,7 @@ Default tolerances (configurable in `simulation.yaml`):
 
 ### 18.2 Unit Tests
 
-ISA vs published tables. Quaternion/DCM/frame transforms. Launch rail exit velocity (analytical). Terminal velocity (analytical). Aero interpolation spot checks. C₂A/C₂R hand calculations. .eng parser. AoA computation. Wind `.npz` loader (shape validation, interpolation).
+ISA vs published tables. Quaternion/DCM/frame transforms. Launch rail exit velocity (analytical). Terminal velocity (analytical). Aero interpolation spot checks. Per-component local AoA damping: verify that a pure pitch-rate perturbation (q ≠ 0, v_rel = w_rel = 0) produces τ_pitch matching the Mandell linearisation −½VA_ref Σᵢ(C_Nα)ᵢaᵢ²·q to within 1% for small q. .eng parser. AoA computation. Wind `.npz` loader (shape validation, interpolation).
 
 ### 18.3 Integrator Convergence
 
@@ -912,7 +977,7 @@ ISA vs published tables. Quaternion/DCM/frame transforms. Launch rail exit veloc
 
 ### 18.5 Dynamics
 
-Small-perturbation damping rate matches exp(−C₂t/(2I_L)). Oscillation frequency ≈ √(½V²A_ref C_Nα(CP−CG)/I_L). Roll → coning. Large-AoA restoring uses nonlinear tables.
+Small-perturbation pitch oscillation: frequency ≈ √(½ρV²A_ref(CP−CG)/I_L · C_Nα_total), damping rate ≈ ½ρVA_ref Σᵢ(C_Nα)ᵢaᵢ² / (2I_L). Both verified against analytical values from linearised component data. Roll → coning angle proportional to cant. Large-AoA restoring uses nonlinear per-component tables.
 
 
 ## 19 Performance
@@ -939,7 +1004,7 @@ leeds-flight-simulator/      ← git repo root = package root
 ├── config.py                # YAML → dataclasses; load_motor / MotorData; active_scenarios
 ├── atmosphere.py            # ISA (Numba)
 ├── wind.py                  # .npz loader, surface_wind blending, interpolation
-├── aerodynamics.py          # Aero tables, C_Nα, forces, roll torques (Barrowman)
+├── aerodynamics.py          # Aero tables, per-component local-AoA forces/moments, roll torques (Barrowman)
 ├── motor.py                 # Motor physics: thrust/mass/CG/MoI @njit functions
 ├── dynamics.py              # 6DoF + 3DoF derivatives (Numba), launch rail phase, descent CdA
 ├── integrator.py            # State integrator to actualy perform the simulations
@@ -951,7 +1016,7 @@ leeds-flight-simulator/      ← git repo root = package root
 │   ├── test_config.py       # config.py — YAML loading and dataclass construction
 │   ├── test_isa.py          # ISA vs published tables
 │   ├── test_aero_interp.py  # aero table interpolation spot checks
-│   ├── test_c2_damping.py   # C₂A/C₂R hand calculations
+│   ├── test_local_aoa_damping.py  # per-component local AoA: damping matches Mandell linearisation
 │   ├── test_eng_parser.py   # .eng parser and motor physics
 │   ├── test_wind_loader.py  # .npz loading, surface wind blending
 │   ├── test_frames.py       # quaternion/DCM/frame transforms
