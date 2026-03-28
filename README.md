@@ -64,6 +64,7 @@ ALL ACCEPTANCE CRITERIA MET
 
 Results saved to: ./results/20260620_093000/
 ```
+<!-- TODO: Update example output when working -->
 
 If `azimuth` or `inclination` is set to `"auto"` in `simulation.yaml`, the optimisation routine runs first, then the main Monte Carlo analysis proceeds using the optimised values.
 
@@ -89,11 +90,11 @@ Which scenarios are active depends on the vehicle's recovery configuration:
 
 | Recovery config | `nominal` | `ballistic` | `drogue_only` | `premature_main` |
 |----------------|-----------|-------------|---------------|-----------------|
-| Both drogue and main, `main.threshold` numeric | ✓ | ✓ | ✓ | ✓ |
-| Both drogue and main, `main.threshold` = `"apogee"` | ✓ | ✓ | ✓ | — |
-| Main only, `main.threshold` numeric | ✓ | ✓ | — | ✓ |
-| Main only, `main.threshold` = `"apogee"` | ✓ | ✓ | — | — |
-| No parachutes | ✓ | — | — | — |
+| Both drogue and main, `main.threshold` numeric | ✅ | ✅ | ✅ | ✅ |
+| Both drogue and main, `main.threshold` = `"apogee"` | ✅ | ✅ | ✅ | — |
+| Main only, `main.threshold` numeric | ✅ | ✅ | — | ✅ |
+| Main only, `main.threshold` = `"apogee"` | ✅ | ✅ | — | — |
+| No parachutes | ✅ | — | — | — |
 
 `premature_main` is suppressed when `main.threshold = "apogee"` because apogee deployment is the earliest possible deployment — no earlier failure mode exists.
 
@@ -205,16 +206,7 @@ When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`
 
 ## Multi-Day Wind
 
-`wind_profiles` in `simulation.yaml` can point to either a single `.npz` file or a directory of `.npz` files:
-
-```yaml
-launch:
-  wind_profiles: "wind_profiles/"   # directory — one run per file inside
-  # wind_profiles: "wind.npz"       # single file — current behaviour
-```
-
-When a directory is given, the simulator runs the full analysis independently for each `.npz` file found inside it. Output folders are suffixed with the wind profile filename to keep results from each day separate, e.g. `results/20260620_093000_day1/`, `results/20260620_093000_day2/`. This allows a multi-day wind campaign to be assessed in a single invocation.
-
+`wind_profiles` in `simulation.yaml` can point to either a single `.npz` file or a directory of `.npz` files. When a directory is given, the simulator runs the full analysis independently for each `.npz` file found inside it. Output folders are suffixed with the wind profile filename to keep results from each day separate, e.g. `results/20260620_093000_day1/`, `results/20260620_093000_day2/`. This allows a multi-day wind campaign to be assessed in a single invocation.
 
 ## Replaying Samples
 
@@ -289,33 +281,13 @@ Checks ISA against published tables, quaternion maths, launch rail exit velocity
 
 **Trajectory verification tool:**
 
-Before the main MC run, you can supply a reference CSV from any other flight simulator for a single-trajectory comparison. Add the path under `verification` in `simulation.yaml`:
-
-```yaml
-verification:
-  reference_trajectory: "rasaero_output.csv"  # optional — omit to skip
-  # Tolerance bands (all configurable):
-  altitude_tol_m: 50
-  mach_tol: 0.05
-  sm_tol_cal: 0.3
-  mass_tol_kg: 0.1
-  inertia_tol_pct: 5.0
-```
+Before the main MC run, you can supply a reference CSV from any other flight simulator for a single-trajectory comparison. Add the path under `verification` in `simulation.yaml`.
 
 The reference CSV must contain columns for time and at least one of: altitude, Mach, stability margin, mass, lateral inertia. Column names are matched case-insensitively; any column not present is skipped.
 
 The tool plots each quantity with the reference in grey and the simulator output overlaid. If all quantities are within the configured tolerance bands, the output is rendered in green and the run continues automatically. If any quantity falls outside tolerance, the output is rendered in red, the figure is opened for inspection, and you are asked whether to proceed.
 
 Pass/fail is also printed to the console and recorded in `summary.yaml`.
-
-## Troubleshooting
-
-**Simulation takes much longer than expected** -- Check that Numba is installed and working. The first run includes JIT compilation overhead (~30 s). If every run is slow, Numba may be falling back to interpreted mode; check for warnings.
-
-**All samples are non-compliant** -- Check that your launch rail azimuth points the trajectory into the danger area. Check that the danger area GeoJSON coordinates are `[longitude, latitude]`, not reversed. Check the vehicle's static stability margin.
-
-**Dispersion plot looks wrong or empty** -- Ensure the danger area and coastline GeoJSON files cover the area where the rocket actually lands. GeoJSON uses `[lon, lat]` coordinate order.
-
 
 ## Operational Workflow
 
@@ -341,7 +313,7 @@ For questions, bug reports, or contributions:
 
 
 ## References
-
+<!-- TODO: Check we've got all the references we want -->
 - Mandell, G. K., Caporaso, G., and Bengen, W. P. (1973). *Topics in Advanced Model Rocketry*. MIT Press.
 - Barrowman, J. S. (1967). *The Practical Calculation of the Aerodynamic Characteristics of Slender Finned Vehicles*. MSc thesis, The Catholic University of America.
 - Niskanen, S. (2009). *Development of an Open Source model rocket simulation software*. MSc thesis, Helsinki University of Technology.
