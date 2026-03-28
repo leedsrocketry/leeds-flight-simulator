@@ -114,12 +114,12 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
 
     # --- dry roll inertia
     # Roll axis is the symmetry axis, so propellant contribution needs no PAT.
-    I_roll_dry = mass.wet_inertia_roll - mass.propellant_I_roll
+    I_roll_dry = mass.wet_inertia_roll - mass.propellant_inertia_roll
 
     # --- dry lateral inertia
     # Step 1: transfer propellant inertia from propellant CG → wet vehicle CG
     d_prop_wet = mass.wet_motor_cg - mass.wet_cg
-    I_prop_lat_at_wet_cg = mass.propellant_I_lateral + m_prop_0 * d_prop_wet ** 2
+    I_prop_lat_at_wet_cg = mass.propellant_inertia_lateral + m_prop_0 * d_prop_wet ** 2
     # Step 2: dry lateral inertia about wet vehicle CG
     I_lat_dry_at_wet_cg = mass.wet_inertia_lateral - I_prop_lat_at_wet_cg
     # Step 3: transfer to dry vehicle CG
@@ -138,8 +138,8 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
         motor_cg_loaded=mass.wet_motor_cg,
         I_roll_dry=I_roll_dry,
         I_lateral_dry=I_lateral_dry,
-        prop_I_roll=mass.propellant_I_roll,
-        prop_I_lateral=mass.propellant_I_lateral,
+        prop_I_roll=mass.propellant_inertia_roll,
+        prop_I_lateral=mass.propellant_inertia_lateral,
     )
 
 

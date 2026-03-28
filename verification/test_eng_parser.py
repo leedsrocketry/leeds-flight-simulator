@@ -124,7 +124,7 @@ _VEHICLE_YAML = (
     "geometry:\n  diameter: 0.1\n  length: 2.0\n"
     "  nozzle_position: 1.95\n  nozzle_diameter: 0.05\n  fin_cp_radius: 0.09\n"
     "mass:\n  wet_mass: 20.0\n  wet_cg: 0.90\n  wet_motor_cg: 1.40\n"
-    "  propellant_I_roll: 0.001\n  propellant_I_lateral: 0.20\n"
+    "  propellant_inertia_roll: 0.001\n  propellant_inertia_lateral: 0.20\n"
     "  wet_inertia_lateral: 4.0\n  wet_inertia_roll: 0.010\n"
     "recovery:\n  drogue_cd: 1.5\n  drogue_area: 0.05\n  drogue_threshold: apogee\n"
     "  main_cd: 2.2\n  main_area: 2.5\n  main_threshold: 305\n"

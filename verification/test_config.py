@@ -82,8 +82,8 @@ _VEHICLE_YAML = """
       wet_mass: 26.5
       wet_cg: 1.15
       wet_motor_cg: 1.82
-      propellant_I_roll: 0.05
-      propellant_I_lateral: 0.8
+      propellant_inertia_roll: 0.05
+      propellant_inertia_lateral: 0.8
       wet_inertia_lateral: 5.2
       wet_inertia_roll: 0.012
     recovery:
@@ -257,8 +257,8 @@ def test_vehicle_inertia(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.mass.wet_inertia_roll == pytest.approx(0.012)
     assert v.mass.wet_inertia_lateral == pytest.approx(5.2)
-    assert v.mass.propellant_I_roll == pytest.approx(0.05)
-    assert v.mass.propellant_I_lateral == pytest.approx(0.8)
+    assert v.mass.propellant_inertia_roll == pytest.approx(0.05)
+    assert v.mass.propellant_inertia_lateral == pytest.approx(0.8)
 
 
 def test_vehicle_recovery(tmp_path):

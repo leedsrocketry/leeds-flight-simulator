@@ -148,8 +148,8 @@ class VehicleMass:
     wet_cg: float                # m from nosecone tip — wet vehicle CG
     wet_motor_cg: float          # m from nosecone tip — loaded motor CG
                                  # used as propellant CG (inside-out burn model)
-    propellant_I_roll: float     # kg·m² — propellant roll inertia about roll axis
-    propellant_I_lateral: float  # kg·m² — propellant lateral inertia about propellant CG
+    propellant_inertia_roll: float     # kg·m² — propellant roll inertia about roll axis
+    propellant_inertia_lateral: float  # kg·m² — propellant lateral inertia about propellant CG
     wet_inertia_lateral: float   # kg·m² — wet vehicle lateral inertia about wet CG
     wet_inertia_roll: float      # kg·m² — wet vehicle roll inertia about roll axis
 
@@ -327,8 +327,8 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
             wet_mass=float(mass["wet_mass"]),
             wet_cg=float(mass["wet_cg"]),
             wet_motor_cg=float(mass["wet_motor_cg"]),
-            propellant_I_roll=float(mass["propellant_I_roll"]),
-            propellant_I_lateral=float(mass["propellant_I_lateral"]),
+            propellant_inertia_roll=float(mass["propellant_inertia_roll"]),
+            propellant_inertia_lateral=float(mass["propellant_inertia_lateral"]),
             wet_inertia_lateral=float(mass["wet_inertia_lateral"]),
             wet_inertia_roll=float(mass["wet_inertia_roll"]),
         ),

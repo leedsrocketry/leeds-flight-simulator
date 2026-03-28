@@ -4,22 +4,15 @@ geometry:
   nozzle_position: 2.55  # nozzle exit plane from nosecone tip (m)
   nozzle_diameter: 0.08  # nozzle exit diameter (m) — used for thrust/altitude correction
   fin_cp_radius: 0.095   # fin CP spanwise distance from centreline (m)
-  # reference_area is derived: π·d²/4
 
 mass:
   wet_mass: 26.5          # total mass at launch — airframe + loaded motor (kg)
   wet_cg: 1.15            # wet vehicle CG from nosecone tip (m)
   wet_motor_cg: 1.82      # loaded motor CG from nosecone tip (m)
-                          # assumed equal to propellant CG (inside-out burn model)
-                          # Used in dynamics.py:
-                          #   CG(t) = (m_dry·cg_dry + m_prop(t)·wet_motor_cg)
-                          #           / (m_dry + m_prop(t))
-  propellant_I_roll:    1.4   # propellant roll inertia about roll axis (kg·m²)
-  propellant_I_lateral: 1.3   # propellant lateral inertia about propellant CG (kg·m²)
+  propellant_inertia_roll:    1.4   # propellant roll inertia about roll axis (kg·m²)
+  propellant_inertia_lateral: 1.3   # propellant lateral inertia about propellant CG (kg·m²)
   wet_inertia_lateral:  5.2   # wet vehicle lateral inertia about wet CG (kg·m²)
   wet_inertia_roll:     0.012 # wet vehicle roll inertia about roll axis (kg·m²)
-  # Dry mass, dry CG, and dry inertias are derived from the above
-  # and the propellant mass in the .eng file.
 
 recovery:
   drogue_cd: 2.0
