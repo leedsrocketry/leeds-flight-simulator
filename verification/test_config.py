@@ -4,6 +4,7 @@ import math
 import textwrap
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from config import (
@@ -20,6 +21,11 @@ from config import (
 def _write(tmp_path: Path, name: str, content: str) -> Path:
     p = tmp_path / name
     p.write_text(textwrap.dedent(content), encoding="utf-8")
+    # Create a stub wind_profiles.npz so wind_profiles path validation passes
+    stub = tmp_path / "wind_profiles.npz"
+    if not stub.exists():
+        np.savez(stub, altitude_m=np.array([0.0]), wind_east_ms=np.zeros((1, 1)),
+                 wind_north_ms=np.zeros((1, 1)))
     return p
 
 

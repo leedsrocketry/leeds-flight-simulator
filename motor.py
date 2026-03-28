@@ -45,6 +45,7 @@ from dataclasses import dataclass
 import numpy as np
 import numba as nb
 
+from atmosphere import pressure as _atm_pressure
 from config import MotorData, VehicleConfig
 
 
@@ -166,30 +167,6 @@ def _interp(times: np.ndarray, values: np.ndarray, t: float) -> float:
     return values[lo] + alpha * (values[hi] - values[lo])
 
 
-@nb.njit(cache=True)
-def _isa_pressure(altitude_m: float) -> float:
-    """ISA ambient static pressure [Pa] at geometric altitude [m].
-
-    Troposphere (0–11 km) and lower stratosphere (11–20 km).
-    Returns sea-level pressure for altitudes ≤ 0.
-    """
-    T0 = 288.15    # K   sea-level temperature
-    p0 = 101325.0  # Pa  sea-level pressure
-    L  = 0.0065    # K/m tropospheric lapse rate
-    R  = 287.058   # J/(kg·K)
-    g  = 9.80665   # m/s²
-
-    if altitude_m <= 0.0:
-        return p0
-    if altitude_m < 11000.0:
-        T = T0 - L * altitude_m
-        return p0 * (T / T0) ** (g / (L * R))
-    # Lower stratosphere — isothermal at T₁₁ = 216.65 K
-    T_11 = T0 - L * 11000.0
-    p_11 = p0 * (T_11 / T0) ** (g / (L * R))
-    return p_11 * math.exp(-g * (altitude_m - 11000.0) / (R * T_11))
-
-
 # ---------------------------------------------------------------------------
 # Numba hot-loop functions — public API
 # ---------------------------------------------------------------------------
@@ -216,7 +193,7 @@ def thrust_corrected_at(
         F(h) = F₀ + Aₑ · (p₀ − p_ISA(h))
     """
     F0 = _interp(times, thrusts, t)
-    delta_p = 101325.0 - _isa_pressure(altitude_m)
+    delta_p = 101325.0 - _atm_pressure(altitude_m)
     return F0 + nozzle_area * delta_p
 
 

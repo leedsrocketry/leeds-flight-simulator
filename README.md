@@ -134,7 +134,7 @@ Standard RASP/RockSim `.eng` file. Downloadable from [thrustcurve.org](https://w
 
 The `aero_tables` field in `vehicle.yaml` can point to either a **single CSV file** or a **directory of CSV files**:
 
-- **Single file** — treated as full-vehicle data; roll torques and pitch/yaw damping are not computed (3-DoF mode). A warning is issued.
+- **Single file** — treated as full-vehicle data; roll torques and pitch/yaw damping are not computed. A warning is issued.
 - **Directory** — one CSV per aerodynamic component (nosecone, body tube, fin set, boattail, etc.), enabling full 6-DoF simulation with per-component damping and roll torques.
 
 Each CSV must contain:
@@ -187,7 +187,7 @@ A run passes if >= `compliance_threshold` fraction of samples are compliant. All
 
 When `azimuth` and/or `inclination` are set to `"auto"`, a four-phase optimisation routine runs before the main Monte Carlo analysis:
 
-1. **Phase 1 -- Inclination selection.** Runs deterministic 3-DoF simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (to maximise apogee) whose ballistic landing point is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
+1. **Phase 1 -- Inclination selection.** Runs deterministic 3-DoF (translation only) simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (to maximise apogee) whose ballistic landing point is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
 
 2. **Phase 2 -- Azimuth narrowing.** Analytically filters integer azimuths in `azimuth_range` by estimating wind drift from the mean wind profile, discarding any azimuth whose estimated premature-main landing centroid falls outside the buffered danger area.
 
@@ -264,8 +264,7 @@ At the start of execution, the simulator runs a small run of samples at very tig
 Warnings are raised when the simulator detects a configuration that is unusual but not an error (e.g. a single aero table is provided, falling back to 3-DoF mode). By default, warnings are **blocking**: the simulator pauses and prompts you to acknowledge each one before continuing.
 
 ```
-WARNING: Only one aeroplot CSV found. Running in 3-DoF mode — roll torques and
-pitch/yaw damping will not be computed.
+WARNING: Only one aeroplot CSV found. Roll torques and pitch/yaw damping will not be computed.
 Press Enter to continue, or Ctrl-C to abort.
 ```
 

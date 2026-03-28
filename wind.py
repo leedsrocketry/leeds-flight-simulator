@@ -2,6 +2,7 @@
 
 Public API
 ----------
+list_wind_profile_files(path)                          →  list[Path]
 load_wind_ensemble(path, num_samples, surface_wind)    →  WindEnsemble
 interpolate_wind(altitude_m, wind_east, wind_north, h) →  (v_north, v_east)
 
@@ -52,6 +53,41 @@ class WindEnsemble:
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
+
+def list_wind_profile_files(path: Path | str) -> list[Path]:
+    """Return a sorted list of .npz wind profile files to process.
+
+    Parameters
+    ----------
+    path:
+        Either a path to a single ``.npz`` file, or a directory containing
+        one or more ``.npz`` files.
+
+    Returns
+    -------
+    list[Path]
+        Single-element list when *path* is a file.
+        Sorted list of all ``.npz`` files in the directory otherwise.
+
+    Raises
+    ------
+    FileNotFoundError
+        If *path* does not exist, or is a directory containing no ``.npz`` files.
+    ValueError
+        If *path* is a file but does not have a ``.npz`` extension.
+    """
+    p = Path(path)
+    if p.is_file():
+        if p.suffix.lower() != ".npz":
+            raise ValueError(f"Expected a .npz file, got: {p}")
+        return [p]
+    if p.is_dir():
+        files = sorted(p.glob("*.npz"))
+        if not files:
+            raise FileNotFoundError(f"No .npz files found in directory: {p}")
+        return files
+    raise FileNotFoundError(f"Wind profiles path not found: {p}")
+
 
 def load_wind_ensemble(
     path: Path | str,

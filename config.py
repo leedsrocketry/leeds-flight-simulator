@@ -315,6 +315,15 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             "launch.rail.inclination_range is required when inclination is 'auto'"
         )
 
+    _wp = _resolve(launch_raw["wind_profiles"])
+    if not _wp.exists():
+        raise ValueError(f"wind_profiles path does not exist: {_wp}")
+    if _wp.is_file() and _wp.suffix.lower() != ".npz":
+        raise ValueError(
+            f"wind_profiles must be a .npz file or a directory of .npz files, "
+            f"got: {_wp}"
+        )
+
     launch = LaunchConfig(
         rail=RailConfig(
             azimuth=rail_azimuth,
@@ -323,7 +332,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             inclination_range=inclination_range,
             length=float(rail_raw["length"]),
         ),
-        wind_profiles=_resolve(launch_raw["wind_profiles"]),
+        wind_profiles=_wp,
         surface_wind=surface_wind,
     )
 

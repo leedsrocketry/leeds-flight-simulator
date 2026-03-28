@@ -1,8 +1,8 @@
 """Aerodynamic model: table lookup for force/moment coefficients.
 
-Loads per-component RASAero II Aeroplot CSVs, fits C_Nα, assembles
-whole-vehicle coefficient tables on a regular grid, and exposes
-Numba @njit hot-loop lookup functions.
+Loads per-component RASAero II Aeroplot CSVs, assembles per-component and
+whole-vehicle tables on a regular grid, and exposes Numba @njit hot-loop
+functions.
 
 CSV format (one header row, then data)::
 
@@ -11,9 +11,11 @@ CSV format (one header row, then data)::
 ``CP_m`` is in metres from the nosecone tip.  Reynolds is the full
 Reynolds number (not ×10⁶).
 
-Multiple files → per-component mode (used for roll and pitch/yaw damping).
-One file → whole-vehicle mode; roll and damping tables are zeroed and a
-warning is issued.
+Multiple files → per-component mode.  Forces and moments are computed
+using local angles of attack at each component's aerodynamic centre,
+which naturally captures both restoring and damping effects.
+One file → whole-vehicle mode; per-component computation and roll are
+disabled and a warning is issued.
 
 File naming: the fin component must have ``fin`` (case-insensitive) anywhere
 in the filename stem.
@@ -29,8 +31,12 @@ build_aero_model(aero_dir)  →  AeroModel
     cn_cp_at(mach_g, re_g, alpha_g, cn_tbl, cp_tbl, M, Re, alpha_rad)
         → (CN [−], CP [m from nosecone])
 
-    damping_sum_at(mach_g, re_g, cna_s, cna_cp_s, cna_cp2_s, M, Re, cg)
-        → float  [Σᵢ C_Nα_i · (CP_i − CG)², m²/rad]
+    aero_forces_moments(
+        mach_g, re_g, alpha_g,
+        ca_tbl, cn_tbl, cp_tbl, cn_comp, cp_comp, has_components,
+        M, Re, rho, V, A_ref,
+        u_rel, v_rel, w_rel, q_rate, r_rate, cg,
+    ) → (F_x, F_y, F_z, tau_pitch, tau_yaw, cp_whole)
 
     cn_alpha_fins_at(mach_g, re_g, cna_fins, M, Re)
         → float  [C_Nα of fin component, 1/rad]
@@ -43,6 +49,8 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+
+import math
 
 import numpy as np
 import numba as nb
@@ -64,16 +72,14 @@ class AeroModel:
     alpha_grid: np.ndarray    # (NA,)  AoA in degrees
 
     # Whole-vehicle 3-D tables [NM, NR, NA]
-    ca_table: np.ndarray      # axial force coefficient C_A
-    cn_table: np.ndarray      # normal force coefficient C_N
-    cp_table: np.ndarray      # centre of pressure from nosecone tip [m]
+    ca_table: np.ndarray      # axial force coefficient C_A (always the sum)
+    cn_table: np.ndarray      # C_N — used in single-file fallback; zeros in per-component mode
+    cp_table: np.ndarray      # C_P — used in single-file fallback; zeros in per-component mode
 
-    # Per-component 2-D damping sums [NM, NR]
-    # Damping sum = Σᵢ C_Nα_i · (CP_i − CG)²
-    # Decomposed as  C − 2·CG·B + CG²·A  to avoid recomputing at each CG:
-    cna_sum: np.ndarray       # A = Σᵢ C_Nα_i           [1/rad]
-    cna_cp_sum: np.ndarray    # B = Σᵢ C_Nα_i · CP_i     [m/rad]
-    cna_cp2_sum: np.ndarray   # C = Σᵢ C_Nα_i · CP_i²    [m²/rad]
+    # Per-component 4-D tables [N_comp, NM, NR, NA]
+    # N_comp = 0 dummy shape in single-file mode (has_components=False)
+    cn_comp: np.ndarray       # per-component normal force coefficient
+    cp_comp: np.ndarray       # per-component centre of pressure [m from nosecone]
 
     # Fin-only 2-D C_Nα [NM, NR] — for roll torques (Barrowman)
     cn_alpha_fins: np.ndarray  # [1/rad]
@@ -329,13 +335,15 @@ def _build_single(path: Path) -> AeroModel:
     src = _read_csv(path)
     mach_g, re_g, alpha_g = _unique_axes(src)
     ca, cn, cp = _resample_3d(src, mach_g, re_g, alpha_g)
-    NM, NR = len(mach_g), len(re_g)
-    zeros = np.zeros((NM, NR), dtype=np.float64)
+    NM, NR, NA = len(mach_g), len(re_g), len(alpha_g)
+    zeros_2d = np.zeros((NM, NR), dtype=np.float64)
+    # Dummy per-component arrays — shape (1, NM, NR, NA), never used when has_components=False
+    dummy = np.zeros((1, NM, NR, NA), dtype=np.float64)
     return AeroModel(
         mach_grid=mach_g, re_grid=re_g, alpha_grid=alpha_g,
         ca_table=ca, cn_table=cn, cp_table=cp,
-        cna_sum=zeros, cna_cp_sum=zeros, cna_cp2_sum=zeros,
-        cn_alpha_fins=zeros,
+        cn_comp=dummy, cp_comp=dummy,
+        cn_alpha_fins=zeros_2d,
         has_components=False,
     )
 
@@ -361,44 +369,35 @@ def _build_components(
 
     NM, NR, NA = len(mach_g), len(re_g), len(alpha_g)
     ca_tot = np.zeros((NM, NR, NA), dtype=np.float64)
-    cn_tot = np.zeros((NM, NR, NA), dtype=np.float64)
-    cp_num = np.zeros((NM, NR, NA), dtype=np.float64)  # Σ CN_i · CP_i
+    cna_fins = np.zeros((NM, NR), dtype=np.float64)
 
-    cna_sum   = np.zeros((NM, NR), dtype=np.float64)
-    cna_cp_s  = np.zeros((NM, NR), dtype=np.float64)
-    cna_cp2_s = np.zeros((NM, NR), dtype=np.float64)
-    cna_fins  = np.zeros((NM, NR), dtype=np.float64)
+    cn_comp_list: list[np.ndarray] = []
+    cp_comp_list: list[np.ndarray] = []
 
     for path, src in datasets.items():
         ca_i, cn_i, cp_i = _resample_3d(src, mach_g, re_g, alpha_g)
         ca_tot += ca_i
-        cn_tot += cn_i
-        cp_num += cn_i * cp_i
-
-        cna_i, cp_lin_i = _fit_cna_cp(cn_i, cp_i, alpha_g)
-        cna_sum   += cna_i
-        cna_cp_s  += cna_i * cp_lin_i
-        cna_cp2_s += cna_i * cp_lin_i ** 2
+        cn_comp_list.append(np.ascontiguousarray(cn_i, dtype=np.float64))
+        cp_comp_list.append(np.ascontiguousarray(cp_i, dtype=np.float64))
 
         if path in fins_paths:
+            cna_i, _ = _fit_cna_cp(cn_i, cp_i, alpha_g)
             cna_fins += cna_i
 
-    # Whole-vehicle CP: moment balance Σ(CN_i · CP_i) / Σ(CN_i)
-    # At near-zero CN (α ≈ 0), fall back to C_Nα-weighted linear CP
-    cna_sum_safe = np.where(cna_sum > 1e-30, cna_sum, 1.0)
-    cp_lin_whole = (cna_cp_s / cna_sum_safe)[:, :, np.newaxis]  # broadcast to 3D
+    # Stack per-component tables: shape (N_comp, NM, NR, NA)
+    cn_comp = np.ascontiguousarray(np.stack(cn_comp_list, axis=0), dtype=np.float64)
+    cp_comp = np.ascontiguousarray(np.stack(cp_comp_list, axis=0), dtype=np.float64)
 
-    cn_safe = np.where(cn_tot > 1e-9, cn_tot, np.nan)
-    cp_tot = np.where(cn_tot > 1e-9, cp_num / cn_safe, cp_lin_whole)
+    # Whole-vehicle CN and CP tables are not stored in per-component mode (§6.3).
+    zeros_3d = np.zeros((NM, NR, NA), dtype=np.float64)
 
     return AeroModel(
         mach_grid=mach_g, re_grid=re_g, alpha_grid=alpha_g,
         ca_table=np.ascontiguousarray(ca_tot, dtype=np.float64),
-        cn_table=np.ascontiguousarray(cn_tot, dtype=np.float64),
-        cp_table=np.ascontiguousarray(cp_tot, dtype=np.float64),
-        cna_sum=np.ascontiguousarray(cna_sum,   dtype=np.float64),
-        cna_cp_sum=np.ascontiguousarray(cna_cp_s,  dtype=np.float64),
-        cna_cp2_sum=np.ascontiguousarray(cna_cp2_s, dtype=np.float64),
+        cn_table=zeros_3d,
+        cp_table=zeros_3d,
+        cn_comp=cn_comp,
+        cp_comp=cp_comp,
         cn_alpha_fins=np.ascontiguousarray(cna_fins, dtype=np.float64),
         has_components=True,
     )
@@ -562,25 +561,163 @@ def cn_cp_at(
 
 
 @nb.njit(cache=True)
-def damping_sum_at(
+def aero_forces_moments(
     mach_g: np.ndarray,
     re_g: np.ndarray,
-    cna_s: np.ndarray,
-    cna_cp_s: np.ndarray,
-    cna_cp2_s: np.ndarray,
+    alpha_g: np.ndarray,
+    ca_tbl: np.ndarray,
+    cn_tbl: np.ndarray,
+    cp_tbl: np.ndarray,
+    cn_comp: np.ndarray,
+    cp_comp: np.ndarray,
+    has_components: bool,
     M: float,
     Re: float,
+    rho: float,
+    V: float,
+    A_ref: float,
+    u_rel: float,
+    v_rel: float,
+    w_rel: float,
+    q_rate: float,
+    r_rate: float,
     cg: float,
-) -> float:
-    """Pitch/yaw damping sum Σᵢ C_Nα_i · (CP_i − CG)² [m²/rad] at (M, Re, CG).
+) -> tuple[float, float, float, float, float, float]:
+    """Body-frame aerodynamic forces [N] and pitch/yaw moments [N·m].
 
-    Multiply by ½ V A_ref to obtain C₂A.
+    Implements §6.4 of the specification.  In per-component mode each
+    component's aerodynamic centre sees a local airflow that includes the
+    rotational velocity of that point on the body, capturing both restoring
+    and pitch/yaw damping in one pass.
+
+    Parameters
+    ----------
+    ca_tbl, cn_tbl, cp_tbl:
+        Whole-vehicle 3-D tables [NM, NR, NA].  ``cn_tbl`` and ``cp_tbl``
+        are used only in single-file (fallback) mode.
+    cn_comp, cp_comp:
+        Per-component 4-D tables [N_comp, NM, NR, NA].
+    has_components:
+        True  → per-component loop (§6.4 distributed).
+        False → whole-vehicle fallback (no damping).
+    u_rel, v_rel, w_rel:
+        Body-frame velocity of vehicle relative to wind [m/s].
+    q_rate, r_rate:
+        Body-frame pitch and yaw angular rates [rad/s].
+    cg:
+        Centre of gravity from nosecone tip [m].
+
+    Returns
+    -------
+    (F_x, F_y, F_z, tau_pitch, tau_yaw, cp_whole)
+        Forces in N, moments in N·m.
+        ``cp_whole`` is the moment-balanced whole-vehicle CP [m from nosecone
+        tip] — equals ``cg`` when total C_N ≈ 0.
     """
-    A = _interp2(mach_g, re_g, cna_s,    M, Re)
-    B = _interp2(mach_g, re_g, cna_cp_s, M, Re)
-    C = _interp2(mach_g, re_g, cna_cp2_s, M, Re)
-    val = C - 2.0 * cg * B + cg * cg * A
-    return val if val > 0.0 else 0.0
+    EPS = 1.0e-6
+
+    # Bulk lateral speed and AoA — used for axial force and lever-arm reference
+    V_lat_bulk = (v_rel * v_rel + w_rel * w_rel) ** 0.5
+    if u_rel > EPS:
+        alpha_bulk_deg = math.atan2(V_lat_bulk, u_rel) * _RAD_TO_DEG
+    else:
+        alpha_bulk_deg = 90.0
+
+    # Axial force — whole-vehicle C_A at bulk AoA (§6.4)
+    C_A = _interp3(mach_g, re_g, alpha_g, ca_tbl, M, Re, alpha_bulk_deg)
+    F_x = -0.5 * rho * V * V * A_ref * C_A
+
+    q_dyn = 0.5 * rho * V * V * A_ref
+
+    if has_components:
+        # Per-component normal forces and moments (§6.4 distributed mode)
+        F_y = 0.0
+        F_z = 0.0
+        tau_pitch = 0.0
+        tau_yaw = 0.0
+        cn_sum = 0.0
+        cn_cp_sum = 0.0
+
+        n_comp = cn_comp.shape[0]
+        for i in range(n_comp):
+            # Lever arm: use CP at bulk AoA as reference (avoids circularity).
+            # The rotational correction to the lever arm is second-order small.
+            cp_ref = _interp3(mach_g, re_g, alpha_g, cp_comp[i], M, Re,
+                              alpha_bulk_deg)
+            arm_ref = cp_ref - cg  # positive aft, negative forward
+
+            # Local air velocity at component i's aerodynamic centre (§6.4):
+            #   v_local_i = v_rel + r·(CG − CP_i) = v_rel − r·arm_ref
+            #   w_local_i = w_rel − q·(CG − CP_i) = w_rel + q·arm_ref
+            v_loc = v_rel - r_rate * arm_ref
+            w_loc = w_rel + q_rate * arm_ref
+
+            V_lat_i = (v_loc * v_loc + w_loc * w_loc) ** 0.5
+            if u_rel > EPS:
+                alpha_local_deg = math.atan2(V_lat_i, u_rel) * _RAD_TO_DEG
+            else:
+                alpha_local_deg = 90.0
+
+            # C_N and CP at local AoA
+            cn_i = _interp3(mach_g, re_g, alpha_g, cn_comp[i], M, Re,
+                            alpha_local_deg)
+            cp_i = _interp3(mach_g, re_g, alpha_g, cp_comp[i], M, Re,
+                            alpha_local_deg)
+
+            # Normal force magnitude and body-frame direction factors
+            F_N_i = q_dyn * cn_i
+            if V_lat_i > EPS:
+                sin_y = -v_loc / V_lat_i
+                sin_z = -w_loc / V_lat_i
+            else:
+                sin_y = 0.0
+                sin_z = 0.0
+
+            F_yi = F_N_i * sin_y
+            F_zi = F_N_i * sin_z
+            F_y += F_yi
+            F_z += F_zi
+
+            # Moment about CG from component i (§6.4):
+            #   τ_pitch_i =  aᵢ · F_z_i
+            #   τ_yaw_i   = −aᵢ · F_y_i
+            # where aᵢ = CP_i − CG (using α_local CP for moment arm)
+            arm_i = cp_i - cg
+            tau_pitch += arm_i * F_zi
+            tau_yaw   -= arm_i * F_yi
+
+            # Accumulate for whole-vehicle CP (§6.3 item 3)
+            cn_sum    += cn_i
+            cn_cp_sum += cn_i * cp_i
+
+        if cn_sum > 1.0e-9:
+            cp_whole = cn_cp_sum / cn_sum
+        else:
+            cp_whole = cg  # undefined at zero AoA; return CG (zero margin)
+
+        return F_x, F_y, F_z, tau_pitch, tau_yaw, cp_whole
+
+    else:
+        # Single-file fallback — restoring only, no pitch/yaw damping (§6.4)
+        CN = _interp3(mach_g, re_g, alpha_g, cn_tbl, M, Re, alpha_bulk_deg)
+        CP = _interp3(mach_g, re_g, alpha_g, cp_tbl, M, Re, alpha_bulk_deg)
+
+        if V_lat_bulk > EPS:
+            sin_y = -v_rel / V_lat_bulk
+            sin_z = -w_rel / V_lat_bulk
+        else:
+            sin_y = 0.0
+            sin_z = 0.0
+
+        F_N = q_dyn * CN
+        F_y = F_N * sin_y
+        F_z = F_N * sin_z
+
+        arm = CP - cg
+        tau_pitch =  arm * F_z
+        tau_yaw   = -arm * F_y
+
+        return F_x, F_y, F_z, tau_pitch, tau_yaw, CP
 
 
 @nb.njit(cache=True)

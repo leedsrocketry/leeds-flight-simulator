@@ -11,10 +11,10 @@ import pytest
 from aerodynamics import (
     AeroModel,
     build_aero_model,
+    aero_forces_moments,
     ca_at,
     cn_cp_at,
     cn_alpha_fins_at,
-    damping_sum_at,
 )
 
 
@@ -156,10 +156,10 @@ def test_single_file_path_direct_emits_warning(tmp_path):
 def test_grid_shapes_consistent(tmp_path):
     model = build_aero_model(_component_dir(tmp_path))
     NM, NR, NA = len(model.mach_grid), len(model.re_grid), len(model.alpha_grid)
+    N = model.cn_comp.shape[0]
     assert model.ca_table.shape == (NM, NR, NA)
-    assert model.cn_table.shape == (NM, NR, NA)
-    assert model.cp_table.shape == (NM, NR, NA)
-    assert model.cna_sum.shape == (NM, NR)
+    assert model.cn_comp.shape == (N, NM, NR, NA)
+    assert model.cp_comp.shape == (N, NM, NR, NA)
     assert model.cn_alpha_fins.shape == (NM, NR)
 
 
@@ -269,20 +269,37 @@ def test_ca_total_is_sum_of_components(tmp_path):
 
 
 def test_cn_total_is_sum_of_components(tmp_path):
+    """Sum of per-component CN tables equals expected whole-vehicle CN."""
     m = build_aero_model(_component_dir(tmp_path))
-    # C_Nα_nose=1.5, C_Nα_fins=0.5, total C_Nα=2.0
-    # At alpha=5°: CN ≈ 2.0 * rad(5°) ≈ 0.175
-    cn, _ = cn_cp_at(m.mach_grid, m.re_grid, m.alpha_grid,
-                     m.cn_table, m.cp_table, 0.5, 1e6, math.radians(5.0))
-    assert cn == pytest.approx(0.175, abs=2e-3)
+    # CN_nose + CN_fins at M=0.5, Re=1e6, alpha=5°:
+    # 0.130900 + 0.043633 = 0.174533 ≈ 0.175
+    alpha_deg = math.degrees(math.radians(5.0))
+    cn_total = 0.0
+    for i in range(m.cn_comp.shape[0]):
+        cn_total += float(np.interp(alpha_deg, m.alpha_grid,
+                                    m.cn_comp[i, 0, 0, :]))
+    assert cn_total == pytest.approx(0.175, abs=2e-3)
 
 
 def test_cp_moment_balance(tmp_path):
-    """CP_total = Σ(CN_i·CP_i)/Σ(CN_i) = (1.5·0.5 + 0.5·2.0)/2.0 = 0.875 m."""
+    """CP_whole from aero_forces_moments = Σ(CN_i·CP_i)/Σ(CN_i) ≈ 0.875 m."""
     m = build_aero_model(_component_dir(tmp_path))
-    _, cp = cn_cp_at(m.mach_grid, m.re_grid, m.alpha_grid,
-                     m.cn_table, m.cp_table, 0.5, 1e6, math.radians(5.0))
-    assert cp == pytest.approx(0.875, rel=1e-3)
+    # Static case: no rotation, bulk AoA = 5°, unit conditions
+    alpha_rad = math.radians(5.0)
+    V = 100.0
+    u_rel = V * math.cos(alpha_rad)
+    w_rel = V * math.sin(alpha_rad)
+    _, _, _, _, _, cp_whole = aero_forces_moments(
+        m.mach_grid, m.re_grid, m.alpha_grid,
+        m.ca_table, m.cn_table, m.cp_table,
+        m.cn_comp, m.cp_comp, m.has_components,
+        0.5, 1e6,
+        1.0, V, 1.0,        # rho, V, A_ref
+        u_rel, 0.0, w_rel,  # u_rel, v_rel, w_rel
+        0.0, 0.0,           # q_rate, r_rate
+        1.0,                # cg
+    )
+    assert cp_whole == pytest.approx(0.875, rel=1e-3)
 
 
 # ---------------------------------------------------------------------------
