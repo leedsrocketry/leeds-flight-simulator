@@ -90,29 +90,43 @@ def build_aero_model(
     aero_dir: Path | str,
     fins_override: Path | None = None,
 ) -> AeroModel:
-    """Load all ``*.csv`` files from *aero_dir* and return an :class:`AeroModel`.
+    """Load aeroplot CSV(s) and return an :class:`AeroModel`.
 
     Parameters
     ----------
     aero_dir:
-        Directory containing RASAero II Aeroplot CSV files.
+        Either a path to a single RASAero II Aeroplot CSV file, or a
+        directory containing one or more such files.  Passing a single file
+        directly is equivalent to a directory containing only that file
+        (whole-vehicle mode, with a warning).
     fins_override:
         Explicit path to the CSV file for the fins component.  When provided,
         this file is used as the fins component instead of the filename
-        heuristic (looking for ``"fin"`` in the stem).  Has no effect when
-        only a single CSV is present (whole-vehicle mode).
+        heuristic (looking for ``"fin"`` in the stem).  Has no effect in
+        whole-vehicle mode (single file).
 
     Raises
     ------
     FileNotFoundError
-        If *aero_dir* contains no ``*.csv`` files.
+        If *aero_dir* is a directory that contains no ``*.csv`` files.
     ValueError
         If a CSV cannot be parsed or has unexpected columns.
     """
-    aero_dir = Path(aero_dir)
-    csv_files = sorted(aero_dir.glob("*.csv"))
+    aero_path = Path(aero_dir)
+
+    if aero_path.is_file():
+        warnings.warn(
+            f"Single aeroplot CSV passed directly ({aero_path.name}). "
+            "Treating as whole-vehicle data. "
+            "Roll torques and pitch/yaw damping will not be computed.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return _build_single(aero_path)
+
+    csv_files = sorted(aero_path.glob("*.csv"))
     if not csv_files:
-        raise FileNotFoundError(f"No .csv files found in {aero_dir}")
+        raise FileNotFoundError(f"No .csv files found in {aero_path}")
 
     if len(csv_files) == 1:
         warnings.warn(

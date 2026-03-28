@@ -128,6 +128,8 @@ The `.npz` file must contain the following arrays:
 
 `N` must be ≥ `num_samples` in `simulation.yaml`. Sample `i` uses profile `i`. The mean wind profile (used in optimisation Phase 2, §13.3) is computed at load time as the arithmetic mean across all `N` profiles.
 
+> **Planned behaviour (not yet implemented):** `wind_profiles` in `simulation.yaml` may also point to a directory of `.npz` files. The full analysis runs independently for each file; output folders are suffixed with the wind profile filename when more than one is present.
+
 ### 5.2 Surface Wind Override
 
 When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`, a user-specified surface wind (speed in m/s, bearing in degrees clockwise from north) replaces the lower portion of each profile up to a configurable blend height. Omit the `surface_wind` section entirely to disable the override.
@@ -149,7 +151,7 @@ During integration, wind at the current altitude is linearly interpolated from t
 
 ### 6.1 Data Source
 
-Per-component CSVs from RASAero II Aeroplots. Each component (nosecone, body, fins, etc.) has a separate file. Per-component data is required for C₂ damping (§8.3.5) and roll torques (§6.5). If only one file is provided, assume this covers the full vehicle and perform no roll or damping assessment, warn the user what is happening.
+Aeroplot CSV files specified via `aero_tables` in `vehicle.yaml`. The value may be either a **single CSV file** (whole-vehicle mode) or a **directory of CSV files** (per-component mode). Per-component data is required for C₂ damping (§8.3.5) and roll torques (§6.5). If only a single file is provided (whether passed directly or as the sole file in a directory), assume it covers the full vehicle, disable roll and damping assessment, and warn the user.
 
 ### 6.2 CSV Format
 
@@ -432,6 +434,8 @@ A drogue parachute without a main parachute is not a valid configuration (loadin
 
 Warnings are emitted once per run, before the Monte Carlo loop begins. They do not affect the compliance result.
 
+> **Planned behaviour (not yet implemented):** all warnings are blocking — the simulator pauses and prompts the user to acknowledge before continuing. `--no-warn` (§17.2) suppresses the interactive prompt; warnings still appear in the log and results summary.
+
 
 ## 10 Numerical Integration
 
@@ -459,13 +463,13 @@ At the beging of execution, run ~20 samples at tight tolerance (1×10⁻⁹), re
 
 A sample is compliant iff **all** of:
 
-**Stability & AoA** — during powered/coasting flight, whenever AoA < `sm_aoa_threshold` (configurable, default 5°): SM ≥ `sm_subsonic_min` cal (M < 0.91) or SM ≥ `sm_supersonic_min` cal (M ≥ 0.91). AoA must not exceed `aoa_max` at any point. Violation terminates the sample (§8.3.6). All thresholds configurable in `simulation.yaml`.
+**Stability & AoA** — during powered/coasting flight, whenever AoA < `sm_aoa_threshold`: SM ≥ `sm_subsonic_min` cal below `sm_transition_mach` Mach, or SM ≥ `sm_supersonic_min` cal at or above it. AoA must not exceed `aoa_max` at any point. Violation terminates the sample (§8.3.6). All thresholds configurable in `simulation.yaml`. The Mach transition threshold definition varies between tools; the default value follows the RASAero II convention.
 
 <!-- Ref: RASAero manual; Mandell et al. (1973), p. 85 -->
 
 **Containment** — full trajectory within the buffered danger area: landing point inside the buffered danger area footprint, and peak altitude below the altitude ceiling (§14).
 
-**Sea landing** — if a coastline file is provided, landing point must be outside the coastline polygon. If no coastline file is provided, this check is skipped.
+**Coastline check** — if a coastline file is provided, the landing point must satisfy the configured `coastline_mode` (§14.2). If no coastline file is provided, this check is skipped.
 
 **Observation coverage** — landing within the configured radius of at least one observation station. Applied only to scenarios listed in `los_check_scenarios` (§9).
 
@@ -519,7 +523,7 @@ Once the optimisation completes, the standard Monte Carlo analysis (§12) runs w
 
 | Parameter | Value |
 |-----------|-------|
-| Inclination candidates | 85°–90°, integer (6 values) |
+| Inclination candidates | Integer values from `inclination_range` in `simulation.yaml` |
 | Azimuth | 0° fixed (arbitrary, no wind) |
 | Total impulse | Maximum (deterministic) |
 | Wind | Disabled |
@@ -531,7 +535,7 @@ Once the optimisation completes, the standard Monte Carlo analysis (§12) runs w
 1. Run one deterministic simulation per inclination candidate.
 2. Record ballistic landing point and apogee position `(x, y, z)` for each.
 3. Select the maximum inclination satisfying both:
-   - Ballistic landing point **outside** `min_safe_radius` from launch site (from `simulation.yaml`)
+   - Ballistic landing point **outside** `ballistic_exclusion_radius` from launch site (from `simulation.yaml`)
    - Ballistic landing point **inside** buffered danger area footprint
 
 **Outputs:**
@@ -651,7 +655,16 @@ All trajectory containment checks (§11.1) and optimisation containment checks (
 
 ### 14.2 Coastline
 
-Optional. GeoJSON polygon delineating land from sea. If the `coastline` key is omitted from the `site` section of `simulation.yaml`, the sea-landing compliance check (§11.1) is skipped.
+Optional. GeoJSON polygon of the on-land area. If the `coastline` key is omitted from the `site` section of `simulation.yaml`, the coastline compliance check (§11.1) is skipped.
+
+The direction of the check is controlled by `coastline_mode` in `simulation.yaml`:
+
+| `coastline_mode` | Pass condition |
+|-----------------|----------------|
+| `"sea"` (default) | Landing point is **outside** the polygon (at sea) |
+| `"land"` | Landing point is **inside** the polygon (on land) |
+
+> **Not yet implemented.** `coastline_mode` is a planned parameter; only `"sea"` behaviour is currently available.
 
 ### 14.3 Observation Stations
 
@@ -664,36 +677,37 @@ Optional. Coordinates in `simulation.yaml`. Added to map figure(s).
 
 | File | Format | Content |
 |------|--------|---------|
-| `vehicle.yaml` | YAML | See §15.2 |
-| `motor.eng` | .eng | Thrust curve, propellant mass, motor mass |
-| `aero_tables/*.csv` | CSV | Per-component C_A, C_N, CP_m vs M, Re, AoA |
-| `wind_profiles.npz` | NumPy `.npz` | Ensemble of perturbed wind profiles (§5.1) |
-| `danger_area.geojson` | GeoJSON | Danger area footprint polygon |
-| `coastline.geojson` | GeoJSON | Land/sea delineation (optional — omit `coastline` key in `simulation.yaml` to disable) |
 | `simulation.yaml` | YAML | See §15.1 |
+| `vehicle.yaml` | YAML | See §15.2 |
+| `motor.eng` | .eng | Thrust curve, propellant mass, motor mass (path in `vehicle.yaml`) |
+| `aero_tables/` or `aero.csv` | CSV | Aeroplot coefficient tables — directory or single file (path in `vehicle.yaml`; §6.1) |
+| `wind_profiles.npz` | NumPy `.npz` | Wind profile ensemble (§5.1) |
+| `danger_area.geojson` | GeoJSON | Danger area footprint polygon |
+| `coastline.geojson` | GeoJSON | On-land polygon (optional — omit `coastline` key in `simulation.yaml` to disable; §14.2) |
 
 ### 15.1 Simulation Config (`simulation.yaml`)
 
 The file is divided into four top-level sections. All file paths are resolved relative to the directory containing `simulation.yaml`.
 
 ```yaml
-vehicle:
-  config: "vehicle.yaml"        # path to vehicle.yaml
-  motor: "motor.eng"            # path to RASP .eng file
-  aero_tables: "aero_tables"    # path to aero tables directory
+vehicle: "vehicle.yaml"           # path to vehicle.yaml (motor and aero_tables paths are in vehicle.yaml)
 
 site:
-  latitude: 58.6104700          # degrees
-  longitude: -4.9434804         # degrees
-  min_safe_radius: 500          # metres — minimum ballistic range (inclination "auto")
-  altitude_ceiling: 16764       # metres (55,000 ft)
+  latitude: 58.6104700            # degrees
+  longitude: -4.9434804           # degrees
+  ballistic_exclusion_radius: 500 # metres — minimum ballistic landing distance from launch
+                                  # site; used when inclination is "auto" (§13.2)
+  launch_observation_radius: 200  # metres — radius of the automatic launch site observation
+                                  # station added to every LOS check (§14.3)
+  altitude_ceiling: 16764         # metres (55,000 ft)
   danger_area: "danger_area.geojson"
-  # coastline: "coastline.geojson"  # omit to disable sea-landing check
+  # coastline: "coastline.geojson"  # omit to disable coastline check
+  # coastline_mode: "sea"           # "sea" (default) or "land" — see §14.2
   observation_stations:
     - name: "MOD Range Control"
       latitude: 58.40
       longitude: -4.76
-      radius: 10000             # metres
+      radius: 10000               # metres
   map_markers:
     - name: "Durness"
       latitude: 58.40
@@ -701,39 +715,50 @@ site:
 
 launch:
   rail:
-    azimuth: "auto"             # degrees clockwise from North, or "auto"
-    inclination: "auto"         # degrees from horizontal, or "auto"
-    length: 4.0                 # metres
+    azimuth: "auto"               # degrees clockwise from North, or "auto"
+    azimuth_range: [-90, 90]      # [min, max] integer search range — required when azimuth is "auto"
+    inclination: "auto"           # degrees from horizontal, or "auto"
+    inclination_range: [85, 90]   # [min, max] integer search range — required when inclination is "auto"
+    length: 4.0                   # metres
   wind_profiles: "wind_profiles.npz"
-  surface_wind:                 # omit this section entirely to disable surface override
-    speed_ms: 5.0               # m/s
-    bearing_deg: 270.0          # degrees clockwise from North
-    blend_height_m: 300         # metres AGL
+  surface_wind:                   # omit this section entirely to disable surface override
+    speed_ms: 5.0                 # m/s
+    bearing_deg: 270.0            # degrees clockwise from North
+    blend_height_m: 300           # metres AGL
 
 monte_carlo:
-  samples: 1000                 # per scenario
+  samples: 1000                   # per scenario
   seed: 42
   uncertainties:
-    azimuth_sigma: 1.0          # degrees
-    inclination_sigma: 0.5      # degrees
-    fin_cant_sigma: 0.02        # degrees
-    impulse_factor_sigma: 0.067 # fraction of total impulse (e.g. 0.067 = 6.7%)
+    azimuth_sigma: 1.0            # degrees
+    inclination_sigma: 0.5        # degrees
+    fin_cant_sigma: 0.02          # degrees
+    impulse_factor_sigma: 0.067   # fraction of total impulse (e.g. 0.067 = 6.7%)
   acceptance:
-    compliance_threshold: 0.997 # fraction (e.g. 0.997 = 99.7%)
-    buffer_distance: 1000       # metres inward from danger area boundary
-    sm_transition_mach: 0.91    # Mach dividing subsonic / supersonic SM check
-    sm_subsonic_min: 1.0        # calibres (M < sm_transition_mach)
-    sm_supersonic_min: 2.0      # calibres (M >= sm_transition_mach)
-    aoa_max: 12.0               # degrees
-    sm_aoa_threshold: 5.0       # degrees: SM check applies when AoA < this
-    sea_check_scenarios:        # landing must not be at sea (§9.3)
+    compliance_threshold: 0.997   # fraction (e.g. 0.997 = 99.7%)
+    buffer_distance: 1000         # metres inward from danger area boundary
+    sm_transition_mach: 0.91      # Mach dividing subsonic / supersonic SM check (§11.1);
+                                  # definition varies between tools — default follows RASAero II
+    sm_subsonic_min: 1.0          # calibres (M < sm_transition_mach)
+    sm_supersonic_min: 2.0        # calibres (M >= sm_transition_mach)
+    aoa_max: 12.0                 # degrees
+    sm_aoa_threshold: 5.0         # degrees: SM check applies when AoA < this
+    sea_check_scenarios:          # scenarios subject to coastline check (§9.3, §14.2)
       - nominal
       - ballistic
       - drogue_only
       - premature_main
-    los_check_scenarios:        # landing must be visible from at least one station (§9.3)
+    los_check_scenarios:          # landing must be visible from at least one station (§9.3)
       - ballistic
       - drogue_only
+
+# verification:                       # optional — single-trajectory pre-run comparison (§18.1)
+#   reference_trajectory: "ref.csv"   # CSV from any flight simulator (not yet implemented)
+#   altitude_tol_m: 50
+#   mach_tol: 0.05
+#   sm_tol_cal: 0.3
+#   mass_tol_kg: 0.1
+#   inertia_tol_pct: 5.0
 ```
 
 ### 15.2 Vehicle Config (`vehicle.yaml`)
@@ -741,6 +766,11 @@ monte_carlo:
 All distances are from the nosecone tip in metres. Dry mass properties are derived automatically from wet + propellant — the user never specifies dry values.
 
 ```yaml
+motor: "motor.eng"          # path to RASP .eng file (relative to this file)
+aero_tables: "aero_tables"  # path to aeroplot CSV file or directory of CSV files (§6.1)
+# fins_aero_table: "aero_tables/fins.csv"  # optional explicit fins component path;
+                                            # if omitted, file containing "fin" in stem is used
+
 geometry:
   diameter: 0.130           # m — reference diameter (A_ref = π·d²/4 is derived)
   length: 2.6               # m — total vehicle length
@@ -788,7 +818,10 @@ Landing lat/lon CSV for all samples.
 
 ### 16.4 Replay
 
-No full trajectories saved by default. Replay any sample by (master_seed, run_index, sample_index). Option to auto-replay all non-compliant samples.
+No full trajectories saved by default. Replay any sample by (master_seed, run_index, sample_index). Option to auto-replay all non-compliant samples. Replay opens two figures automatically (all replayed samples overlaid on shared figures):
+
+1. **3D isometric** — trajectory in NED space with map on the ground plane, matching `dispersion_plot.png` style. Coloured by descent scenario; black if terminated early due to stability/AoA violation.
+2. **Altitude vs time** — full flight from rail exit to landing.
 
 ### 16.5 Saved Plots
 
@@ -807,12 +840,15 @@ All commands are run from inside the project directory (the git repo root, which
 is also the Python package root). `__main__.py` is the entry point.
 
 ```
-python . run input/simulation.yaml
+python . run example/simulation.yaml
+python . run example/simulation.yaml --no-warn
 python . replay results/<timestamp>/summary.yaml --seed 42 --run 3 --sample 117
 python . replay results/<timestamp>/summary.yaml --non-compliant
 ```
 
 `run` is the primary command. First argument is always the simulation configuration file. If `azimuth` or `inclination` is `"auto"`, optimisation runs first, with phase progress displayed, before the main MC analysis.
+
+`--no-warn` suppresses the interactive blocking prompt for warnings; warnings still appear in the log and results summary. *(Not yet implemented — see §9.3.)*
 
 `replay` is the simulation replay command. First argument is always the simulation results summary file. The data comes from the same directory as this file. Replay is implemented as a function inside `montecarlo.py` and called directly by the CLI.
 
@@ -844,9 +880,23 @@ PASS rendered in green, FAIL in red.
 
 ## 18 Verification
 
-### 18.1 RASAero Comparison
+### 18.1 Trajectory Comparison Tool
 
-Deterministic nominal scenario vs RASAero: apogee ≤ 5%, peak Mach ≤ 5%, time to apogee ≤ 5%, SM ≤ 0.3 cal RMS.
+> **Not yet implemented.**
+
+Before the main MC run, an optional single-trajectory comparison against any external flight simulator output. Configured via a `verification:` block in `simulation.yaml` (§15.1). The reference CSV may come from any tool; columns are matched case-insensitively. Quantities compared: altitude, Mach, stability margin, mass, lateral inertia vs time. Tolerance bands are configurable per-quantity.
+
+Reference data plotted in grey with the configured tolerance band; simulator output overlaid in green (all within tolerance) or red (any out of tolerance). Pass/fail printed to console and recorded in `summary.yaml`. On failure, the figure opens and the user is prompted whether to continue.
+
+Default tolerances (configurable in `simulation.yaml`):
+
+| Quantity | Default tolerance |
+|----------|------------------|
+| Altitude | ± 50 m |
+| Mach | ± 0.05 |
+| Static margin | ± 0.3 cal |
+| Mass | ± 0.1 kg |
+| Lateral inertia | ± 5 % |
 
 ### 18.2 Unit Tests
 
@@ -892,7 +942,7 @@ leeds-flight-simulator/      ← git repo root = package root
 ├── aerodynamics.py          # Aero tables, C_Nα, forces, roll torques (Barrowman)
 ├── motor.py                 # Motor physics: thrust/mass/CG/MoI @njit functions
 ├── dynamics.py              # 6DoF + 3DoF derivatives (Numba), launch rail phase, descent CdA
-├── integrator.py            # Adaptive RK45 (Numba)
+├── integrator.py            # State integrator to actualy perform the simulations
 ├── geometry.py              # Polygons, buffer, containment
 ├── montecarlo.py            # MC orchestration, parallelism, acceptance checking, replay
 ├── optimisation.py          # Inclination/azimuth optimisation (§13)
@@ -909,7 +959,7 @@ leeds-flight-simulator/      ← git repo root = package root
 │   ├── test_descent.py      # terminal descent (analytical)
 │   ├── test_dynamics.py     # 6DoF dynamics
 │   └── compare_rasaero.py   # full trajectory comparison vs RASAero
-└── input/
+└── example/
     ├── vehicle.yaml
     ├── motor.eng
     ├── aero_tables/

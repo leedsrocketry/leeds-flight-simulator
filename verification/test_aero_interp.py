@@ -127,6 +127,32 @@ def test_empty_dir_raises(tmp_path):
         build_aero_model(d)
 
 
+def test_single_file_path_direct_returns_aeromodel(tmp_path):
+    """Passing a .csv file directly (not a directory) should work."""
+    f = tmp_path / "vehicle.csv"
+    f.write_text(_WHOLE_CSV, encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = build_aero_model(f)
+    assert isinstance(model, AeroModel)
+
+
+def test_single_file_path_direct_has_components_false(tmp_path):
+    f = tmp_path / "vehicle.csv"
+    f.write_text(_WHOLE_CSV, encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = build_aero_model(f)
+    assert model.has_components is False
+
+
+def test_single_file_path_direct_emits_warning(tmp_path):
+    f = tmp_path / "vehicle.csv"
+    f.write_text(_WHOLE_CSV, encoding="utf-8")
+    with pytest.warns(UserWarning, match="whole-vehicle"):
+        build_aero_model(f)
+
+
 def test_grid_shapes_consistent(tmp_path):
     model = build_aero_model(_component_dir(tmp_path))
     NM, NR, NA = len(model.mach_grid), len(model.re_grid), len(model.alpha_grid)
@@ -145,10 +171,10 @@ def test_grids_are_sorted(tmp_path):
 
 
 def test_real_aero_dir_loads():
-    """The committed input/aero_tables directory must load without errors."""
-    real = Path(__file__).parent.parent / "input" / "aero_tables"
+    """The committed example/aero_tables directory must load without errors."""
+    real = Path(__file__).parent.parent / "example" / "aero_tables"
     if not real.exists() or not list(real.glob("*.csv")):
-        pytest.skip("input/aero_tables not present or empty")
+        pytest.skip("example/aero_tables not present or empty")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         model = build_aero_model(real)

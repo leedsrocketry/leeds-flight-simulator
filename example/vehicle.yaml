@@ -1,7 +1,8 @@
 motor: "motor.eng"          # RASP .eng thrust curve file (path relative to this file)
-aero_tables: "aero_tables"  # directory of RASAero II Aeroplot CSVs (path relative to this file)
+aero_tables: "aero_tables"  # path to a single RASAero II Aeroplot CSV, or a directory of CSVs
+                            # (path relative to this file); a single file runs in 3-DoF mode (with warning)
 # fins_aero_table: "aero_tables/fins.csv"  # uncomment to identify the fins component explicitly;
-                                            # if omitted, the file whose name contains "fin" is used
+                                            # if omitted, the file whose name contains "fin" is used (case insensitive)
 
 geometry:
   diameter: 0.130        # reference diameter (m)
