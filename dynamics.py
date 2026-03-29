@@ -194,6 +194,10 @@ class TrajectoryResult:
     # Time history (ascent only, for replay/verification)
     t_ascent: np.ndarray
     state_ascent: np.ndarray      # (N, 13) 6DoF state history
+    # Time history (descent, for altitude plot / replay)
+    t_descent: np.ndarray | None = None
+    state_descent: np.ndarray | None = None   # (M, 6) NED pos+vel
+    n_descent: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -1510,6 +1514,7 @@ def run_trajectory(
             violation_reason=viol_str,
             t_ascent=t_asc,
             state_ascent=s_asc,
+            # No descent (early termination)
         )
 
     # ---- Phase 3 initial conditions ----
@@ -1592,4 +1597,7 @@ def run_trajectory(
         violation_reason=viol_str,
         t_ascent=t_asc,
         state_ascent=s_asc,
+        t_descent=t_desc[:n_desc].copy(),
+        state_descent=y_desc[:n_desc].copy(),
+        n_descent=n_desc,
     )
