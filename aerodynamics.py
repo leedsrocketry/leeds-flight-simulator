@@ -152,19 +152,128 @@ def build_aero_model(
 # ---------------------------------------------------------------------------
 
 def _read_csv(path: Path) -> np.ndarray:
-    """Load a CSV → contiguous (N, 6) float64: Mach, Re, AoA_deg, CA, CN, CP_m."""
+    """Load a CSV → contiguous (N, 6) float64: Mach, Re, AoA_deg, CA, CN, CP_m.
+
+    Supports both the canonical 6-column layout and the full 16-column
+    RASAero II Aeroplot export.  When the header contains RASAero-style
+    column names the relevant columns are selected by name; otherwise
+    the first six columns are used as-is.
+    """
+    # --- Read header to decide column mapping ---
+    with open(path, encoding="utf-8") as f:
+        header_line = f.readline().strip()
+    headers = [h.strip() for h in header_line.split(",")]
+
+    # RASAero II header mapping (case-insensitive substring match)
+    _RASAERO_MAP = {
+        "Mach":             "Mach",
+        "Reynolds Number":  "Re",
+        "Alpha":            "AoA_deg",
+        "CA Power-Off":     "CA",
+        "CN":               "CN",
+        "CP_m":             "CP_m",
+    }
+
     try:
         data = np.loadtxt(path, delimiter=",", skiprows=1, dtype=np.float64)
     except Exception as exc:
         raise ValueError(f"Cannot read aeroplot CSV {path}: {exc}") from exc
     if data.ndim == 1:
         data = data[np.newaxis, :]
-    if data.shape[1] < 6:
-        raise ValueError(
-            f"{path.name}: expected ≥6 columns "
-            f"(Mach,Reynolds,AoA_deg,CA,CN,CP_m), got {data.shape[1]}"
-        )
-    return np.ascontiguousarray(data[:, :6], dtype=np.float64)
+
+    # Check if we have a RASAero-style wide CSV
+    header_lower = [h.lower() for h in headers]
+    is_rasaero = (
+        len(headers) > 6
+        and "alpha" in header_lower
+        and any("reynolds" in h for h in header_lower)
+    )
+
+    if is_rasaero:
+        # Build index map: find each required column by exact header match
+        col_indices: list[int] = []
+        for csv_name in _RASAERO_MAP:
+            # Find exact match first, then substring
+            idx: int | None = None
+            for i, h in enumerate(headers):
+                if h == csv_name:
+                    idx = i
+                    break
+            if idx is None:
+                raise ValueError(
+                    f"{path.name}: cannot find column '{csv_name}' in header: {headers}"
+                )
+            col_indices.append(idx)
+
+        if data.shape[1] < max(col_indices) + 1:
+            raise ValueError(
+                f"{path.name}: expected ≥{max(col_indices) + 1} columns, "
+                f"got {data.shape[1]}"
+            )
+        data = data[:, col_indices]
+    else:
+        # Canonical 6-column format
+        if data.shape[1] < 6:
+            raise ValueError(
+                f"{path.name}: expected ≥6 columns "
+                f"(Mach,Reynolds,AoA_deg,CA,CN,CP_m), got {data.shape[1]}"
+            )
+        data = data[:, :6]
+
+    return np.ascontiguousarray(data, dtype=np.float64)
+
+
+def _complete_grid(src: np.ndarray) -> np.ndarray:
+    """Fill missing rows so that the data forms a complete Cartesian grid.
+
+    Groups by (col0, col1) and fills any missing col2 values by copying
+    the nearest existing row.  Handles truncated RASAero II exports.
+    """
+    a2_all = np.unique(src[:, 2])
+    expected_per_group = len(a2_all)
+
+    # Group rows by (col0, col1) and find incomplete groups
+    keys = src[:, 0] * 1e30 + src[:, 1]  # unique compound key
+    unique_keys, counts = np.unique(keys, return_counts=True)
+    incomplete = unique_keys[counts < expected_per_group]
+
+    if len(incomplete) == 0:
+        return src
+
+    fill_rows: list[np.ndarray] = []
+    for key in incomplete:
+        mask = keys == key
+        group = src[mask]
+        existing_a2 = set(group[:, 2].tolist())
+        for v2 in a2_all:
+            if v2 not in existing_a2:
+                nearest_idx = np.argmin(np.abs(group[:, 2] - v2))
+                row = group[nearest_idx].copy()
+                row[2] = v2
+                fill_rows.append(row)
+
+    if fill_rows:
+        src = np.vstack([src] + fill_rows)
+    return src
+
+
+def _collapse_covarying_re(src: np.ndarray) -> np.ndarray:
+    """If Reynolds covaries 1-to-1 with Mach, collapse Re to a constant.
+
+    Returns a (possibly modified copy of) *src* with column 1 set to 0.0
+    when each unique Mach maps to exactly one unique Re value, i.e. the
+    data is effectively a 2-D (Mach × AoA) grid.
+
+    Also fills any missing grid rows beforehand via :func:`_complete_grid`.
+    """
+    src = _complete_grid(src)
+    m_vals = np.unique(src[:, 0])
+    r_vals = np.unique(src[:, 1])
+    a_vals = np.unique(src[:, 2])
+    if len(m_vals) == len(r_vals) and len(m_vals) * len(a_vals) == len(src):
+        src = src.copy()
+        src[:, 1] = 0.0
+    return src
 
 
 def _unique_axes(
@@ -332,7 +441,7 @@ def _fit_cna_cp(
 
 
 def _build_single(path: Path) -> AeroModel:
-    src = _read_csv(path)
+    src = _collapse_covarying_re(_read_csv(path))
     mach_g, re_g, alpha_g = _unique_axes(src)
     ca, cn, cp = _resample_3d(src, mach_g, re_g, alpha_g)
     NM, NR, NA = len(mach_g), len(re_g), len(alpha_g)
@@ -364,7 +473,7 @@ def _build_components(
             stacklevel=3,
         )
 
-    datasets = {p: _read_csv(p) for p in csv_files}
+    datasets = {p: _collapse_covarying_re(_read_csv(p)) for p in csv_files}
     mach_g, re_g, alpha_g = _unique_axes(*datasets.values())
 
     NM, NR, NA = len(mach_g), len(re_g), len(alpha_g)
