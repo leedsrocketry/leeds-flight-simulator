@@ -1,13 +1,16 @@
-"""Geospatial containment checking for flight safety.
+"""Geospatial utilities: projections, polygons, and containment checking.
 
 Loads danger-area and coastline polygons from GeoJSON, projects them to
 NED metres, buffers the danger area inward, and provides fast containment
 queries for trajectory points.
 
-Specification references: §11.1 (acceptance criteria), §14 (geometry).
+Specification references: §3.1 (flat-earth), §11.1 (acceptance), §14 (geometry).
 
 Public API
 ----------
+Coordinate conversion:
+    ned_to_latlon         — NED metres → WGS-84 (lat, lon) degrees
+
 Startup (Shapely, called once):
     load_polygon_ned      — GeoJSON → Shapely Polygon in NED metres
     buffer_danger_area    — inward buffer, simplify, largest-polygon extraction
@@ -92,6 +95,34 @@ def _lonlat_to_ned(
         east = (lon - lon0) * deg2m_east
         ned.append((east, north))
     return ned
+
+
+def ned_to_latlon(
+    north: float, east: float,
+    lat0: float, lon0: float,
+) -> tuple[float, float]:
+    """Convert NED metres to WGS-84 (latitude, longitude) degrees.
+
+    Inverse of the flat-earth approximation (§3.1).
+
+    Parameters
+    ----------
+    north, east : float
+        Position in NED metres relative to the launch site.
+    lat0, lon0 : float
+        Launch-site latitude and longitude in degrees — the NED origin.
+
+    Returns
+    -------
+    (latitude, longitude) : tuple[float, float]
+        WGS-84 degrees.
+    """
+    lat0_rad = math.radians(lat0)
+    deg2m_north = R_EARTH * math.pi / 180.0
+    deg2m_east = R_EARTH * math.cos(lat0_rad) * math.pi / 180.0
+    lat = lat0 + north / deg2m_north
+    lon = lon0 + east / deg2m_east
+    return lat, lon
 
 
 def load_polygon_ned(

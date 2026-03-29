@@ -1,4 +1,4 @@
-"""Tests for geofence.py — GeoJSON loading, buffering, containment, coastline.
+"""Tests for geography.py — GeoJSON loading, buffering, containment, coastline.
 
 Scope
 -----
@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from shapely.geometry import Polygon
 
-from geofence import (
+from geography import (
     _load_geojson_polygon,
     _lonlat_to_ned,
     _point_in_polygon,

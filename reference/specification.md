@@ -888,7 +888,7 @@ leeds-flight-simulator/      ← git repo root = package root
 ├── motor.py                 # Motor physics: thrust/mass/CG/MoI @njit functions
 ├── dynamics.py              # 6DoF + 3DoF derivatives (Numba), launch rail phase, descent CdA
 ├── integrator.py            # State integrator to actualy perform the simulations
-├── geofence.py              # Polygons, buffer, containment
+├── geography.py.py          # NED to lat/long, polygons, buffer, containment
 ├── montecarlo.py            # MC orchestration, parallelism, acceptance checking, replay
 ├── optimisation.py          # Inclination/azimuth optimisation (§13)
 ├── outputs.py               # CSV, YAML serialisation, plot generation
