@@ -186,6 +186,8 @@ class TrajectoryResult:
     min_sm_supersonic: float      # calibres (worst case)
     rail_exit_velocity: float     # m/s
     peak_altitude_ft: float       # feet
+    in_buffer: bool               # full trajectory inside buffered footprint
+    below_ceiling: bool           # apogee below buffered altitude ceiling
     compliant: bool
     stability_compliant: bool
     violation_reason: str         # empty string if compliant
@@ -1383,7 +1385,13 @@ def build_sim_params(
     )
 
 
-def run_trajectory(params: SimParams, scenario: int) -> TrajectoryResult:
+def run_trajectory(
+    params: SimParams,
+    scenario: int,
+    poly_e: np.ndarray | None = None,
+    poly_n: np.ndarray | None = None,
+    buffered_ceiling: float = float('inf'),
+) -> TrajectoryResult:
     """Run a complete trajectory: rail → 6DoF ascent → 3DoF descent.
 
     Parameters
@@ -1392,6 +1400,12 @@ def run_trajectory(params: SimParams, scenario: int) -> TrajectoryResult:
         All pre-processed data for this sample.
     scenario : int
         Descent scenario (use SCENARIO_* constants).
+    poly_e, poly_n : np.ndarray or None
+        Buffered danger-area polygon exterior ring (east, north) in NED
+        metres.  If ``None``, footprint containment checks are skipped.
+    buffered_ceiling : float
+        ``altitude_ceiling - buffer_distance`` in metres.  Defaults to
+        ``inf`` (no ceiling check).
 
     Returns
     -------
@@ -1452,6 +1466,52 @@ def run_trajectory(params: SimParams, scenario: int) -> TrajectoryResult:
     apogee_pos = apogee_state[:3].copy()
     apogee_alt = -apogee_state[2]
 
+    # ---- Geofence checks (between ascent and descent) ----
+    _below_ceiling = apogee_alt <= buffered_ceiling
+    _in_buffer = True  # assume compliant until proven otherwise
+
+    if poly_e is not None and poly_n is not None:
+        from geofence import all_points_in_polygon
+        _in_buffer = all_points_in_polygon(
+            s_asc[:, 0], s_asc[:, 1], poly_e, poly_n,
+        )
+
+    if not _below_ceiling or not _in_buffer:
+        # Skip descent — sample is already non-compliant.
+        if not stab_ok:
+            if viol_code == 1:
+                viol_str = "AoA exceeded maximum"
+            elif viol_code == 2:
+                viol_str = "Static margin below minimum"
+            else:
+                viol_str = "Unknown stability violation"
+        elif not _below_ceiling:
+            viol_str = "Apogee above buffered ceiling"
+        else:
+            viol_str = "Trajectory exited buffered danger area"
+
+        return TrajectoryResult(
+            apogee_altitude=apogee_alt,
+            apogee_time=apogee_t,
+            apogee_position=apogee_pos,
+            landing_position=apogee_pos,
+            landing_time=apogee_t,
+            flight_time=apogee_t - t_exit,
+            max_mach=max_mach,
+            max_aoa_deg=max_aoa_deg,
+            min_sm_subsonic=min_sm_sub if min_sm_sub < 1.0e5 else float('nan'),
+            min_sm_supersonic=min_sm_sup if min_sm_sup < 1.0e5 else float('nan'),
+            rail_exit_velocity=V_exit,
+            peak_altitude_ft=peak_alt * 3.28084,
+            in_buffer=_in_buffer,
+            below_ceiling=_below_ceiling,
+            compliant=False,
+            stability_compliant=stab_ok,
+            violation_reason=viol_str,
+            t_ascent=t_asc,
+            state_ascent=s_asc,
+        )
+
     # ---- Phase 3 initial conditions ----
     C_nb = quat_to_dcm_nb(
         apogee_state[3], apogee_state[4],
@@ -1490,6 +1550,14 @@ def run_trajectory(params: SimParams, scenario: int) -> TrajectoryResult:
     landing_pos = y_desc[land_idx, :3].copy()
     landing_t = t_desc[land_idx]
 
+    # ---- Descent footprint check ----
+    if poly_e is not None and poly_n is not None:
+        from geofence import all_points_in_polygon
+        if not all_points_in_polygon(
+            y_desc[:n_desc, 0], y_desc[:n_desc, 1], poly_e, poly_n,
+        ):
+            _in_buffer = False
+
     if not stab_ok:
         if viol_code == 1:
             viol_str = "AoA exceeded maximum"
@@ -1497,8 +1565,12 @@ def run_trajectory(params: SimParams, scenario: int) -> TrajectoryResult:
             viol_str = "Static margin below minimum"
         else:
             viol_str = "Unknown stability violation"
+    elif not _in_buffer:
+        viol_str = "Trajectory exited buffered danger area"
     else:
         viol_str = ""
+
+    _compliant = stab_ok and _in_buffer and _below_ceiling
 
     return TrajectoryResult(
         apogee_altitude=apogee_alt,
@@ -1513,7 +1585,9 @@ def run_trajectory(params: SimParams, scenario: int) -> TrajectoryResult:
         min_sm_supersonic=min_sm_sup if min_sm_sup < 1.0e5 else float('nan'),
         rail_exit_velocity=V_exit,
         peak_altitude_ft=peak_alt * 3.28084,
-        compliant=stab_ok,
+        in_buffer=_in_buffer,
+        below_ceiling=_below_ceiling,
+        compliant=_compliant,
         stability_compliant=stab_ok,
         violation_reason=viol_str,
         t_ascent=t_asc,
