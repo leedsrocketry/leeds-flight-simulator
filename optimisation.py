@@ -4,7 +4,7 @@ Four-phase routine (specification §13) to select optimal integer launch
 azimuth and inclination, maximising the probability that all active descent
 scenarios remain within the buffered danger area.
 
-Phase 1 — Inclination selection (deterministic 3DoF sweeps)
+Phase 1 — Inclination selection (deterministic 2DoF point-mass sweeps)
 Phase 2 — Azimuth bound narrowing (analytical wind-drift filter)
 Phase 3 — Azimuth optimisation (1-D Bayesian optimisation, GP + UCB)
 Phase 4 — Candidate validation (full-uncertainty MC)
@@ -32,7 +32,7 @@ from aerodynamics import AeroModel
 from wind import WindEnsemble, interpolate_wind
 from dynamics import (
     SimParams,
-    simulate_ascent_3dof,
+    simulate_ascent_2dof,
     integrate_descent,
     SCENARIO_MAP,
     SCENARIO_BALLISTIC,
@@ -147,7 +147,7 @@ def _rotate_apogee(
 ) -> tuple[float, float]:
     """Rotate an apogee NE position from *base_azimuth* to *azimuth*.
 
-    The 3DoF ascent is run at ``base_azimuth`` (typically 0°).  For a
+    The 2DoF ascent is run at ``base_azimuth`` (typically 0°).  For a
     different azimuth, the horizontal displacement rotates by the
     difference angle.
     """
@@ -268,9 +268,8 @@ def select_inclination(
     valid: list[int] = []
 
     for idx, inc in enumerate(candidates):
-        # 3DoF ascent at azimuth=0, no wind, no uncertainty
-        apogee_alt, apN, apE, apD, t_ap, V_ap = simulate_ascent_3dof(
-            rail_azimuth_rad=0.0,
+        # 2DoF point-mass ascent, no wind, no uncertainty
+        ap_downrange, ap_alt, t_ap = simulate_ascent_2dof(
             rail_inclination_rad=inc * _DEG2RAD,
             rail_length=rail_cfg.length,
             motor_times=motor_model.times,
@@ -289,13 +288,16 @@ def select_inclination(
             rtol=1.0e-6,
             atol=1.0e-6,
         )
-        apogee_positions[inc] = (apN, apE, apD)
+        # Store as NED at azimuth=0: downrange is North, East=0
+        apN = ap_downrange
+        apD = -ap_alt
+        apogee_positions[inc] = (apN, 0.0, apD)
         apogee_times[inc] = t_ap
 
         # Ballistic descent from apogee — run integrate_descent to get
         # actual landing point (accounts for gravity during fall).
         descent_state0 = np.array([
-            apN, apE, apD, 0.0, 0.0, 0.0,
+            apN, 0.0, apD, 0.0, 0.0, 0.0,
         ], dtype=np.float64)
         # No wind for Phase 1 — zero arrays
         zero_wind_alt = np.array([0.0, 50000.0], dtype=np.float64)
@@ -843,10 +845,9 @@ def run_optimisation(
         )
     else:
         selected_inc = int(rail.inclination)
-        # Still need a 3DoF ascent at this inclination for Phases 2-4
+        # Still need a 2DoF ascent at this inclination for Phases 2-4
         geom = vehicle_cfg.geometry
-        apogee_alt, apN, apE, apD, t_ap, V_ap = simulate_ascent_3dof(
-            rail_azimuth_rad=0.0,
+        ap_downrange, ap_alt, t_ap = simulate_ascent_2dof(
             rail_inclination_rad=selected_inc * _DEG2RAD,
             rail_length=rail.length,
             motor_times=motor_model.times,
@@ -865,7 +866,7 @@ def run_optimisation(
             rtol=1.0e-6,
             atol=1.0e-6,
         )
-        apogee_positions = {selected_inc: (apN, apE, apD)}
+        apogee_positions = {selected_inc: (ap_downrange, 0.0, -ap_alt)}
         apogee_times = {selected_inc: t_ap}
         ballistic_landings = {}
 

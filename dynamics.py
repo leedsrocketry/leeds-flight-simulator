@@ -1,10 +1,10 @@
-"""6DoF, 3DoF, and launch-rail dynamics with adaptive Dormand-Prince integration.
+"""6DoF, 2DoF, and launch-rail dynamics with adaptive Dormand-Prince integration.
 
 Implements the equations of motion from specification sections 8.2–8.5:
     Phase 1 — Launch rail (constrained 1-D translation)
     Phase 2 — Free flight 6DoF (full translation + rotation)
-    Phase 3 — Descent 3DoF (point-mass under drag + gravity)
-    3DoF ascent — Simplified point-mass for optimisation (section 8.5)
+    Phase 3 — Descent (point-mass under drag + gravity)
+    2DoF ascent — Point-mass in a vertical plane for optimisation
 
 All hot-loop functions are Numba ``@njit`` compiled with ``fastmath=True``.
 The integration loops use the Dormand-Prince RK4(5) tableau from
@@ -33,7 +33,7 @@ Data structures (plain Python):
     simulate_rail         — Phase 1
     integrate_sixdof      — Phase 2
     integrate_descent     — Phase 3
-    simulate_ascent_3dof  — 3DoF ascent (optimisation)
+    simulate_ascent_2dof  — 2DoF point-mass ascent (optimisation)
 
 Top-level entry point:
     run_trajectory(params, scenario) → TrajectoryResult
@@ -1216,12 +1216,11 @@ def integrate_descent(
 
 
 # ---------------------------------------------------------------------------
-# 3DoF Ascent (for optimisation, section 8.5)
+# 2DoF Point-Mass Ascent (for optimisation)
 # ---------------------------------------------------------------------------
 
 @nb.njit(cache=True, fastmath=True)
-def simulate_ascent_3dof(
-    rail_azimuth_rad: float,
+def simulate_ascent_2dof(
     rail_inclination_rad: float,
     rail_length: float,
     motor_times: np.ndarray,
@@ -1239,70 +1238,85 @@ def simulate_ascent_3dof(
     ref_length: float,
     rtol: float,
     atol: float,
-) -> tuple[float, float, float, float, float, float]:
-    """Simplified 3DoF ascent: point-mass, α=0, no roll.
+) -> tuple[float, float, float]:
+    """Point-mass 2DoF ascent in a vertical plane: α=0, no wind.
 
-    Runs rail phase then coasts to apogee along the launch axis direction
-    (no attitude changes — velocity vector stays along initial rail heading).
+    Two translational degrees of freedom (downrange x and altitude z) in
+    a vertical plane.  Thrust and drag act along the velocity vector;
+    gravity acts straight down.  The velocity vector curves naturally
+    under gravity — no fixed-rail assumption after rail exit.
 
-    Returns (apogee_alt, apogee_N, apogee_E, apogee_D, t_apogee, V_apogee).
+    Azimuth-independent: the optimisation routine rotates the resulting
+    apogee point to the desired azimuth.
+
+    Returns ``(apogee_downrange, apogee_alt, t_apogee)``.
     """
-    V_exit, t_exit, rN, rE, rD = simulate_rail(
-        rail_azimuth_rad, rail_inclination_rad, rail_length,
+    # Rail phase at azimuth=0 — only inclination matters for the 2DoF plane
+    V_exit, t_exit, rN, _, rD = simulate_rail(
+        0.0, rail_inclination_rad, rail_length,
         motor_times, motor_thrusts, nozzle_area, impulse_factor,
         m_prop_0, total_impulse, m_dry,
         mach_g, re_g, alpha_g, ca_tbl, A_ref, ref_length,
         rtol, atol,
     )
 
-    eN, eE, eD = _rail_direction(rail_azimuth_rad, rail_inclination_rad)
-    sin_theta = math.sin(rail_inclination_rad)
+    # Decompose rail-exit velocity into downrange (x) and vertical (z)
+    cos_inc = math.cos(rail_inclination_rad)
+    sin_inc = math.sin(rail_inclination_rad)
+    vx = V_exit * cos_inc
+    vz = V_exit * sin_inc
+
+    # Position: x = downrange (horizontal), z = altitude (up-positive)
+    x = rN   # at azimuth=0, downrange = North
+    z = -rD  # NED D is negative altitude
 
     t = t_exit
-    V = V_exit
-    pos_N = rN; pos_E = rE; pos_D = rD
     t_burnout = motor_times[motor_times.shape[0] - 1]
     max_steps = 100000
 
     for _ in range(max_steps):
-        h_now = -pos_D
-        if h_now < 0.0:
-            h_now = 0.0
+        alt = z if z > 0.0 else 0.0
+        _, _, rho, a_sound, mu = isa(alt)
 
-        _, _, rho, a_sound, mu = isa(h_now)
         m = mass_at(
             motor_times, motor_thrusts, m_prop_0, total_impulse, m_dry, t,
         )
         F_thrust = thrust_corrected_at(
-            motor_times, motor_thrusts, nozzle_area, h_now, t,
+            motor_times, motor_thrusts, nozzle_area, alt, t,
         ) * impulse_factor
 
-        V_abs = abs(V)
+        V_abs = math.sqrt(vx * vx + vz * vz)
         if V_abs > _EPS_V:
             M = V_abs / a_sound
             Re = rho * V_abs * ref_length / mu
             C_A = ca_at(mach_g, re_g, alpha_g, ca_tbl, M, Re, 0.0)
             F_drag = 0.5 * rho * V_abs * V_abs * A_ref * C_A
+            # Net force along velocity vector
+            F_along = F_thrust - F_drag
+            # Decompose into x and z
+            ax = F_along * vx / V_abs
+            az = F_along * vz / V_abs - _G0 * m
         else:
-            F_drag = 0.0
+            ax = 0.0
+            az = F_thrust - _G0 * m
 
-        a = (F_thrust - F_drag) / m - _G0 * sin_theta
+        ax /= m
+        az /= m
 
-        # Simple RK4 step
         dt = 0.01 if t < t_burnout else 0.05
 
-        V_new = V + dt * a
-        V_mid = V + 0.5 * dt * a
-        pos_N += V_mid * dt * eN
-        pos_E += V_mid * dt * eE
-        pos_D += V_mid * dt * eD
-        V = V_new
+        # Symplectic Euler (velocity then position)
+        vx += ax * dt
+        vz += az * dt
+        x += vx * dt
+        z += vz * dt
         t += dt
 
-        if V <= 0.0:
+        # Apogee: vertical velocity crosses zero
+        if vz <= 0.0:
             break
 
-    return -pos_D, pos_N, pos_E, pos_D, t, V
+    return x, z, t
 
 
 # ---------------------------------------------------------------------------
