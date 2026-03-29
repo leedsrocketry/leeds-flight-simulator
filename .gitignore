@@ -7,3 +7,4 @@ dist/
 .env
 .claude/
 CLAUDE.md
+map-tile-cache/
