@@ -196,7 +196,7 @@ def _apply_surface_wind(
 # Numba-compiled runtime interpolation
 # ---------------------------------------------------------------------------
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def interpolate_wind(
     altitude_m: np.ndarray,
     wind_east: np.ndarray,

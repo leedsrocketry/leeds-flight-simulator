@@ -407,7 +407,7 @@ def _build_components(
 # Numba hot-loop helpers
 # ---------------------------------------------------------------------------
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def _bisect(arr: np.ndarray, x: float) -> int:
     """Return lo such that arr[lo] ≤ x < arr[lo+1]; clamped to [0, n−2].
 
@@ -430,7 +430,7 @@ def _bisect(arr: np.ndarray, x: float) -> int:
     return lo
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def _frac(lo: float, hi: float, x: float) -> float:
     """Interpolation fraction; 0.0 when lo == hi (singleton axis), clamped [0,1]."""
     d = hi - lo
@@ -444,7 +444,7 @@ def _frac(lo: float, hi: float, x: float) -> float:
     return t
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def _interp3(
     xg: np.ndarray,
     yg: np.ndarray,
@@ -479,7 +479,7 @@ def _interp3(
     )
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def _interp2(
     xg: np.ndarray,
     yg: np.ndarray,
@@ -512,7 +512,7 @@ def _interp2(
 _RAD_TO_DEG: float = 180.0 / 3.141592653589793
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def ca_at(
     mach_g: np.ndarray,
     re_g: np.ndarray,
@@ -532,7 +532,7 @@ def ca_at(
     return _interp3(mach_g, re_g, alpha_g, ca_tbl, M, Re, alpha_rad * _RAD_TO_DEG)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def cn_cp_at(
     mach_g: np.ndarray,
     re_g: np.ndarray,
@@ -560,7 +560,7 @@ def cn_cp_at(
     return cn, cp
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def aero_forces_moments(
     mach_g: np.ndarray,
     re_g: np.ndarray,
@@ -714,7 +714,7 @@ def aero_forces_moments(
         return F_x, F_y, F_z, tau_pitch, tau_yaw, CP
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def cn_alpha_fins_at(
     mach_g: np.ndarray,
     re_g: np.ndarray,

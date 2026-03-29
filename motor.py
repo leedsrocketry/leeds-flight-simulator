@@ -150,7 +150,7 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
 # Numba hot-loop helpers
 # ---------------------------------------------------------------------------
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def _interp(times: np.ndarray, values: np.ndarray, t: float) -> float:
     """Linear interpolation into a monotone time series; clamped at ends."""
     n = times.shape[0]
@@ -173,13 +173,13 @@ def _interp(times: np.ndarray, values: np.ndarray, t: float) -> float:
 # Numba hot-loop functions — public API
 # ---------------------------------------------------------------------------
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def thrust_at(times: np.ndarray, thrusts: np.ndarray, t: float) -> float:
     """Sea-level thrust [N] at time *t* [s]."""
     return _interp(times, thrusts, t)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def thrust_corrected_at(
     times: np.ndarray,
     thrusts: np.ndarray,
@@ -199,7 +199,7 @@ def thrust_corrected_at(
     return F0 + nozzle_area * delta_p
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def mdot_at(
     times: np.ndarray,
     thrusts: np.ndarray,
@@ -214,7 +214,7 @@ def mdot_at(
     return m_prop_0 * _interp(times, thrusts, t) / total_impulse
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def m_prop_at(
     times: np.ndarray,
     thrusts: np.ndarray,
@@ -247,7 +247,7 @@ def m_prop_at(
     return m_prop_0 * prop_fraction_remaining
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def mass_at(
     times: np.ndarray,
     thrusts: np.ndarray,
@@ -260,7 +260,7 @@ def mass_at(
     return m_dry + m_prop_at(times, thrusts, m_prop_0, total_impulse, t)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def cg_at(
     times: np.ndarray,
     thrusts: np.ndarray,
@@ -279,7 +279,7 @@ def cg_at(
     return (m_dry * cg_dry + m_p * motor_cg_loaded) / (m_dry + m_p)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def inertia_at(
     times: np.ndarray,
     thrusts: np.ndarray,

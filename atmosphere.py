@@ -60,7 +60,7 @@ _P_BASE = np.ascontiguousarray(_BASE_PRESSURES)
 # Numba-compiled core
 # ---------------------------------------------------------------------------
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def _layer_index(h: float) -> int:
     """Return the index of the ISA layer containing altitude *h*."""
     idx = 0
@@ -70,14 +70,14 @@ def _layer_index(h: float) -> int:
     return idx
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def temperature(h: float) -> float:
     """Static temperature [K] at geopotential altitude *h* [m]."""
     i = _layer_index(h)
     return _T_BASE[i] + _L_BASE[i] * (h - _H_BASE[i])
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def pressure(h: float) -> float:
     """Static pressure [Pa] at geopotential altitude *h* [m]."""
     i = _layer_index(h)
@@ -92,7 +92,7 @@ def pressure(h: float) -> float:
         return p_b * np.exp(-G0 * M_AIR * dh / (R_STAR * T_b))
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def density(h: float) -> float:
     """Air density [kg/m³] at geopotential altitude *h* [m]."""
     T = temperature(h)
@@ -100,14 +100,14 @@ def density(h: float) -> float:
     return p * M_AIR / (R_STAR * T)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def speed_of_sound(h: float) -> float:
     """Speed of sound [m/s] at geopotential altitude *h* [m]."""
     T = temperature(h)
     return (GAMMA * R_STAR * T / M_AIR) ** 0.5
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def dynamic_viscosity(h: float) -> float:
     """Dynamic viscosity [Pa·s] via Sutherland's law at altitude *h* [m]."""
     T = temperature(h)
@@ -119,7 +119,7 @@ def dynamic_viscosity(h: float) -> float:
     )
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, fastmath=True)
 def isa(h: float) -> tuple[float, float, float, float, float]:
     """Return (T [K], p [Pa], rho [kg/m³], a [m/s], mu [Pa·s]) at altitude *h* [m]."""
     i = _layer_index(h)
