@@ -998,7 +998,7 @@ def save_dispersion_plot(
         True, which="major", linestyle="--",
         linewidth=0.5, alpha=0.7, zorder=2,
     )
-    ax.legend(handles=legend_handles, loc="upper right", fontsize=9)
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=9).set_zorder(20)
 
     save_path = output_dir / "dispersion_plot.png"
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
