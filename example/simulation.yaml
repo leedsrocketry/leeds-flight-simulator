@@ -5,7 +5,7 @@ site:
   latitude: 58.6104700    # degrees — WGS-84 latitude of launch site
   longitude: -4.9434804   # degrees — WGS-84 longitude of launch site
 
-  ballistic_exclusion_radius: 1000  # metres — minimum acceptable ballistic landing distance
+  ballistic_exclusion_radius: 500   # metres — minimum acceptable ballistic landing distance
                                     # from the launch site; used during inclination optimisation;
                                     # has no effect when inclination is not "auto"
 

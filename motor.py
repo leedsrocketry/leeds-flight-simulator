@@ -195,6 +195,8 @@ def thrust_corrected_at(
         F(h) = F₀ + Aₑ · (p₀ − p_ISA(h))
     """
     F0 = _interp(times, thrusts, t)
+    if F0 <= 0.0:
+        return 0.0
     delta_p = 101325.0 - _atm_pressure(altitude_m)
     return F0 + nozzle_area * delta_p
 
