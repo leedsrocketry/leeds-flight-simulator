@@ -2,30 +2,45 @@
 
 A six-degree-of-freedom Monte Carlo flight simulator for single-stage, passively stabilised, axisymmetric sounding rockets. Generates flight safety analysis evidence suitable for a CAA large rocket permission safety case under Article 96 of the Air Navigation Order 2016.
 
-The simulator covers launch rail exit to landing. It evaluates between one and four descent scenarios (depending on the vehicle's recovery system configuration) and checks trajectory containment, sea-landing exclusion, observation coverage, and aerodynamic stability against configurable acceptance criteria. It can automatically optimise launch azimuth and inclination when these are set to `"auto"`.
+The simulator covers launch rail exit to landing, evaluating up to four descent scenarios and checking trajectory containment, coastline compliance, observation coverage, and aerodynamic stability against configurable acceptance criteria. Launch azimuth and inclination can be automatically optimised when set to `"auto"`.
 
-The simulator runs entirely offline. The only network access is to fetch base map tiles for the dispersion plot, which are cached locally after the first download.
+Runs entirely offline. The only network access is to fetch base map tiles for the dispersion plot, which are cached locally after the first download.
+
+---
+
+## Table Of Contents
+
+- [Background](#background)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Key Concepts](#key-concepts)
+- [Input Files](#input-files)
+- [Acceptance Criteria](#acceptance-criteria)
+- [Optimisation](#optimisation)
+- [Output Files](#output-files)
+- [Replaying Samples](#replaying-samples)
+- [Verification](#verification)
+- [Operational Workflow](#operational-workflow)
+- [Contact](#contact)
+- [Licence](#licence)
+- [References](#references)
 
 ---
 
 ## Background
 
-This tool was originally developed for the Gryphon II Block II (G2B2) launch by the Leeds University Rocketry Association (LURA) -- a supersonic sounding rocket targeting the UKRA amateur altitude record, launching from Cape Wrath, Scotland. The safety case for that launch is available here:
+Originally developed for the Gryphon II Block II (G2B2) launch by the Leeds University Rocketry Association (LURA) -- a supersonic sounding rocket targeting the UKRA amateur altitude record, launching from Cape Wrath, Scotland.
 
 > **G2B2 Safety Case:** [https://leedsrocketry.co.uk/g2b2-safety-case](https://leedsrocketry.co.uk/g2b2-safety-case)
-> <!-- TODO: confirm URL -->
+> <!-- TODO: Confirm URL -->
 
 Although built for G2B2, the simulator is entirely generic. Any team launching a passively stabilised, axisymmetric rocket under a CAA permission (or similar regulatory framework) can use it by supplying their own configuration files.
 
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.10 or later
-- Python packages: `numpy`, `numba`, `scipy`, `shapely`, `pyyaml`, `matplotlib`, `rich`, `click`, `scikit-optimize`
-
-### Setup
+**Prerequisites:** Python 3.10+
 
 ```
 git clone https://github.com/leedsrocketry/leeds-flight-simulator.git
@@ -46,27 +61,77 @@ python . --help
 python . run example/simulation.yaml
 ```
 
-This runs all active descent scenarios and prints a results table to the terminal:
+This runs all active descent scenarios and prints a results table:
 
+<!-- TODO: Replace with actual screenshot once the CLI is working -->
 ```
-┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━┓
-┃ Scenario         ┃ Samples ┃ Compliant ┃ Non-Compliant ┃ ≥ 99.7% ┃
-┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━┩
-│ Nominal          │    1000 │      1000 │             0 │  PASS   │
-│ Ballistic        │    1000 │      1000 │             0 │  PASS   │
-│ Drogue-only      │    1000 │       998 │             2 │  PASS   │
-│ Premature main   │    1000 │       997 │             3 │  PASS   │
-├─────────────────┼─────────┼───────────┼───────────────┼─────────┤
-│ Total            │    4000 │      3995 │             5 │         │
-└─────────────────┴─────────┴───────────┴───────────────┴─────────┘
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Scenario        ┃ Samples ┃ Compliant ┃ Non-Compliant ┃ Accepted? ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ Nominal         │    1000 │      1000 │             0 │    PASS   │
+│ Ballistic       │    1000 │      1000 │             0 │    PASS   │
+│ Drogue-only     │    1000 │       998 │             2 │    PASS   │
+│ Premature main  │    1000 │       997 │             3 │    PASS   │
+├─────────────────┼─────────┼───────────┼───────────────┼───────────┤
+│ Total           │    4000 │      3995 │             5 │           │
+└─────────────────┴─────────┴───────────┴───────────────┴───────────┘
 
 ALL ACCEPTANCE CRITERIA MET
 
 Results saved to: ./results/20260620_093000/
 ```
-<!-- TODO: Update example output when working -->
 
-If `azimuth` or `inclination` is set to `"auto"` in `simulation.yaml`, the optimisation routine runs first, then the main Monte Carlo analysis proceeds using the optimised values.
+If `azimuth` or `inclination` is set to `"auto"`, the optimisation routine runs first, then the main Monte Carlo analysis proceeds with the optimised values.
+
+
+## Usage
+
+All commands are run from inside the project directory.
+
+### Running A Simulation
+
+```
+python . run <simulation.yaml>
+```
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--no-warn` | Suppress interactive blocking prompts for warnings (warnings still appear in the summary) |
+| `--no-popup` | Suppress automatic opening of generated figures at the end of execution (figures are still saved) |
+
+Example:
+
+```
+python . run example/simulation.yaml --no-warn --no-popup
+```
+
+### Replaying Samples
+
+Replay a specific sample:
+
+```
+python . replay results/<timestamp>/summary.yaml --seed 42 --run 3 --sample 117
+```
+
+Replay all non-compliant samples from a completed run:
+
+```
+python . replay results/<timestamp>/summary.yaml --non-compliant
+```
+
+### Warnings
+
+Warnings are raised when the simulator detects an unusual but valid configuration (e.g. a single aero table provided, disabling per-component mode). By default, warnings are **blocking** -- the simulator pauses and prompts you to acknowledge before continuing.
+
+```
+WARNING: Only one aeroplot .csv found. Per-component force and moment computation
+         disabled; forces will act at the whole-vehicle CP.
+Press Enter to continue, or Ctrl-C to abort.
+```
+
+Warnings always appear in the results summary regardless of `--no-warn`.
 
 
 ## Key Concepts
@@ -88,25 +153,28 @@ Every sample shares the same ascent. At apogee, the sample follows one of up to 
 
 Which scenarios are active depends on the vehicle's recovery configuration:
 
-| Recovery config | `nominal` | `ballistic` | `drogue_only` | `premature_main` |
-|----------------|-----------|-------------|---------------|-----------------|
-| Both drogue and main, `main.threshold` numeric | ✅ | ✅ | ✅ | ✅ |
-| Both drogue and main, `main.threshold` = `"apogee"` | ✅ | ✅ | ✅ | — |
-| Main only, `main.threshold` numeric | ✅ | ✅ | — | ✅ |
-| Main only, `main.threshold` = `"apogee"` | ✅ | ✅ | — | — |
-| No parachutes | ✅ | — | — | — |
+| Recovery Config | `nominal` | `ballistic` | `drogue_only` | `premature_main` |
+|-----------------|-----------|-------------|---------------|-----------------|
+| Both, `main.threshold` numeric | Y | Y | Y | Y |
+| Both, `main.threshold` = `"apogee"` | Y | Y | Y | -- |
+| Main only, `main.threshold` numeric | Y | Y | -- | Y |
+| Main only, `main.threshold` = `"apogee"` | Y | Y | -- | -- |
+| No parachutes | Y | -- | -- | -- |
 
-`premature_main` is suppressed when `main.threshold = "apogee"` because apogee deployment is the earliest possible deployment — no earlier failure mode exists.
+`premature_main` is suppressed when `main.threshold = "apogee"` because apogee deployment is already the earliest possible -- no earlier failure mode exists.
 
-Each active scenario is a separate run. Scenarios listed in `sea_check_scenarios` or `los_check_scenarios` that are not active for the current vehicle are silently skipped with a warning.
+Scenarios listed in `sea_check_scenarios` or `los_check_scenarios` that are not active for the current vehicle are silently skipped with a warning.
 
 ### Wind Profiles
 
-Wind data is supplied as a NumPy `.npz` file containing a pre-generated ensemble of perturbed wind profiles. The simulator has no knowledge of how the profiles were generated; all source-specific logic (EarthGRAM, GFS, ECMWF, radiosonde, perturbation modelling) is handled by a separate wind profile generator tool.
+The `wind_profiles` field in `simulation.yaml` can point to either a single `.npz` file or a directory of `.npz` files:
 
-The `.npz` file must contain:
+- **Single file** -- one analysis run using this wind ensemble.
+- **Directory** -- the full analysis runs independently for each `.npz` file, with output folders suffixed by filename (e.g. `results/20260620_093000-day1/`, `results/20260620_093000-day2/`). This allows a multi-day wind campaign to be assessed in a single invocation.
 
-| Array key | Shape | Description |
+The simulator has no knowledge of how the profiles were generated; all source-specific logic (EarthGRAM, GFS, ECMWF, radiosonde, perturbation modelling) is handled by a separate wind profile generator tool. Each `.npz` file must contain:
+
+| Array Key | Shape | Description |
 |-----------|-------|-------------|
 | `altitude_m` | `(M,)` | Altitude grid in metres AGL, monotonically increasing |
 | `wind_east_ms` | `(N, M)` | Eastward wind component per profile (m/s) |
@@ -114,72 +182,79 @@ The `.npz` file must contain:
 
 `N` must be >= `samples` under `monte_carlo` in `simulation.yaml`. Sample `i` uses profile `i`.
 
+### Surface Wind Override
+
+When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`, a user-specified surface wind replaces the lower portion of each wind profile. The override blends linearly into the profile wind between ground level and `blend_height_m`. Omit the section entirely to disable. Useful on launch day when you have an anemometer reading at the pad but are using forecast or balloon data for the upper atmosphere.
+
 
 ## Input Files
 
-Example input files are provided in `example/`. The values in those files are justified in the G2B2 safety case (see Background).
+Example input files are provided in `example/`. The values in those files are justified in the G2B2 safety case (see [Background](#background)).
+
+### `simulation.yaml`
+
+Main simulation configuration. All file paths are resolved relative to the directory containing `simulation.yaml`. See `example/simulation.yaml` for a fully annotated example with comments for every parameter.
+
+Key sections:
+
+| Section | Purpose |
+|---------|---------|
+| `vehicle` | Path to `vehicle.yaml` |
+| `site` | Launch site coordinates, danger area, coastline, observation stations, altitude ceiling |
+| `launch` | Rail geometry, azimuth/inclination (or `"auto"`), wind profiles, surface wind override |
+| `monte_carlo` | Sample count, seed, uncertainties (1-sigma), acceptance criteria |
+| `verification` | Optional reference trajectory comparison (see [Verification](#verification)) |
 
 ### `vehicle.yaml`
 
-Defines the vehicle's physical properties. All distances are in metres from the nosecone tip. All masses are in kg. All distances are in meters. Dry mass properties are derived automatically from the wet properties and propellant data — you do not need to specify them.
+Defines the vehicle's physical properties. All distances are in metres from the nosecone tip. All masses are in kg. Dry mass properties are derived automatically from the wet properties and propellant data.
 
-The aerodynamic reference area is defined as A_ref = pi * d**2 / 4, where d is the reference diameter. This is the same as RASAero.
+- **Reference area:** A_ref = pi * d^2 / 4 (same convention as RASAero)
+- **Reference length:** Rocket's overall length, used for Reynolds number calculation (same convention as RASAero)
 
-The rocket's overall length is used as the reference length for Reynolds number calculation. This is the same as RASAero.
+See `example/g2b2.yaml` for a fully annotated example.
 
-See `example/vehicle.yaml` for a fully annotated example.
+### Motor File (`.eng`)
 
-### `motor.eng`
+Standard RASP/RockSim `.eng` file. Downloadable from [thrustcurve.org](https://www.thrustcurve.org) for most certified motors. Referenced from `vehicle.yaml`.
 
-Standard RASP/RockSim `.eng` file. Downloadable from [thrustcurve.org](https://www.thrustcurve.org) for most certified motors.
+### Aerodynamic Tables
 
-### Aerodynamic tables (`aero_tables`)
+The `aero_tables` field in `vehicle.yaml` can point to either a single `.csv` file or a directory of `.csv` files:
 
-The `aero_tables` field in `vehicle.yaml` can point to either a **single CSV file** or a **directory of CSV files**:
+- **Single file** -- whole-vehicle mode. Per-component forces, pitch/yaw damping, and roll are disabled. A warning is issued.
+- **Directory** -- one `.csv` per aerodynamic component (nosecone, body tube, fin set, boattail, etc.), enabling full 6-DoF with per-component local angle-of-attack forces and moments, pitch/yaw damping, and roll torques.
 
-- **Single file** — treated as full-vehicle data; per-component force and moment computation is disabled (forces act at the whole-vehicle CP). A warning is issued.
-- **Directory** — one CSV per aerodynamic component (nosecone, body tube, fin set, boattail, etc.), enabling full 6-DoF simulation with per-component local angle-of-attack forces and moments, pitch/yaw damping, and roll torques.
-
-Each CSV must contain:
-
-```
-Mach, Reynolds, AoA_deg, CA, CN, CP_m
-```
-
-CP_m is in metres from the nosecone tip. The grid need not be uniformly spaced.
+Each `.csv` must contain columns: `Mach, Reynolds, AoA_deg, CA, CN, CP_m`. CP_m is in metres from the nosecone tip. The grid need not be uniformly spaced.
 
 ### `danger_area.geojson`
 
 A GeoJSON polygon defining the danger area footprint. **Coordinates are `[longitude, latitude]` per the GeoJSON spec.**
 
 Useful tools:
-- NATS Aeronautical Information Publication: [nats.aero/ais/aip](http://www.nats.aero/ais/aip) — for tracing danger area boundaries from official charts
-- Online GeoJSON editor: [geojson.io](https://geojson.io) — for drawing and editing polygons
+- [NATS AIP](http://www.nats.aero/ais/aip) -- for tracing danger area boundaries from official charts
+- [geojson.io](https://geojson.io) -- for drawing and editing polygons
 
 ### `coastline.geojson`
 
-Optional. A GeoJSON polygon delineating the **on-land** area. The direction of the compliance check is set by `coastline_mode` under `site` in `simulation.yaml`:
+Optional. A GeoJSON polygon delineating the **on-land** area. The compliance check direction is set by `coastline_mode` under `site` in `simulation.yaml`:
 
-| `coastline_mode` | Pass condition |
+| `coastline_mode` | Pass Condition |
 |-----------------|----------------|
-| `"sea"` (default) | Landing point is **outside** the polygon (at sea) |
+| `"sea"` | Landing point is **outside** the polygon (at sea) |
 | `"land"` | Landing point is **inside** the polygon (on land) |
 
-Omit the `coastline` key from the `site` section of `simulation.yaml` to disable the check entirely.
-
-### `simulation.yaml`
-
-Main simulation configuration. All file paths are resolved relative to the directory containing `simulation.yaml`. See `example/simulation.yaml` for a fully annotated example with comments for every parameter.
+Omit the `coastline` key from `simulation.yaml` to disable the check entirely.
 
 
 ## Acceptance Criteria
 
 A sample is compliant if **all** of the following hold:
 
-- **Stability and AoA** -- during powered and coasting flight, whenever AoA < `sm_aoa_threshold`: static margin >= `sm_subsonic_min` calibres below `sm_transition_mach` Mach, or >= `sm_supersonic_min` calibres at or above it. AoA must not exceed `aoa_max` at any point. Violation terminates the sample immediately. This is the same approach as RASAero, with the addition of a maximum AoA check.
-- **Containment** -- landing point inside the buffered danger area and peak altitude below the buffered altitude ceiling.
-- **Coastline check** -- if a coastline file is provided, the landing point must satisfy the configured `coastline_mode` (see `coastline.geojson` above).
-- **Observation coverage** -- landing within the configured radius of at least one observation station. Applied only to scenarios listed in `los_check_scenarios`.
+1. **Stability and AoA** -- during powered and coasting flight, whenever AoA < `sm_aoa_threshold`: static margin >= `sm_subsonic_min` calibres below `sm_transition_mach`, or >= `sm_supersonic_min` calibres at or above it. AoA must not exceed `aoa_max` at any point. Violation terminates the sample immediately.
+2. **Containment** -- landing point inside the buffered danger area and peak altitude below the buffered altitude ceiling.
+3. **Coastline** -- if a coastline file is provided, the landing point must satisfy the configured `coastline_mode`.
+4. **Observation coverage** -- landing within the configured radius of at least one observation station. Applied only to scenarios listed in `los_check_scenarios`.
 
 A run passes if >= `compliance_threshold` fraction of samples are compliant. All active scenario runs must pass.
 
@@ -188,90 +263,66 @@ A run passes if >= `compliance_threshold` fraction of samples are compliant. All
 
 When `azimuth` and/or `inclination` are set to `"auto"`, a four-phase optimisation routine runs before the main Monte Carlo analysis:
 
-1. **Phase 1 -- Inclination selection.** Runs deterministic 3-DoF (translation only) simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (to maximise apogee) whose ballistic landing point is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
+1. **Phase 1 -- Inclination Selection.** Deterministic 3-DoF simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (maximising apogee) whose ballistic landing is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
 
-2. **Phase 2 -- Azimuth narrowing.** Analytically filters integer azimuths in `azimuth_range` by estimating wind drift from the mean wind profile, discarding any azimuth whose estimated premature-main landing centroid falls outside the buffered danger area.
+2. **Phase 2 -- Azimuth Narrowing.** Analytically filters integer azimuths in `azimuth_range` using mean wind drift, discarding any whose estimated premature-main landing centroid falls outside the buffered danger area.
 
-3. **Phase 3 -- Azimuth optimisation.** Uses Bayesian optimisation (Gaussian Process with UCB acquisition) over the surviving azimuths. Each iteration runs premature-main Monte Carlo simulations with wind uncertainty to estimate the containment probability.
+3. **Phase 3 -- Azimuth Optimisation.** Bayesian optimisation (Gaussian Process, UCB acquisition) over surviving azimuths. Each iteration runs premature-main Monte Carlo simulations with wind uncertainty to estimate containment probability.
 
-4. **Phase 4 -- Candidate validation.** Validates the top candidate azimuths with the full uncertainty set (wind, impulse, launch angles, fin cant). Selects the azimuth with the greatest containment margin.
+4. **Phase 4 -- Candidate Validation.** Top candidate azimuths validated with the full uncertainty set (wind, impulse, launch angles, fin cant). Selects the azimuth with the greatest containment margin.
 
-If only inclination is `"auto"`, only Phase 1 runs. If only azimuth is `"auto"`, the provided inclination is used and Phases 2--4 run.
+If only inclination is `"auto"`, only Phase 1 runs. If only azimuth is `"auto"`, Phases 2--4 run with the provided inclination.
 
+### Tolerance Auto-Calibration
 
-## Surface Wind Override
-
-When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`, a user-specified surface wind replaces the lower portion of each wind profile. The override is specified as a speed (m/s) and bearing (degrees clockwise from North) and blends linearly into the profile wind between ground level and `blend_height_m`. Omit the `surface_wind` section entirely to disable the override. This is useful on launch day when you have an anemometer reading at the pad but are using forecast or balloon data for the upper atmosphere.
-
-
-## Multi-Day Wind
-
-`wind_profiles` in `simulation.yaml` can point to either a single `.npz` file or a directory of `.npz` files. When a directory is given, the simulator runs the full analysis independently for each `.npz` file found inside it. Output folders are suffixed with the wind profile filename to keep results from each day separate, e.g. `results/20260620_093000_day1/`, `results/20260620_093000_day2/`. This allows a multi-day wind campaign to be assessed in a single invocation.
-
-## Replaying Samples
-
-Every sample is deterministic given the master seed, run index, and sample index. No full trajectory data is stored.
-
-To replay a specific sample:
-
-```
-python . replay results/<timestamp>/summary.yaml --seed 42 --run 3 --sample 117
-```
-
-To automatically replay all non-compliant samples from a completed run:
-
-```
-python . replay results/<timestamp>/summary.yaml --non-compliant
-```
-
-Replay outputs a detailed time history (position, velocity, attitude, Mach, AoA, stability margin, damping coefficients, forces, moments) as a CSV, and opens two figures automatically. If multiple samples are replayed in one invocation, all trajectories are overlaid on the same figures:
-
-1. **3D isometric** — trajectory in NED space with the map overlaid on the ground plane, matching the `dispersion_plot.png` style. Coloured by descent scenario; black if the sample was terminated early due to a stability or AoA violation.
-2. **Altitude vs time** — full flight from rail exit to landing.
+At the start of execution, the simulator runs a small batch of samples at tight integrator tolerances, then re-runs at progressively looser settings. It automatically selects and reports the loosest tolerance that maintains acceptable output deviation.
 
 
 ## Output Files
 
-Results are saved to `./results/<timestamp>/`:
+Results are saved to `results/<timestamp>/`, relative to the directory containing `simulation.yaml`.
 
 | File | Contents |
 |------|----------|
 | `summary.yaml` | Run metadata, pass/fail, per-scenario statistics, optimisation diagnostics (if applicable) |
 | `samples.csv` | One row per sample with all compliance details and stochastic inputs |
 | `dispersion.csv` | Landing lat/lon for all samples |
-| `dispersion_plot.png` | Landing points colour-coded by scenario, with danger area, buffer, coastline, observation circles, and launch site overlaid |
+| `dispersion_plot.png` | Landing dispersion map (see below) |
 | `altitude_plot.png` | Mean altitude profile for each scenario |
 
+### Dispersion Plot
 
-## Tolerance Auto-Calibration
+<!-- TODO: Add screenshot of dispersion_plot.png once a run has been completed -->
+<!-- ![Dispersion plot](screenshots/dispersion_plot.png) -->
 
-At the start of execution, the simulator runs a small run of samples at very tight integrator tolerances, then re-runs at progressively looser settings. It automatically selects and reports the loosest tolerance that maintains acceptable output deviation.
+Landing points colour-coded by descent scenario, overlaid on an OS Maps base map with the danger area, buffer boundary, coastline, observation station coverage circles, map markers, and launch site.
 
-## Warnings
+### Altitude Plot
 
-Warnings are raised when the simulator detects a configuration that is unusual but not an error (e.g. a single aero table is provided, falling back to 3-DoF mode). By default, warnings are **blocking**: the simulator pauses and prompts you to acknowledge each one before continuing.
+<!-- TODO: Add screenshot of altitude_plot.png once a run has been completed -->
+<!-- ![Altitude plot](screenshots/altitude_plot.png) -->
 
-```
-WARNING: Only one aeroplot CSV found. Per-component force and moment computation disabled; forces will act at the whole-vehicle CP.
-Press Enter to continue, or Ctrl-C to abort.
-```
+Mean altitude profile vs. time for each active descent scenario.
 
-Warnings still appear in the run log and results summary regardless.
 
-To suppress the interactive prompt (e.g. in automated pipelines), pass `--no-warn`:
+## Replaying Samples
 
-```
-python . run example/simulation.yaml --no-warn
-```
+Every sample is deterministic given the master seed, run index, and sample index. No full trajectory data is stored -- any sample can be replayed exactly from these three values.
 
-Warnings remain in the log and summary; only the interactive pause is suppressed.
+Replay outputs a detailed time history (position, velocity, attitude, Mach, AoA, stability margin, damping coefficients, forces, moments) as a `.csv`, and opens figures automatically. If multiple samples are replayed, all trajectories are overlaid on the same figures:
+
+<!-- TODO: Add screenshot of replay figures once replay is working -->
+
+1. **3D Isometric** -- trajectory in NED space with the map overlaid on the ground plane, matching the dispersion plot style. Coloured by descent scenario; pink if terminated early due to a stability or AoA violation.
+2. **Plan View** -- same as above, viewed from directly above.
+3. **Altitude vs. Time** -- full flight from rail exit to landing.
 
 
 ## Verification
 
 Before relying on the simulator for a safety case, verify it against an independent tool.
 
-**Unit tests:**
+### Unit Tests
 
 ```
 python -m pytest verification/
@@ -279,25 +330,25 @@ python -m pytest verification/
 
 Checks ISA against published tables, quaternion maths, launch rail exit velocity, terminal descent, aero interpolation and per-component local AoA damping, the `.eng` parser, AoA computation, and wind `.npz` loading.
 
-**Trajectory verification tool:**
+### Trajectory Comparison Tool
 
-Before the main MC run, you can supply a reference CSV from any other flight simulator for a single-trajectory comparison. Add the path under `verification` in `simulation.yaml`.
+An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, mass. Column names are matched case-insensitively; missing columns are skipped.
 
-The reference CSV must contain columns for time and at least one of: altitude, Mach, stability margin, mass, lateral inertia. Column names are matched case-insensitively; any column not present is skipped.
+<!-- TODO: Add screenshot of verification plot once verification is working -->
+<!-- ![Verification plot](screenshots/verification_plot.png) -->
 
-The tool plots each quantity with the reference in grey and the simulator output overlaid. If all quantities are within the configured tolerance bands, the output is rendered in green and the run continues automatically. If any quantity falls outside tolerance, the output is rendered in red, the figure is opened for inspection, and you are asked whether to proceed.
+Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail). Pass/fail is printed to the console and recorded in `summary.yaml`. On failure, the figure opens for inspection and you are prompted whether to continue.
 
-Pass/fail is also printed to the console and recorded in `summary.yaml`.
 
 ## Operational Workflow
 
 A typical campaign uses the simulator at three stages:
 
-**Safety case (months before)** -- Run with climatological wind profiles representing the full spread of weather for the planned launch month. This forms the basis for the safety case submitted to the CAA.
+1. **Safety Case (Months Before)** -- Run with climatological wind profiles representing the full spread of weather for the planned launch month. This forms the basis for the safety case submitted to the CAA.
 
-**Operations planning (days before)** -- Run with forecast-derived wind profiles (GFS, ECMWF, or similar). If the analysis fails, conditions may not be suitable for launch.
+2. **Operations Planning (Days Before)** -- Run with forecast-derived wind profiles (GFS, ECMWF, or similar). If the analysis fails, conditions may not be suitable for launch.
 
-**Launch day go/no-go (hours before)** -- Run with radiosonde-derived wind profiles from the launch site. Enable the surface wind override with the current anemometer reading. The launch director uses this result alongside all other go/no-go criteria to make the final call. Re-run with fresh data if conditions change.
+3. **Launch Day Go/No-Go (Hours Before)** -- Run with radiosonde-derived wind profiles from the launch site. Enable the surface wind override with the current anemometer reading. The launch director uses this result alongside all other go/no-go criteria to make the final call. Re-run with fresh data if conditions change.
 
 
 ## Contact
@@ -313,6 +364,7 @@ For questions, bug reports, or contributions:
 
 
 ## References
+
 <!-- TODO: Check we've got all the references we want -->
 - Mandell, G. K., Caporaso, G., and Bengen, W. P. (1973). *Topics in Advanced Model Rocketry*. MIT Press.
 - Barrowman, J. S. (1967). *The Practical Calculation of the Aerodynamic Characteristics of Slender Finned Vehicles*. MSc thesis, The Catholic University of America.
