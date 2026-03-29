@@ -1,0 +1,87 @@
+metadata:
+  timestamp: '2026-03-29T21:33:30.020035+00:00'
+  config: C:\Users\me\University of Leeds\Leeds University Rocketry Association (LURA)
+    - Documents (1)\1. Engineering\2. Gryphon II Block II\team-member-space\Toby\leeds-flight-simulator\simulations\g2b2-safety-case\cape-wrath.yaml
+  warnings:
+  - Single aeroplot CSV passed directly (aero_table.csv). Treating as whole-vehicle
+    data. Roll torques and pitch/yaw damping will not be computed.
+  - Reference trajectory CSV is assumed to use SI units (metres, seconds, calibres).
+    There is no unit sanitisation.
+  - "Azimuth and inclination are fixed \u2014 optimisation skipped."
+scenarios:
+  ballistic:
+    compliant: 0
+    non_compliant: 1000
+    passed: false
+    apogee_m:
+      mean: 11052.313565853838
+      min: 8378.57593177819
+      max: 13781.145398099123
+    landing_distance_m:
+      mean: 3064.907620261943
+      min: 671.963619257881
+      max: 6234.644606539577
+    peak_mach:
+      mean: 2.4301466815773582
+    max_aoa_deg:
+      mean: 12.228202930979753
+    stability_margin:
+      subsonic_min: 2.6557130565048985
+      supersonic_min: 3.5967738194089662
+  drogue_only:
+    compliant: 0
+    non_compliant: 1000
+    passed: false
+    apogee_m:
+      mean: 11076.455284604695
+      min: 8320.876751699092
+      max: 15344.930008433334
+    landing_distance_m:
+      mean: 3944.679863847548
+      min: 1157.9362882430432
+      max: 6835.135052100843
+    peak_mach:
+      mean: 2.433787846522095
+    max_aoa_deg:
+      mean: 12.228165172467023
+    stability_margin:
+      subsonic_min: 2.651530214022552
+      supersonic_min: 3.5321979485361195
+  premature_main:
+    compliant: 0
+    non_compliant: 1000
+    passed: false
+    apogee_m:
+      mean: 11048.656726689367
+      min: 8521.055181952448
+      max: 13992.849259312206
+    landing_distance_m:
+      mean: 23893.108415620238
+      min: 9154.053223311645
+      max: 41009.599865244636
+    peak_mach:
+      mean: 2.42854006647408
+    max_aoa_deg:
+      mean: 12.218563590095066
+    stability_margin:
+      subsonic_min: 2.6552695071800554
+      supersonic_min: 3.5947615753675417
+  nominal:
+    compliant: 0
+    non_compliant: 1000
+    passed: false
+    apogee_m:
+      mean: 11129.61338589093
+      min: 8236.117346223613
+      max: 14316.4187618652
+    landing_distance_m:
+      mean: 3998.2817496636585
+      min: 1577.3127782035601
+      max: 6804.682976030863
+    peak_mach:
+      mean: 2.443285602009483
+    max_aoa_deg:
+      mean: 12.21825312190692
+    stability_margin:
+      subsonic_min: 2.654528216729099
+      supersonic_min: 3.570598128054099
