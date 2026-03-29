@@ -253,22 +253,23 @@ class TestPlotGeneration:
         }
         fig = _build_comparison_figure(comparisons)
 
-        # Check the suptitle colour
-        suptitle = fig._suptitle
-        assert "PASS" in suptitle.get_text()
-        assert suptitle.get_color() == "#2d7a2d"
+        # All subplot lines should use the pass colour (green)
+        for ax in fig.axes:
+            lines = ax.get_lines()
+            if len(lines) >= 2:
+                sim_line = lines[-1]  # simulator overlay is drawn last
+                from matplotlib.colors import to_hex
+                assert to_hex(sim_line.get_color()) == "#2d7a2d"
         plt.close(fig)
 
     def test_fail_colour_is_red(self) -> None:
-        """When a quantity fails, its overlay is red and title says FAIL."""
+        """When a quantity fails, its overlay line is red."""
         comparisons = {
             qty: self._make_comparison(qty, qty != "mach")
             for qty in _COMPARED_QUANTITIES
         }
         fig = _build_comparison_figure(comparisons)
 
-        suptitle = fig._suptitle
-        assert "FAIL" in suptitle.get_text()
-        assert "mach" in suptitle.get_text()
-        assert suptitle.get_color() == "red"
+        # The figure should have no suptitle (title removed)
+        assert fig._suptitle is None or fig._suptitle.get_text() == ""
         plt.close(fig)

@@ -24,7 +24,7 @@ import yaml
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class ObservationStation:
+class MonitourStation:
     name: str
     latitude: float   # degrees
     longitude: float  # degrees
@@ -49,13 +49,13 @@ class SiteConfig:
     ballistic_exclusion_radius: float              # metres — minimum ballistic landing distance
                                                    # from launch site; used during inclination
                                                    # optimisation (§13.2)
-    launch_observation_radius: float               # metres — radius of the automatic launch site
-                                                   # observation station added to every LOS check
+    launch_monitour_radius: float               # metres — radius of the automatic monitour
+                                                   # station at the launch site
     altitude_ceiling: float                        # metres
     danger_area: Path
     coastline: Path | None                         # None → sea-landing check disabled
     coastline_mode: str                            # "sea" or "land" (§14.2)
-    observation_stations: tuple[ObservationStation, ...]
+    monitour_stations: tuple[MonitourStation, ...]
     map_markers: tuple[MapMarker, ...]
 
 
@@ -102,7 +102,7 @@ class AcceptanceConfig:
     aoa_max: float                     # degrees
     sm_aoa_threshold: float            # degrees: SM check applies when AoA < this
     sea_check_scenarios: tuple[str, ...]  # scenarios checked for sea landing
-    los_check_scenarios: tuple[str, ...]  # scenarios checked for observation-station LOS
+    monitour_check_scenarios: tuple[str, ...]  # scenarios checked for monitour station coverage
 
 
 @dataclass(frozen=True)
@@ -265,7 +265,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
 
     # -- site
     site_raw = raw["site"]
-    stations_raw = site_raw.get("observation_stations") or []
+    stations_raw = site_raw.get("monitour_stations") or []
     markers_raw = site_raw.get("map_markers") or []
     coastline_raw = site_raw.get("coastline")
     coastline: Path | None = None if coastline_raw is None else _resolve(coastline_raw)
@@ -279,13 +279,13 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         latitude=float(site_raw["latitude"]),
         longitude=float(site_raw["longitude"]),
         ballistic_exclusion_radius=float(site_raw["ballistic_exclusion_radius"]),
-        launch_observation_radius=float(site_raw["launch_observation_radius"]),
+        launch_monitour_radius=float(site_raw["launch_monitour_radius"]),
         altitude_ceiling=float(site_raw["altitude_ceiling"]),
         danger_area=_resolve(site_raw["danger_area"]),
         coastline=coastline,
         coastline_mode=coastline_mode_raw,
-        observation_stations=tuple(
-            ObservationStation(
+        monitour_stations=tuple(
+            MonitourStation(
                 name=str(s["name"]),
                 latitude=float(s["latitude"]),
                 longitude=float(s["longitude"]),
@@ -378,8 +378,8 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             sea_check_scenarios=tuple(
                 str(s) for s in (acc_raw.get("sea_check_scenarios") or [])
             ),
-            los_check_scenarios=tuple(
-                str(s) for s in (acc_raw.get("los_check_scenarios") or [])
+            monitour_check_scenarios=tuple(
+                str(s) for s in (acc_raw.get("monitour_check_scenarios") or [])
             ),
         ),
     )

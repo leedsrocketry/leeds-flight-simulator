@@ -9,9 +9,9 @@ site:
                                     # from the launch site; used during inclination optimisation;
                                     # has no effect when inclination is not "auto"
 
-  launch_observation_radius: 5000   # metres — radius of the automatic observation station
-                                    # placed at the launch site; added to every LOS check in
-                                    # addition to any stations listed below
+  launch_monitour_radius: 5000      # metres — radius of the automatic monitour station
+                                    # placed at the launch site; added to every monitour check
+                                    # in addition to any stations listed below
 
   altitude_ceiling: 16764           # metres — danger area ceiling;
 
@@ -26,8 +26,8 @@ site:
                                     #   "land"           — landing must be inside the polygon
                                     #                      (on land)
 
-  observation_stations:             # additional fixed observation stations for LOS checks;
-                                    # the launch site is added automatically (see launch_observation_radius)
+  monitour_stations:                # additional fixed monitour stations;
+                                    # the launch site is added automatically (see launch_monitour_radius)
     - name: "MOD Range Control"
       latitude: 58.60215            # degrees
       longitude: -4.77592           # degrees
@@ -40,10 +40,10 @@ site:
 
 launch:
   rail:
-    azimuth: "auto"               # degrees clockwise from North (0–360), or "auto" to optimise
+    azimuth: 0               # degrees clockwise from North (0–360), or "auto" to optimise
     azimuth_range: [-90, 90]      # [min, max] integer search range for azimuth optimisation;
                                   # required when azimuth is "auto"; ignored otherwise
-    inclination: "auto"           # degrees from horizontal (0 = horizontal, 90 = vertical),
+    inclination: 80           # degrees from horizontal (0 = horizontal, 90 = vertical),
                                   # or "auto" to optimise
     inclination_range: [85, 90]   # [min, max] integer search range for inclination optimisation;
                                   # required when inclination is "auto"; ignored otherwise
@@ -95,9 +95,9 @@ monte_carlo:
       - drogue_only
       - premature_main
 
-    # Scenarios to check for observation station coverage (LOS check).
+    # Scenarios to check for monitour station coverage.
     # Scenarios not active for the current vehicle configuration are skipped with a warning.
-    los_check_scenarios:
+    monitour_check_scenarios:
       - ballistic
       - drogue_only
 

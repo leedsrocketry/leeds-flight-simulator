@@ -15,7 +15,7 @@ from optimisation import OptimisationResult
 from config import (
     SimulationConfig, SiteConfig, LaunchConfig, RailConfig,
     MonteCarloConfig, UncertaintiesConfig, AcceptanceConfig,
-    ObservationStation, MapMarker,
+    MonitourStation, MapMarker,
 )
 from outputs import (
     create_results_dir,
@@ -152,13 +152,13 @@ def _make_sim_cfg(tmp_path: Path) -> SimulationConfig:
             latitude=58.6105,
             longitude=-4.9435,
             ballistic_exclusion_radius=500.0,
-            launch_observation_radius=200.0,
+            launch_monitour_radius=200.0,
             altitude_ceiling=16764.0,
             danger_area=geojson_path,
             coastline=None,
             coastline_mode="sea",
-            observation_stations=(
-                ObservationStation(
+            monitour_stations=(
+                MonitourStation(
                     name="Visibility Coverage",
                     latitude=58.6105,
                     longitude=-4.9435,
@@ -198,7 +198,7 @@ def _make_sim_cfg(tmp_path: Path) -> SimulationConfig:
                 aoa_max=15.0,
                 sm_aoa_threshold=5.0,
                 sea_check_scenarios=(),
-                los_check_scenarios=(),
+                monitour_check_scenarios=(),
             ),
         ),
         verification=None,
@@ -269,7 +269,7 @@ class TestCreateResultsDir:
 class TestWriteSamplesCsv:
     def test_basic_columns(self, tmp_path: Path):
         results = [_make_sample(i) for i in range(3)]
-        path = write_samples_csv(results, tmp_path, has_coastline=False, has_coverage=False)
+        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitour=False)
         assert path.exists()
         with open(path) as f:
             reader = csv.reader(f)
@@ -277,54 +277,61 @@ class TestWriteSamplesCsv:
         assert "sample_id" in header
         assert "scenario" in header
         assert "fin_cant_deg" in header
-        assert "landing_at_sea" not in header
-        assert "in_coverage" not in header
+        assert "coastline_compliant" not in header
+        assert "monitour_compliant" not in header
+        assert "compliant" not in header
+        # Removed columns should not appear
+        assert "wind_profile_index" not in header
+        assert "peak_altitude_ft" not in header
 
     def test_coastline_column_present(self, tmp_path: Path):
         results = [_make_sample(0, landing_at_sea=False)]
-        path = write_samples_csv(results, tmp_path, has_coastline=True, has_coverage=False)
+        path = write_samples_csv(results, tmp_path, has_coastline=True, has_monitour=False)
         with open(path) as f:
             header = next(csv.reader(f))
-        assert "landing_at_sea" in header
+        assert "coastline_compliant" in header
 
-    def test_coverage_column_present(self, tmp_path: Path):
+    def test_monitour_column_present(self, tmp_path: Path):
         results = [_make_sample(0, in_coverage=True)]
-        path = write_samples_csv(results, tmp_path, has_coastline=False, has_coverage=True)
+        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitour=True)
         with open(path) as f:
             header = next(csv.reader(f))
-        assert "in_coverage" in header
+        assert "monitour_compliant" in header
 
     def test_row_count(self, tmp_path: Path):
         n = 5
         results = [_make_sample(i) for i in range(n)]
-        path = write_samples_csv(results, tmp_path, has_coastline=False, has_coverage=False)
+        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitour=False)
         with open(path) as f:
             rows = list(csv.reader(f))
         assert len(rows) == n + 1  # header + data
 
     def test_column_order_matches_spec(self, tmp_path: Path):
-        """Verify all columns appear and the first few are in the right order."""
+        """Verify columns: inputs → flight time → compliance → values → locations."""
         results = [_make_sample(0, landing_at_sea=True, in_coverage=True)]
-        path = write_samples_csv(results, tmp_path, has_coastline=True, has_coverage=True)
+        path = write_samples_csv(results, tmp_path, has_coastline=True, has_monitour=True)
         with open(path) as f:
             header = next(csv.reader(f))
-        # Check spec ordering for the first columns
+        # Inputs first
         assert header[0] == "sample_id"
         assert header[1] == "scenario"
-        assert header[2] == "compliant"
-        assert header[3] == "apogee_m"
-        # Check last column
-        assert header[-1] == "fin_cant_deg"
+        assert header[2] == "azimuth_deg"
+        # Flight time before compliance columns
+        ft_idx = header.index("flight_time_s")
+        stab_idx = header.index("stability_compliant")
+        assert ft_idx < stab_idx
+        # Locations last
+        assert header[-1] == "apogee_lon"
 
     def test_bool_values_written(self, tmp_path: Path):
         results = [_make_sample(0, compliant=True)]
-        path = write_samples_csv(results, tmp_path, has_coastline=False, has_coverage=False)
+        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitour=False)
         with open(path) as f:
             reader = csv.reader(f)
-            next(reader)  # skip header
+            header = next(reader)
             row = next(reader)
-        # compliant is column index 2
-        assert row[2] == "True"
+        stab_idx = header.index("stability_compliant")
+        assert row[stab_idx] == "True"
 
 
 # ---------------------------------------------------------------------------
@@ -339,11 +346,10 @@ class TestWriteSummaryYaml:
         assert path.exists()
         with open(path) as f:
             data = yaml.safe_load(f)
-        assert "run_details" in data
-        assert "azimuth_inclination" in data
-        assert "scenario_results" in data
-        assert "overall" in data
-        assert "warnings" in data
+        assert "metadata" in data
+        assert "scenarios" in data
+        assert "warnings" in data["metadata"]
+        assert "config" in data["metadata"]
 
     def test_no_optimisation(self, tmp_path: Path):
         mc = _make_mc_result()
@@ -351,8 +357,7 @@ class TestWriteSummaryYaml:
         path = write_summary_yaml(mc, sim_cfg, None, tmp_path)
         with open(path) as f:
             data = yaml.safe_load(f)
-        assert data["azimuth_inclination"]["optimisation_run"] is False
-        assert "optimisation_results" not in data
+        assert "optimisation" not in data
 
     def test_with_optimisation(self, tmp_path: Path):
         mc = _make_mc_result()
@@ -361,11 +366,12 @@ class TestWriteSummaryYaml:
         path = write_summary_yaml(mc, sim_cfg, opt, tmp_path)
         with open(path) as f:
             data = yaml.safe_load(f)
-        assert data["azimuth_inclination"]["optimisation_run"] is True
-        opt_data = data["optimisation_results"]
+        opt_data = data["optimisation"]
         assert opt_data["selected_azimuth"] == 315
         assert opt_data["selected_inclination"] == 85
         assert len(opt_data["phase2_feasible_azimuths"]) == 3
+        assert "azimuth_mean" in opt_data
+        assert "inclination_mean" in opt_data
 
     def test_scenario_stats(self, tmp_path: Path):
         mc = _make_mc_result(scenarios=["nominal"])
@@ -373,39 +379,29 @@ class TestWriteSummaryYaml:
         path = write_summary_yaml(mc, sim_cfg, None, tmp_path)
         with open(path) as f:
             data = yaml.safe_load(f)
-        sc = data["scenario_results"]["nominal"]
-        assert "samples" in sc
+        sc = data["scenarios"]["nominal"]
         assert "compliant" in sc
         assert "apogee_m" in sc
         assert "mean" in sc["apogee_m"]
         assert "stability_margin" in sc
         assert "subsonic_min" in sc["stability_margin"]
 
-    def test_overall_totals(self, tmp_path: Path):
-        mc = _make_mc_result(scenarios=["nominal", "ballistic"])
+    def test_warnings_from_all_warnings(self, tmp_path: Path):
+        mc = _make_mc_result()
         sim_cfg = _make_sim_cfg(tmp_path)
-        path = write_summary_yaml(mc, sim_cfg, None, tmp_path)
+        all_w = ["cli warning", "test warning"]
+        path = write_summary_yaml(mc, sim_cfg, None, tmp_path, all_warnings=all_w)
         with open(path) as f:
             data = yaml.safe_load(f)
-        overall = data["overall"]
-        assert overall["all_passed"] is True
-        assert overall["total_samples"] == 20  # 10 per scenario
+        assert data["metadata"]["warnings"] == ["cli warning", "test warning"]
 
-    def test_warnings_preserved(self, tmp_path: Path):
+    def test_warnings_fallback_to_mc(self, tmp_path: Path):
         mc = _make_mc_result()
         sim_cfg = _make_sim_cfg(tmp_path)
         path = write_summary_yaml(mc, sim_cfg, None, tmp_path)
         with open(path) as f:
             data = yaml.safe_load(f)
-        assert "test warning" in data["warnings"]
-
-    def test_master_seed(self, tmp_path: Path):
-        mc = _make_mc_result()
-        sim_cfg = _make_sim_cfg(tmp_path)
-        path = write_summary_yaml(mc, sim_cfg, None, tmp_path)
-        with open(path) as f:
-            data = yaml.safe_load(f)
-        assert data["run_details"]["master_seed"] == 42
+        assert "test warning" in data["metadata"]["warnings"]
 
 
 # ---------------------------------------------------------------------------

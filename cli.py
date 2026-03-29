@@ -469,16 +469,17 @@ def run(config_path: Path, no_popup: bool) -> None:
         results_dir = create_results_dir(config_path, wind_suffix, _clear=False)
 
         has_coastline = sim_cfg.site.coastline is not None
-        has_coverage = (
-            bool(sim_cfg.site.observation_stations)
-            or sim_cfg.site.launch_observation_radius > 0
+        has_monitour = (
+            bool(sim_cfg.site.monitour_stations)
+            or sim_cfg.site.launch_monitour_radius > 0
         )
 
         display.update_status("Writing results...")
-        write_samples_csv(mc_result.all_results, results_dir, has_coastline, has_coverage)
+        write_samples_csv(mc_result.all_results, results_dir, has_coastline, has_monitour)
         write_summary_yaml(
             mc_result, sim_cfg, opt_result, results_dir,
             simulation_yaml_path=config_path,
+            all_warnings=all_warnings,
         )
         alt_path = save_altitude_plot(altitude_data, burnout_time, results_dir)
         disp_path = save_dispersion_plot(
@@ -519,13 +520,7 @@ def replay(
     with open(summary_path, encoding="utf-8") as f:
         summary = yaml.safe_load(f)
 
-    sim_config_path = Path(summary["run_details"]["simulation_config"]).resolve()
-    master_seed = int(summary["run_details"]["master_seed"])
-    azimuth_mean = float(summary["azimuth_inclination"]["azimuth_mean"])
-    inclination_mean = float(summary["azimuth_inclination"]["inclination_mean"])
-
-    if seed is not None:
-        master_seed = seed
+    sim_config_path = Path(summary["metadata"]["config"]).resolve()
 
     # --- Validate options ---
     single_replay = run_index is not None and sample_index is not None
@@ -539,6 +534,19 @@ def replay(
     # --- Load config and models ---
     console.print("[bold]Loading configuration and models...[/]")
     sim_cfg = load_simulation_config(sim_config_path)
+
+    # Seed from CLI override or simulation config
+    master_seed = seed if seed is not None else sim_cfg.monte_carlo.seed
+
+    # Azimuth/inclination from optimisation results if available, else config
+    opt_section = summary.get("optimisation")
+    if opt_section is not None:
+        azimuth_mean = float(opt_section["azimuth_mean"])
+        inclination_mean = float(opt_section["inclination_mean"])
+    else:
+        rail = sim_cfg.launch.rail
+        azimuth_mean = float(rail.azimuth)
+        inclination_mean = float(rail.inclination)
     vehicle_cfg, motor_model, aero_model, wind_ensemble = load_all_models(sim_cfg)
 
     # --- Replay ---

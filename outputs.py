@@ -38,7 +38,6 @@ from config import SimulationConfig, SiteConfig
 from geography import (
     _lonlat_to_ned,
     load_polygon_ned,
-    buffer_danger_area,
     polygon_to_arrays,
     R_EARTH,
 )
@@ -138,7 +137,7 @@ def write_samples_csv(
     results: list[SampleResult],
     output_dir: Path,
     has_coastline: bool,
-    has_coverage: bool,
+    has_monitour: bool,
 ) -> Path:
     """Write per-sample results to ``samples.csv``.
 
@@ -150,7 +149,7 @@ def write_samples_csv(
         Directory to write the CSV into.
     has_coastline : bool
         Whether to include the ``landing_at_sea`` column.
-    has_coverage : bool
+    has_monitour : bool
         Whether to include the ``in_coverage`` column.
 
     Returns
@@ -158,23 +157,24 @@ def write_samples_csv(
     Path
         Path to the written CSV file.
     """
-    # Build header
+    # Build header — ordered: inputs → flight time → compliance → values → locations
     header = [
-        "sample_id", "scenario", "compliant",
-        "apogee_m", "apogee_lat", "apogee_lon",
-        "landing_lat", "landing_lon",
+        "sample_id", "scenario",
+        "azimuth_deg", "inclination_deg", "fin_cant_deg", "impulse_factor",
+        "flight_time_s",
     ]
+    # Compliance columns (TRUE = compliant in every case)
     if has_coastline:
-        header.append("landing_at_sea")
-    header.extend(["in_buffer", "below_ceiling"])
-    if has_coverage:
-        header.append("in_coverage")
+        header.append("coastline_compliant")
+    header.extend(["danger_area_footprint_compliant", "danger_area_ceiling_compliant"])
+    if has_monitour:
+        header.append("monitour_compliant")
     header.extend([
         "stability_compliant",
         "min_SM_subsonic", "min_SM_supersonic_cal",
-        "max_AoA_deg", "peak_mach", "peak_altitude_ft", "flight_time_s",
-        "wind_profile_index", "impulse_factor",
-        "azimuth_deg", "inclination_deg", "fin_cant_deg",
+        "max_AoA_deg", "max_mach", "apogee_m",
+        "landing_lat", "landing_lon",
+        "apogee_lat", "apogee_lon",
     ])
 
     csv_path = output_dir / "samples.csv"
@@ -183,22 +183,22 @@ def write_samples_csv(
         writer.writerow(header)
         for r in results:
             row: list = [
-                r.sample_id, r.scenario, r.compliant,
-                r.apogee_m, r.apogee_lat, r.apogee_lon,
-                r.landing_lat, r.landing_lon,
+                r.sample_id, r.scenario,
+                r.azimuth_deg, r.inclination_deg, r.fin_cant_deg,
+                r.impulse_factor,
+                r.flight_time_s,
             ]
             if has_coastline:
                 row.append(r.landing_at_sea)
             row.extend([r.in_buffer, r.below_ceiling])
-            if has_coverage:
+            if has_monitour:
                 row.append(r.in_coverage)
             row.extend([
                 r.stability_compliant,
                 r.min_sm_subsonic, r.min_sm_supersonic,
-                r.max_aoa_deg, r.peak_mach, r.peak_altitude_ft,
-                r.flight_time_s,
-                r.wind_profile_index, r.impulse_factor,
-                r.azimuth_deg, r.inclination_deg, r.fin_cant_deg,
+                r.max_aoa_deg, r.peak_mach, r.apogee_m,
+                r.landing_lat, r.landing_lon,
+                r.apogee_lat, r.apogee_lon,
             ])
             writer.writerow(row)
 
@@ -216,6 +216,7 @@ def write_summary_yaml(
     output_dir: Path,
     *,
     simulation_yaml_path: Path | None = None,
+    all_warnings: list[str] | None = None,
 ) -> Path:
     """Write the run summary to ``summary.yaml``.
 
@@ -232,37 +233,35 @@ def write_summary_yaml(
     simulation_yaml_path : Path or None
         Absolute path to the simulation YAML file, recorded in the summary
         so that ``replay`` can locate the original configuration.
+    all_warnings : list[str] or None
+        All warnings captured during the run (CLI + MC).  Falls back to
+        ``mc_result.warnings`` if not provided.
 
     Returns
     -------
     Path
         Path to the written YAML file.
     """
+    warnings_list = all_warnings if all_warnings is not None else mc_result.warnings
     summary: dict = {}
 
-    # run_details
+    # metadata
     config_path_str = (
         str(simulation_yaml_path)
         if simulation_yaml_path is not None
         else str(sim_cfg.vehicle.parent / sim_cfg.vehicle.name)
     )
-    summary["run_details"] = {
+    summary["metadata"] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "simulation_config": config_path_str,
-        "master_seed": sim_cfg.monte_carlo.seed,
+        "config": config_path_str,
+        "warnings": warnings_list,
     }
 
-    # azimuth_inclination
-    optimisation_run = opt_result is not None
-    summary["azimuth_inclination"] = {
-        "azimuth_mean": float(mc_result.azimuth_mean),
-        "inclination_mean": float(mc_result.inclination_mean),
-        "optimisation_run": optimisation_run,
-    }
-
-    # optimisation_results
+    # optimisation (only included when optimisation was performed)
     if opt_result is not None:
-        summary["optimisation_results"] = {
+        summary["optimisation"] = {
+            "azimuth_mean": float(mc_result.azimuth_mean),
+            "inclination_mean": float(mc_result.inclination_mean),
             "selected_azimuth": opt_result.selected_azimuth,
             "selected_inclination": opt_result.selected_inclination,
             "phase1_selected_inclination": opt_result.phase1_selected,
@@ -281,55 +280,35 @@ def write_summary_yaml(
             },
         }
 
-    # scenario_results
-    scenario_results: dict = {}
-    total_samples = 0
-    total_compliant = 0
+    # scenarios (renamed from scenario_results; removed samples counts and std fields)
+    scenarios: dict = {}
     for name, stats in mc_result.scenario_stats.items():
-        total_samples += stats.n_samples
-        total_compliant += stats.n_compliant
-        scenario_results[name] = {
-            "samples": stats.n_samples,
+        scenarios[name] = {
             "compliant": stats.n_compliant,
             "non_compliant": stats.n_non_compliant,
             "passed": stats.passed,
             "apogee_m": {
                 "mean": float(stats.apogee_mean),
-                "std": float(stats.apogee_std),
                 "min": float(stats.apogee_min),
                 "max": float(stats.apogee_max),
             },
             "landing_distance_m": {
                 "mean": float(stats.landing_dist_mean),
-                "std": float(stats.landing_dist_std),
                 "min": float(stats.landing_dist_min),
                 "max": float(stats.landing_dist_max),
             },
             "peak_mach": {
                 "mean": float(stats.peak_mach_mean),
-                "std": float(stats.peak_mach_std),
             },
             "max_aoa_deg": {
                 "mean": float(stats.max_aoa_mean),
-                "std": float(stats.max_aoa_std),
             },
             "stability_margin": {
                 "subsonic_min": float(stats.sm_subsonic_min),
                 "supersonic_min": float(stats.sm_supersonic_min),
             },
         }
-    summary["scenario_results"] = scenario_results
-
-    # overall
-    summary["overall"] = {
-        "all_passed": mc_result.all_passed,
-        "total_samples": total_samples,
-        "total_compliant": total_compliant,
-        "total_non_compliant": total_samples - total_compliant,
-    }
-
-    # warnings
-    summary["warnings"] = mc_result.warnings
+    summary["scenarios"] = scenarios
 
     yaml_path = output_dir / "summary.yaml"
     with open(yaml_path, "w") as f:
@@ -710,8 +689,16 @@ def save_dispersion_plot(
     extent_e = max(extent_e, margin)
     extent_w = min(extent_w, -margin)
 
-    # Expand to include observation stations
-    for obs in site.observation_stations:
+    # Expand to include full danger area boundary
+    danger_poly_extent = load_polygon_ned(site.danger_area, lat0, lon0)
+    da_ext_e, da_ext_n = polygon_to_arrays(danger_poly_extent)
+    extent_n = max(extent_n, np.max(da_ext_n) / 1000.0 + margin)
+    extent_s = min(extent_s, np.min(da_ext_n) / 1000.0 - margin)
+    extent_e = max(extent_e, np.max(da_ext_e) / 1000.0 + margin)
+    extent_w = min(extent_w, np.min(da_ext_e) / 1000.0 - margin)
+
+    # Expand to include monitour stations
+    for obs in site.monitour_stations:
         ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
         obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
         r_km = obs.radius / 1000.0
@@ -719,6 +706,13 @@ def save_dispersion_plot(
         extent_s = min(extent_s, obs_n_km - r_km - margin)
         extent_e = max(extent_e, obs_e_km + r_km + margin)
         extent_w = min(extent_w, obs_e_km - r_km - margin)
+
+    # Expand to include launch site monitour circle
+    ls_obs_r_km = site.launch_monitour_radius / 1000.0
+    extent_n = max(extent_n, ls_obs_r_km + margin)
+    extent_s = min(extent_s, -ls_obs_r_km - margin)
+    extent_e = max(extent_e, ls_obs_r_km + margin)
+    extent_w = min(extent_w, -ls_obs_r_km - margin)
 
     grid_spacing_km = 5.0
 
@@ -741,29 +735,34 @@ def save_dispersion_plot(
     # --- Danger area + buffer ---
     danger_poly = load_polygon_ned(site.danger_area, lat0, lon0)
     buffer_dist = sim_cfg.monte_carlo.acceptance.buffer_distance
-    buffered_poly = buffer_danger_area(danger_poly, buffer_dist)
 
-    # Convert polygons to Web Mercator for plotting
+    # Convert danger area to Web Mercator for plotting
     da_e, da_n = polygon_to_arrays(danger_poly)
-    buf_e, buf_n = polygon_to_arrays(buffered_poly)
-
-    # Danger area outer boundary
     da_wm = np.array([km_to_wm(n / 1000.0, e / 1000.0) for e, n in zip(da_e, da_n)])
     ax.plot(da_wm[:, 0], da_wm[:, 1], color="red", linewidth=1.0, linestyle="-", zorder=5)
 
-    # Buffer ring (hatched area between outer and inner polygon)
-    outer_shapely = ShapelyPolygon(da_wm)
-    buf_wm = np.array([km_to_wm(n / 1000.0, e / 1000.0) for e, n in zip(buf_e, buf_n)])
-    inner_shapely = ShapelyPolygon(buf_wm)
+    # Buffer ring — computed in NED, converted to WM only for rendering.
+    # Fresh inward buffer without simplification (avoids the distortion that
+    # buffer_danger_area's simplify() introduces for the acceptance check).
+    smooth_m = _MIN_BUFFER_RADIUS_KM * 1000.0
+    inner_ned = danger_poly.buffer(-buffer_dist)
+    inner_ned = inner_ned.buffer(-smooth_m).buffer(+smooth_m)
 
-    if not inner_shapely.is_empty and outer_shapely.contains(inner_shapely):
-        ring = outer_shapely.difference(inner_shapely)
-        parts = [ring] if ring.geom_type == "Polygon" else list(ring.geoms)
-        for part in parts:
-            outer_c = np.array(part.exterior.coords)
+    if not inner_ned.is_empty:
+        ring_ned = danger_poly.difference(inner_ned)
+        ring_parts = [ring_ned] if ring_ned.geom_type == "Polygon" else list(ring_ned.geoms)
+        for part in ring_parts:
+            # Convert exterior and interior rings from NED metres to WM
+            outer_c = np.array([
+                km_to_wm(n / 1000.0, e / 1000.0)
+                for e, n in part.exterior.coords
+            ])
             interiors = list(part.interiors)
             if interiors:
-                inner_c = np.array(interiors[0].coords)
+                inner_c = np.array([
+                    km_to_wm(n / 1000.0, e / 1000.0)
+                    for e, n in interiors[0].coords
+                ])
                 verts = np.concatenate([outer_c, inner_c])
                 codes = np.concatenate([
                     [MplPath.MOVETO] + [MplPath.LINETO] * (len(outer_c) - 2) + [MplPath.CLOSEPOLY],
@@ -774,7 +773,7 @@ def save_dispersion_plot(
                 codes = [MplPath.MOVETO] + [MplPath.LINETO] * (len(outer_c) - 2) + [MplPath.CLOSEPOLY]
             ax.add_patch(PathPatch(
                 MplPath(verts, codes),
-                facecolor="none", edgecolor="red", linewidth=0, zorder=3,
+                facecolor="none", edgecolor="red", linewidth=0, zorder=6,
                 hatch="....",
             ))
 
@@ -783,31 +782,46 @@ def save_dispersion_plot(
         hatch="....", label=f"Buffer Zone ({buffer_dist / 1000.0:.0f} km)",
     ))
 
-    # --- Observation station circles ---
+    # --- Monitour circles (unified into single shape, no edge) ---
     n_circle_pts = 360
-    for obs in site.observation_stations:
-        ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
-        obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
-        r_km = obs.radius / 1000.0
 
+    def _obs_circle_wm(
+        center_n_km: float, center_e_km: float, radius_km: float,
+    ) -> ShapelyPolygon:
         bearings = np.linspace(0, 2 * math.pi, n_circle_pts, endpoint=False)
-        wm_pts = np.array([
+        wm_pts = [
             km_to_wm(
-                obs_n_km + r_km * math.cos(b),
-                obs_e_km + r_km * math.sin(b),
+                center_n_km + radius_km * math.cos(b),
+                center_e_km + radius_km * math.sin(b),
             )
             for b in bearings
-        ])
-        wm_pts = np.vstack([wm_pts, wm_pts[0]])
+        ]
+        return ShapelyPolygon(wm_pts)
 
-        ax.fill(
-            wm_pts[:, 0], wm_pts[:, 1],
-            color="purple", alpha=0.1, zorder=4,
-        )
-        legend_handles.append(mpatches.Patch(
-            facecolor="purple", edgecolor="none", linewidth=0,
-            label=f"{obs.name} ({r_km:.0f} km)", alpha=0.1,
-        ))
+    # Collect all monitour circles as Shapely polygons
+    obs_polys: list[ShapelyPolygon] = []
+
+    # Launch site monitour circle
+    obs_polys.append(_obs_circle_wm(0.0, 0.0, site.launch_monitour_radius / 1000.0))
+
+    # Configured monitour stations
+    for obs in site.monitour_stations:
+        ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
+        obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
+        obs_polys.append(_obs_circle_wm(obs_n_km, obs_e_km, obs.radius / 1000.0))
+
+    # Union all circles into a single shape so overlapping areas don't stack
+    from shapely.ops import unary_union
+    obs_union = unary_union(obs_polys)
+    obs_parts = [obs_union] if obs_union.geom_type == "Polygon" else list(obs_union.geoms)
+    for part in obs_parts:
+        xs, ys = part.exterior.xy
+        ax.fill(xs, ys, facecolor="black", edgecolor="none", alpha=0.1, zorder=4)
+
+    legend_handles.append(mpatches.Patch(
+        facecolor="black", edgecolor="none", linewidth=0,
+        label="Monitored Area", alpha=0.1,
+    ))
 
     # --- Landing point ellipses per scenario ---
     ellipse_styles = ["-", "--", "-.", ":"]
@@ -840,7 +854,11 @@ def save_dispersion_plot(
             linestyle=style, linewidth=2, label=label,
         ))
 
-    # --- Map markers ---
+    # --- Map markers (unique per location) ---
+    # Marker pool for monitour stations and map markers
+    _marker_pool = ["s", "D", "^", "v", "p", "h", "8", "*"]
+    _marker_idx = 0
+
     # Launch site
     ls_x, ls_y = km_to_wm(0.0, 0.0)
     ax.plot(
@@ -856,19 +874,41 @@ def save_dispersion_plot(
         linestyle="None", label="Launch Site",
     ))
 
-    # Configured map markers
-    for mk in site.map_markers:
-        ned = _lonlat_to_ned([(mk.longitude, mk.latitude)], lat0, lon0)
-        mk_e_km, mk_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
-        mx, my = km_to_wm(mk_n_km, mk_e_km)
+    # Monitour station markers (each gets a unique symbol)
+    for obs in site.monitour_stations:
+        ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
+        obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
+        mx, my = km_to_wm(obs_n_km, obs_e_km)
+        mk_symbol = _marker_pool[_marker_idx % len(_marker_pool)]
+        _marker_idx += 1
         ax.plot(
-            mx, my, marker="o", color="black",
+            mx, my, marker=mk_symbol, color="black",
             markerfacecolor="black", markeredgecolor="black",
             markersize=5, markeredgewidth=2.5,
             linestyle="None", zorder=10,
         )
         legend_handles.append(mlines.Line2D(
-            [], [], marker="o", color="none",
+            [], [], marker=mk_symbol, color="none",
+            markerfacecolor="black", markeredgecolor="black",
+            markeredgewidth=2.5, markersize=5,
+            linestyle="None", label=obs.name,
+        ))
+
+    # Configured map markers (each gets a unique symbol)
+    for mk in site.map_markers:
+        ned = _lonlat_to_ned([(mk.longitude, mk.latitude)], lat0, lon0)
+        mk_e_km, mk_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
+        mx, my = km_to_wm(mk_n_km, mk_e_km)
+        mk_symbol = _marker_pool[_marker_idx % len(_marker_pool)]
+        _marker_idx += 1
+        ax.plot(
+            mx, my, marker=mk_symbol, color="black",
+            markerfacecolor="black", markeredgecolor="black",
+            markersize=5, markeredgewidth=2.5,
+            linestyle="None", zorder=10,
+        )
+        legend_handles.append(mlines.Line2D(
+            [], [], marker=mk_symbol, color="none",
             markerfacecolor="black", markeredgecolor="black",
             markeredgewidth=2.5, markersize=5,
             linestyle="None", label=mk.name,

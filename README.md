@@ -2,7 +2,7 @@
 
 A six-degree-of-freedom Monte Carlo flight simulator for single-stage, passively stabilised, axisymmetric sounding rockets. Generates flight safety analysis evidence suitable for a CAA large rocket permission safety case under Article 96 of the Air Navigation Order 2016.
 
-The simulator covers launch rail exit to landing, evaluating up to four descent scenarios and checking trajectory containment, coastline compliance, observation coverage, and aerodynamic stability against configurable acceptance criteria. Launch azimuth and inclination can be automatically optimised when set to `"auto"`.
+The simulator covers launch rail exit to landing, evaluating up to four descent scenarios and checking trajectory containment, coastline compliance, monitour coverage, and aerodynamic stability against configurable acceptance criteria. Launch azimuth and inclination can be automatically optimised when set to `"auto"`.
 
 Runs entirely offline. The only network access is to fetch base map tiles for the dispersion plot, which are cached locally after the first download.
 
@@ -154,7 +154,7 @@ Which scenarios are active depends on the vehicle's recovery configuration:
 
 `premature_main` is suppressed when `main.threshold = "apogee"` because apogee deployment is already the earliest possible -- no earlier failure mode exists.
 
-Scenarios listed in `sea_check_scenarios` or `los_check_scenarios` that are not active for the current vehicle are silently skipped with a warning.
+Scenarios listed in `sea_check_scenarios` or `monitour_check_scenarios` that are not active for the current vehicle are silently skipped with a warning.
 
 ### Wind Profiles
 
@@ -191,7 +191,7 @@ Key sections:
 | Section | Purpose |
 |---------|---------|
 | `vehicle` | Path to `vehicle.yaml` |
-| `site` | Launch site coordinates, danger area, coastline, observation stations, altitude ceiling |
+| `site` | Launch site coordinates, danger area, coastline, monitour stations, altitude ceiling |
 | `launch` | Rail geometry, azimuth/inclination (or `"auto"`), wind profiles, surface wind override |
 | `monte_carlo` | Sample count, seed, uncertainties (1-sigma), acceptance criteria |
 | `verification` | Optional reference trajectory comparison (see [Verification](#verification)) |
@@ -245,7 +245,7 @@ A sample is compliant if **all** of the following hold:
 1. **Stability and AoA** -- during powered and coasting flight, whenever AoA < `sm_aoa_threshold`: static margin >= `sm_subsonic_min` calibres below `sm_transition_mach`, or >= `sm_supersonic_min` calibres at or above it. AoA must not exceed `aoa_max` at any point. Violation terminates the sample immediately.
 2. **Containment** -- landing point inside the buffered danger area and peak altitude below the buffered altitude ceiling.
 3. **Coastline** -- if a coastline file is provided, the landing point must satisfy the configured `coastline_mode`.
-4. **Observation coverage** -- landing within the configured radius of at least one observation station. Applied only to scenarios listed in `los_check_scenarios`.
+4. **Monitour coverage** -- landing within the configured radius of at least one monitour station. Applied only to scenarios listed in `monitour_check_scenarios`.
 
 A run passes if >= `compliance_threshold` fraction of samples are compliant. All active scenario runs must pass.
 
@@ -286,7 +286,7 @@ Results are saved to `results/`, relative to the directory containing `simulatio
 <!-- TODO: Add screenshot of dispersion_plot.png once a run has been completed -->
 <!-- ![Dispersion plot](screenshots/dispersion_plot.png) -->
 
-Landing points colour-coded by descent scenario, overlaid on an OS Maps base map with the danger area, buffer boundary, coastline, observation station coverage circles, map markers, and launch site.
+Landing points colour-coded by descent scenario, overlaid on an OS Maps base map with the danger area, buffer boundary, coastline, monitour station coverage circles, map markers, and launch site.
 
 ### Altitude Plot
 
@@ -324,6 +324,8 @@ Checks ISA against published tables, quaternion maths, launch rail exit velocity
 ### Trajectory Comparison Tool
 
 An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, mass. Column names are matched case-insensitively; missing columns are skipped.
+
+> **Note:** The reference CSV is assumed to use SI units (metres, seconds, calibres). There is no unit sanitisation — ensure your reference data is in SI before running verification.
 
 <!-- TODO: Add screenshot of verification plot once verification is working -->
 <!-- ![Verification plot](screenshots/verification_plot.png) -->

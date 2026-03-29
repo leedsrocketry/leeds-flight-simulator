@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 import math
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -331,7 +332,7 @@ def _build_comparison_figure(
         # Simulator overlay: green if passed, red if failed
         sim_colour = "#2d7a2d" if cmp.passed else "red"
         ax.plot(cmp.ref_time, cmp.sim_values,
-                color=sim_colour, linewidth=1.2, label="Simulator")
+                color=sim_colour, linewidth=1.2, label="LFS")
 
         ax.set_ylabel(_PLOT_LABELS[qty_name])
         ax.legend(fontsize=8)
@@ -339,19 +340,6 @@ def _build_comparison_figure(
 
     # Only the bottom subplot gets an x-axis label
     axes[-1].set_xlabel("Time (s)")
-
-    # Overall title
-    all_passed = all(c.passed for c in comparisons.values())
-    title_text = "Trajectory Verification: "
-    if all_passed:
-        title_text += "PASS"
-        title_colour = "#2d7a2d"
-    else:
-        failed = [c.name for c in comparisons.values() if not c.passed]
-        title_text += f"FAIL ({', '.join(failed)})"
-        title_colour = "red"
-
-    fig.suptitle(title_text, fontsize=14, fontweight="bold", color=title_colour)
 
     return fig
 
@@ -423,6 +411,11 @@ def run_verification(
     ver_cfg = sim_cfg.verification
     if ver_cfg is None:
         raise ValueError("No verification config — nothing to compare against")
+
+    warnings.warn(
+        "Reference trajectory CSV is assumed to use SI units "
+        "(metres, seconds, calibres). There is no unit sanitisation.",
+    )
 
     rail = sim_cfg.launch.rail
     azimuth = _resolve_rail_angle(rail.azimuth, rail.azimuth_range)

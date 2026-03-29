@@ -51,7 +51,7 @@ from geography import (
     polygon_to_arrays,
     prepare_zone,
     check_coastline,
-    check_observation_coverage,
+    check_monitour_coverage,
     ned_to_latlon,
     R_EARTH,
 )
@@ -104,7 +104,7 @@ class SampleResult:
     below_ceiling: bool
     stability_compliant: bool
     landing_at_sea: bool | None    # None if coastline check disabled
-    in_coverage: bool | None       # None if LOS check not applicable
+    in_coverage: bool | None       # None if monitour check not applicable
     violation_reason: str
 
     # Stochastic inputs (for CSV / replay)
@@ -330,28 +330,28 @@ def run_sample(
         )
         sea_compliant = landing_at_sea
 
-    # Observation coverage check (only for configured scenarios)
+    # Monitour coverage check (only for configured scenarios)
     in_coverage: bool | None = None
-    los_compliant = True
-    if station_norths is not None and scenario_name in acc.los_check_scenarios:
-        in_coverage = check_observation_coverage(
+    monitour_compliant = True
+    if station_norths is not None and scenario_name in acc.monitour_check_scenarios:
+        in_coverage = check_monitour_coverage(
             landing_north, landing_east,
             station_norths, station_easts, station_radii,
         )
-        los_compliant = in_coverage
+        monitour_compliant = in_coverage
 
     # --- Final compliance ---
     compliant = (
         result.compliant
         and sea_compliant
-        and los_compliant
+        and monitour_compliant
     )
 
     violation = result.violation_reason
     if not sea_compliant and not violation:
         violation = "Landing fails coastline check"
-    elif not los_compliant and not violation:
-        violation = "Landing outside observation coverage"
+    elif not monitour_compliant and not violation:
+        violation = "Landing outside monitoured area"
 
     return SampleResult(
         sample_id=sample_index,
@@ -419,11 +419,11 @@ def _prepare_geofence(
         )
         coastline_prepared = prepare_zone(coast_poly)
 
-    # Observation stations (including automatic launch-site station)
+    # Monitour stations (including automatic launch-site station)
     station_norths = None
     station_easts = None
     station_radii = None
-    if site.observation_stations or site.launch_observation_radius > 0:
+    if site.monitour_stations or site.launch_monitour_radius > 0:
         lat0_rad = math.radians(site.latitude)
         deg2m_north = R_EARTH * math.pi / 180.0
         deg2m_east = R_EARTH * math.cos(lat0_rad) * math.pi / 180.0
@@ -432,13 +432,13 @@ def _prepare_geofence(
         easts: list[float] = []
         radii: list[float] = []
 
-        # Automatic launch-site observation station
-        if site.launch_observation_radius > 0:
+        # Automatic launch-site monitour station
+        if site.launch_monitour_radius > 0:
             norths.append(0.0)
             easts.append(0.0)
-            radii.append(site.launch_observation_radius)
+            radii.append(site.launch_monitour_radius)
 
-        for st in site.observation_stations:
+        for st in site.monitour_stations:
             norths.append((st.latitude - site.latitude) * deg2m_north)
             easts.append((st.longitude - site.longitude) * deg2m_east)
             radii.append(st.radius)
@@ -656,10 +656,10 @@ def run_monte_carlo(
                 f"sea_check_scenarios includes '{s}' which is not active "
                 f"for this vehicle configuration"
             )
-    for s in acc.los_check_scenarios:
+    for s in acc.monitour_check_scenarios:
         if s not in active:
             warnings_list.append(
-                f"los_check_scenarios includes '{s}' which is not active "
+                f"monitour_check_scenarios includes '{s}' which is not active "
                 f"for this vehicle configuration"
             )
 
@@ -835,7 +835,15 @@ def replay_non_compliant(
     with open(samples_csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if row["compliant"].strip().lower() in ("false", "0", "no"):
+            # A sample is non-compliant if any _compliant column is False
+            compliance_cols = [
+                c for c in row if c.endswith("_compliant")
+            ]
+            is_non_compliant = any(
+                row[c].strip().lower() in ("false", "0", "no")
+                for c in compliance_cols
+            )
+            if is_non_compliant:
                 sid = int(row["sample_id"])
                 # Derive run_index from scenario name
                 scenario = row["scenario"].strip()
