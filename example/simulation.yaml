@@ -18,9 +18,9 @@ site:
   danger_area: "d802.geojson"         # GeoJSON polygon defining the danger area footprint;
                                       # coordinates must be [longitude, latitude] per the GeoJSON spec
 
-  # coastline: "coastline.geojson"  # optional — GeoJSON polygon of the on-land area;
+  coastline: "coastline.geojson"    # optional — GeoJSON polygon of the on-land area;
                                     # omit this key entirely to disable the coastline check
-  # coastline_mode: "sea"           # optional — direction of the coastline compliance check:
+  coastline_mode: "sea"             # required if coastline provided. Direction of the coastline compliance check:
                                     #   "sea"            — landing must be outside the polygon
                                     #                      (at sea)
                                     #   "land"           — landing must be inside the polygon
@@ -29,14 +29,14 @@ site:
   observation_stations:             # additional fixed observation stations for LOS checks;
                                     # the launch site is added automatically (see launch_observation_radius)
     - name: "MOD Range Control"
-      latitude: 58.40               # degrees
-      longitude: -4.76              # degrees
+      latitude: 58.60215            # degrees
+      longitude: -4.77592           # degrees
       radius: 10000                 # metres
 
   map_markers:                      # optional — additional points of interest overlaid on the
     - name: "Durness"               # dispersion map; no compliance check attached
-      latitude: 58.40
-      longitude: -4.76
+      latitude: 58.56874
+      longitude: -4.74763
 
 launch:
   rail:
