@@ -98,13 +98,12 @@ python . run <simulation.yaml>
 
 | Flag | Effect |
 |------|--------|
-| `-n`, `--non-blocking` | Suppress interactive blocking prompts for warnings (warnings still appear in the summary) |
 | `-q`, `--no-popup` | Suppress automatic opening of generated figures at the end of execution (figures are still saved) |
 
 Example:
 
 ```
-python . run simulations/g2b2-safety-case/cape-wrath.yaml --non-blocking --no-popup
+python . run simulations/g2b2-safety-case/cape-wrath.yaml --no-popup
 ```
 
 ### Replaying Samples
@@ -123,15 +122,7 @@ python . replay results/summary.yaml --non-compliant
 
 ### Warnings
 
-Warnings are raised when the simulator detects an unusual but valid configuration (e.g. a single aero table provided, disabling per-component mode). By default, warnings are **blocking** -- the simulator pauses and prompts you to acknowledge before continuing.
-
-```
-WARNING: Only one aeroplot .csv found. Per-component force and moment computation
-         disabled; forces will act at the whole-vehicle CP.
-Press Enter to continue, or Ctrl-C to abort.
-```
-
-Warnings always appear in the results summary regardless of `--non-blocking`.
+Warnings are raised when the simulator detects an unusual but valid configuration (e.g. a single aero table provided, disabling per-component mode). Warnings are non-blocking and accumulate in a yellow-bordered panel in the terminal during execution. They also appear in the results summary.
 
 
 ## Key Concepts

@@ -1,12 +1,13 @@
 """Command-line interface — ``run`` and ``replay`` commands (§17).
 
 Provides the Click CLI group invoked by ``__main__.py``.  Uses ``rich``
-for progress bars, results tables, and coloured verdict output.
+for progress bars, warning panels, and status output.
 """
 from __future__ import annotations
 
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import warnings
@@ -15,19 +16,22 @@ from pathlib import Path
 import click
 import numpy as np
 import yaml
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     Progress,
+    ProgressColumn,
+    Task,
     TextColumn,
-    TimeRemainingColumn,
 )
-from rich.table import Table
+from rich.spinner import Spinner
+from rich.text import Text
 
 from config import load_simulation_config
 from montecarlo import (
     SCENARIO_LABELS,
-    MonteCarloResult,
     build_sim_params,
     load_all_models,
     replay_non_compliant,
@@ -53,39 +57,171 @@ console = Console()
 
 
 # ---------------------------------------------------------------------------
+# Custom Rich columns
+# ---------------------------------------------------------------------------
+
+class _ElapsedColumn(ProgressColumn):
+    """Elapsed time shown as ``mm:ss`` in white (no hours).
+
+    Reads ``_start`` and ``_finish`` from ``task.fields`` (set by
+    ``_RunDisplay``) so each bar tracks its own wall-clock interval
+    independently of when the Rich task was created.
+    """
+
+    def render(self, task: Task) -> Text:
+        import time as _time
+        start = task.fields.get("_start")
+        finish = task.fields.get("_finish")
+        if start is None:
+            return Text("00:00", style="white")
+        if finish is not None:
+            elapsed = finish - start
+        else:
+            elapsed = _time.monotonic() - start
+        total_secs = int(elapsed)
+        mins, secs = divmod(total_secs, 60)
+        return Text(f"{mins:02d}:{secs:02d}", style="white")
+
+
+def _progress_columns():
+    """Return the standard column tuple shared by all progress bars."""
+    return (
+        TextColumn("[bold]{task.description:<30}"),
+        BarColumn(bar_width=40, complete_style="white", finished_style="white"),
+        TextColumn("{task.completed}/{task.total}"),
+        TextColumn("—"),
+        _ElapsedColumn(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Live display manager
+# ---------------------------------------------------------------------------
+
+class _RunDisplay:
+    """Composite live display: spinner + warnings panel + optional progress.
+
+    The spinner sits at the top.  Warnings accumulate as bullet points in
+    a single yellow-bordered panel beneath it.  Progress bars (when active)
+    appear below the warnings panel.
+    """
+
+    def __init__(self, con: Console) -> None:
+        self._console = con
+        self._warnings: list[str] = []
+        self._spinner = Spinner("dots", text="Initialising...")
+        self._progress = Progress(*_progress_columns(), auto_refresh=False)
+        self._live = Live(
+            self._build(), console=con, refresh_per_second=12,
+        )
+
+    # -- lifecycle -------------------------------------------------------------
+
+    def start(self) -> None:
+        self._live.start()
+
+    def stop(self) -> None:
+        self._live.stop()
+
+    # -- status ----------------------------------------------------------------
+
+    def update_status(self, text: str) -> None:
+        self._spinner.update(text=text, style="default")
+        self._refresh()
+
+    # -- warnings --------------------------------------------------------------
+
+    def add_warning(self, text: str) -> None:
+        """Append a warning to the panel (non-blocking)."""
+        self._warnings.append(text)
+        self._refresh()
+
+    # -- errors ----------------------------------------------------------------
+
+    def abort(self, message: str) -> None:
+        """Display a red error panel and exit."""
+        self._live.stop()
+        self._console.print(Panel(
+            message, border_style="red", title="ERROR", title_align="left",
+        ))
+        sys.exit(1)
+
+    # -- progress bars ---------------------------------------------------------
+
+    @property
+    def progress(self) -> Progress:
+        """Single shared :class:`Progress` for the entire run."""
+        return self._progress
+
+    def start_task(self, task_id) -> None:
+        """Record the start time for a task's elapsed column."""
+        import time
+        self._progress.update(task_id, _start=time.monotonic())
+        self._refresh()
+
+    def finish_task(self, task_id, **kwargs) -> None:
+        """Mark a task complete, freeze its elapsed time, and refresh."""
+        import time
+        self._progress.update(
+            task_id,
+            completed=self._progress.tasks[task_id].total,
+            _finish=time.monotonic(),
+            **kwargs,
+        )
+        self._live.update(self._build())
+        self._live.refresh()
+
+    # -- internals -------------------------------------------------------------
+
+    def _build(self) -> Group:
+        parts: list = [Text(), self._spinner, Text()]
+        if self._warnings:
+            bullet_list = "\n".join(f"• {w}" for w in self._warnings)
+            parts.append(Panel(
+                bullet_list,
+                border_style="yellow",
+                title="WARNINGS",
+                title_align="left",
+            ))
+        if self._progress.tasks:
+            parts.append(Text())
+            parts.append(self._progress)
+            parts.append(Text())
+        return Group(*parts)
+
+    def _refresh(self) -> None:
+        self._live.update(self._build())
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _warn_blocking(message: str, non_blocking: bool) -> None:
-    """Print a warning; block for acknowledgement unless *non_blocking*."""
-    console.print(f"[yellow]WARNING:[/yellow] {message}")
-    if not non_blocking:
+def _clear_results(results_root: Path, display: _RunDisplay) -> None:
+    """Remove the results directory, aborting if any file is locked."""
+    if not results_root.exists():
+        return
+
+    import stat
+    import time
+
+    def _force_remove(func, path, exc_info):  # noqa: ANN001
+        """Clear read-only flag and retry — standard Windows rmtree fix."""
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+
+    try:
+        shutil.rmtree(results_root, onerror=_force_remove)
+    except OSError:
+        # Stale file handles on Windows can take a moment to release
+        time.sleep(0.5)
         try:
-            input("Press Enter to continue, or Ctrl-C to abort. ")
-        except KeyboardInterrupt:
-            console.print("\nAborted.")
-            sys.exit(1)
-
-
-def _install_warning_hook(
-    all_warnings: list[str], non_blocking: bool,
-) -> None:
-    """Override :func:`warnings.showwarning` so that *UserWarning*s are
-    displayed via :func:`_warn_blocking` and collected into *all_warnings*.
-    """
-    def _showwarning(
-        message: Warning | str,
-        category: type[Warning],
-        filename: str,
-        lineno: int,
-        file: object = None,
-        line: str | None = None,
-    ) -> None:
-        text = str(message)
-        all_warnings.append(text)
-        _warn_blocking(text, non_blocking)
-
-    warnings.showwarning = _showwarning
+            shutil.rmtree(results_root, onerror=_force_remove)
+        except OSError as exc:
+            display.abort(
+                f"Could not clear results directory — a file may be locked "
+                f"by another program.\n\n{exc}"
+            )
 
 
 def _open_figures(paths: list[Path]) -> None:
@@ -149,70 +285,6 @@ def _generate_altitude_curves(
     return curves
 
 
-def _print_results_table(mc_result: MonteCarloResult) -> None:
-    """Print the per-scenario results table (§17.3)."""
-    table = Table(show_header=True, header_style="bold", show_lines=False)
-    table.add_column("Scenario", style="bold")
-    table.add_column("Samples", justify="right")
-    table.add_column("Compliant", justify="right")
-    table.add_column("Non-Compliant", justify="right")
-    table.add_column("Accepted?", justify="center")
-
-    total_samples = 0
-    total_compliant = 0
-    total_non_compliant = 0
-
-    for name, stats in mc_result.scenario_stats.items():
-        label = SCENARIO_LABELS.get(name, name)
-        accepted = "[black on green] PASS [/]" if stats.passed else "[bold red]FAIL[/]"
-        table.add_row(
-            label,
-            str(stats.n_samples),
-            str(stats.n_compliant),
-            str(stats.n_non_compliant),
-            accepted,
-        )
-        total_samples += stats.n_samples
-        total_compliant += stats.n_compliant
-        total_non_compliant += stats.n_non_compliant
-
-    table.add_section()
-    table.add_row(
-        "Total",
-        str(total_samples),
-        str(total_compliant),
-        str(total_non_compliant),
-        "",
-    )
-
-    console.print(table)
-
-
-def _print_verdict(mc_result: MonteCarloResult) -> None:
-    """Print the overall pass/fail verdict."""
-    console.print()
-    if mc_result.all_passed:
-        console.print("[bold green]ALL ACCEPTANCE CRITERIA MET[/]")
-    else:
-        console.print("[bold red]ACCEPTANCE CRITERIA NOT MET[/]")
-        for name, stats in mc_result.scenario_stats.items():
-            if not stats.passed:
-                label = SCENARIO_LABELS.get(name, name)
-                frac = stats.n_compliant / stats.n_samples if stats.n_samples > 0 else 0.0
-                console.print(
-                    f"  [red]{label}:[/] {stats.n_compliant}/{stats.n_samples} "
-                    f"compliant ({frac:.1%})"
-                )
-
-
-def _print_warnings(warnings: list[str]) -> None:
-    """Print any collected warnings."""
-    if warnings:
-        console.print()
-        for w in warnings:
-            console.print(f"[yellow]Warning:[/yellow] {w}")
-
-
 # ---------------------------------------------------------------------------
 # Click CLI
 # ---------------------------------------------------------------------------
@@ -224,16 +296,31 @@ def main():
 
 @main.command()
 @click.argument("config_path", type=click.Path(exists=True, path_type=Path))
-@click.option("-n", "--non-blocking", is_flag=True, help="Suppress blocking warning prompts.")
 @click.option("-q", "--no-popup", is_flag=True, help="Do not open figures after execution.")
-def run(config_path: Path, non_blocking: bool, no_popup: bool) -> None:
+def run(config_path: Path, no_popup: bool) -> None:
     """Run a Monte Carlo flight safety analysis."""
     config_path = Path(config_path).resolve()
     sim_cfg = load_simulation_config(config_path)
     all_warnings: list[str] = []
-    _install_warning_hook(all_warnings, non_blocking)
 
-    # --- Detect wind profile mode (single file or directory) ---
+    display = _RunDisplay(console)
+
+    # Route all warnings through the live display
+    def _showwarning(
+        message: Warning | str,
+        category: type[Warning],
+        filename: str,
+        lineno: int,
+        file: object = None,
+        line: str | None = None,
+    ) -> None:
+        text = str(message)
+        all_warnings.append(text)
+        display.add_warning(text)
+
+    warnings.showwarning = _showwarning
+
+    # --- Detect wind profile mode ---
     wind_path = sim_cfg.launch.wind_profiles
     if wind_path.is_dir():
         npz_files = sorted(wind_path.glob("*.npz"))
@@ -243,35 +330,37 @@ def run(config_path: Path, non_blocking: bool, no_popup: bool) -> None:
     else:
         npz_files = [wind_path]
 
-    # --- Load models (using first wind profile for verification/optimisation) ---
-    console.print("[bold]Loading configuration and models...[/]")
+    display.start()
+    display.update_status("Loading configuration and models...")
     vehicle_cfg, motor_model, aero_model, wind_ensemble = load_all_models(sim_cfg)
 
-    # --- Create results directory (cleared once per run) ---
+    # --- Clear and create results directory ---
     results_root = config_path.parent / "results"
-    import shutil
-    if results_root.exists():
-        shutil.rmtree(results_root)
+    _clear_results(results_root, display)
     results_root.mkdir(parents=True, exist_ok=True)
 
     # --- Verification (runs once, before optimisation) ---
     verification_figure_path: Path | None = None
+    progress = display.progress
     if sim_cfg.verification is not None:
-        console.print("[bold]Running trajectory verification...[/]")
+        display.update_status("Running trajectory verification...")
+        ver_task = progress.add_task("Verification", total=1)
+        display.start_task(ver_task)
+
         ver_result = run_verification(sim_cfg, vehicle_cfg, motor_model, aero_model)
         if ver_result.figure is not None:
             ver_fig_path = results_root / "verification_plot.png"
             ver_result.figure.savefig(ver_fig_path, dpi=150, bbox_inches="tight")
             verification_figure_path = ver_fig_path
+
         if ver_result.passed:
-            console.print("[green]Verification PASSED[/]")
+            verdict = "[black on green] PASS [/]"
         else:
-            console.print("[red]Verification FAILED[/]")
-            if verification_figure_path is not None and not no_popup:
-                _open_figures([verification_figure_path])
-            msg = "Trajectory verification failed — see results/verification_plot.png"
-            all_warnings.append(msg)
-            _warn_blocking(msg, non_blocking)
+            verdict = "[white on red] FAIL [/]"
+        display.finish_task(ver_task,
+                            description=f"{'Verification':<16} {verdict}")
+    else:
+        warnings.warn("Verification section not configured — verification skipped.")
 
     # --- Optimisation (runs once) ---
     opt_result = None
@@ -280,34 +369,30 @@ def run(config_path: Path, non_blocking: bool, no_popup: bool) -> None:
     inc_is_auto = rail.inclination == "auto"
 
     if az_is_auto or inc_is_auto:
-        console.print("[bold]Running optimisation...[/]")
-        with Progress(
-            TextColumn("[bold]{task.description}"),
-            BarColumn(bar_width=40),
-            TextColumn("{task.completed}/{task.total}"),
-            TextColumn("—"),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            opt_task = progress.add_task("Optimisation", total=100)
+        display.update_status("Running optimisation...")
+        opt_task = progress.add_task("Optimisation", total=100)
+        display.start_task(opt_task)
 
-            def _opt_callback(phase_name: str, completed: int, total: int) -> None:
-                progress.update(opt_task, description=phase_name,
-                                completed=completed, total=total)
+        def _opt_callback(phase_name: str, completed: int, total: int) -> None:
+            progress.update(opt_task, description=f"{phase_name:<30}",
+                            completed=completed, total=total)
 
-            try:
-                opt_result = run_optimisation(
-                    sim_cfg, vehicle_cfg, motor_model, aero_model,
-                    wind_ensemble, _opt_callback,
-                )
-            except ValueError as exc:
-                console.print(f"\n[bold red]Optimisation failed:[/] {exc}")
-                sys.exit(1)
+        try:
+            opt_result = run_optimisation(
+                sim_cfg, vehicle_cfg, motor_model, aero_model,
+                wind_ensemble, _opt_callback,
+            )
+        except ValueError as exc:
+            display.abort(f"Optimisation failed: {exc}")
 
-        console.print(
-            f"  Selected azimuth: [cyan]{opt_result.selected_azimuth}°[/], "
-            f"inclination: [cyan]{opt_result.selected_inclination}°[/]"
+        verdict = "[black on green] PASS [/]"
+        display.finish_task(opt_task, description=f"{'Optimisation':<16} {verdict}")
+        display.update_status(
+            f"Optimisation complete — azimuth: {opt_result.selected_azimuth}°, "
+            f"inclination: {opt_result.selected_inclination}°"
         )
+    else:
+        warnings.warn("Azimuth and inclination are fixed — optimisation skipped.")
 
     # Resolve final rail angles
     azimuth_mean = (
@@ -328,51 +413,59 @@ def run(config_path: Path, non_blocking: bool, no_popup: bool) -> None:
 
         if multi_wind:
             wind_suffix = npz_path.stem
-            console.print(f"\n[bold]Wind profile: {wind_suffix}[/]")
+            display.update_status(f"Loading wind profile: {wind_suffix}...")
             wind_ensemble = load_wind_ensemble(
                 npz_path,
                 sim_cfg.monte_carlo.samples,
                 surface_wind=sim_cfg.launch.surface_wind,
             )
 
-        # --- Monte Carlo run with progress ---
+        # --- Monte Carlo ---
         active_scenarios = vehicle_cfg.recovery.active_scenarios
         n_samples = sim_cfg.monte_carlo.samples
 
-        with Progress(
-            TextColumn("[bold]{task.description:<16}"),
-            BarColumn(bar_width=40),
-            TextColumn("{task.completed}/{task.total}"),
-            TextColumn("—"),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            tasks = {}
-            for scenario in active_scenarios:
-                label = SCENARIO_LABELS.get(scenario, scenario)
-                tasks[scenario] = progress.add_task(label, total=n_samples)
+        display.update_status("Running Monte Carlo analysis...")
+        tasks = {}
+        for scenario in active_scenarios:
+            label = SCENARIO_LABELS.get(scenario, scenario)
+            tasks[scenario] = progress.add_task(label, total=n_samples)
+            display.start_task(tasks[scenario])
 
-            def _mc_callback(scenario_name: str, completed: int, total: int) -> None:
-                if scenario_name in tasks:
-                    progress.update(tasks[scenario_name], completed=completed)
+        def _mc_callback(scenario_name: str, completed: int, total: int) -> None:
+            if scenario_name in tasks:
+                progress.update(tasks[scenario_name], completed=completed)
 
-            mc_result = run_monte_carlo(
-                sim_cfg, vehicle_cfg, motor_model, aero_model,
-                wind_ensemble, azimuth_mean, inclination_mean,
-                progress_callback=_mc_callback,
-            )
+        def _scenario_done(scenario_name: str, stats) -> None:
+            if scenario_name in tasks:
+                label = SCENARIO_LABELS.get(scenario_name, scenario_name)
+                if stats.passed:
+                    verdict = "[black on green] PASS [/]"
+                else:
+                    verdict = "[white on red] FAIL [/]"
+                display.finish_task(
+                    tasks[scenario_name],
+                    description=f"{label:<16} {verdict}",
+                )
 
-        # Merge MC warnings
-        all_warnings.extend(mc_result.warnings)
+        mc_result = run_monte_carlo(
+            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            wind_ensemble, azimuth_mean, inclination_mean,
+            progress_callback=_mc_callback,
+            scenario_done_callback=_scenario_done,
+        )
 
-        # --- Generate altitude plot data ---
+        # MC warnings
+        for w in mc_result.warnings:
+            warnings.warn(w)
+
+        # --- Plots and outputs ---
+        display.update_status("Generating plots...")
         altitude_data = _generate_altitude_curves(
             sim_cfg, vehicle_cfg, motor_model, aero_model,
             wind_ensemble, azimuth_mean, inclination_mean,
         )
         burnout_time = float(motor_model.times[-1])
 
-        # --- Create results directory and write outputs ---
         results_dir = create_results_dir(config_path, wind_suffix, _clear=False)
 
         has_coastline = sim_cfg.site.coastline is not None
@@ -381,6 +474,7 @@ def run(config_path: Path, non_blocking: bool, no_popup: bool) -> None:
             or sim_cfg.site.launch_observation_radius > 0
         )
 
+        display.update_status("Writing results...")
         write_samples_csv(mc_result.all_results, results_dir, has_coastline, has_coverage)
         write_summary_yaml(
             mc_result, sim_cfg, opt_result, results_dir,
@@ -394,12 +488,8 @@ def run(config_path: Path, non_blocking: bool, no_popup: bool) -> None:
         )
         figure_paths.extend([alt_path, disp_path])
 
-        # --- Print results ---
-        console.print()
-        _print_results_table(mc_result)
-        _print_verdict(mc_result)
-        _print_warnings(all_warnings)
-        console.print(f"\nResults saved to: [bold]{results_dir}[/]")
+    display.stop()
+    console.print(f"Results saved to: [bold]{results_dir}[/]\n")
 
     # --- Open figures ---
     if not no_popup:

@@ -624,6 +624,7 @@ def run_monte_carlo(
     azimuth_mean: float,
     inclination_mean: float,
     progress_callback=None,
+    scenario_done_callback=None,
 ) -> MonteCarloResult:
     """Run the full Monte Carlo analysis across all active scenarios.
 
@@ -636,6 +637,9 @@ def run_monte_carlo(
     progress_callback
         Optional callable ``(scenario_name, completed, total)`` for
         progress reporting.
+    scenario_done_callback
+        Optional callable ``(scenario_name, stats)`` fired when each
+        scenario completes and its :class:`ScenarioStats` are available.
 
     Returns
     -------
@@ -690,33 +694,38 @@ def run_monte_carlo(
                 )
                 async_results[scenario_name] = ar
 
-            # Drain progress queue while waiting
+            # Drain progress queue while waiting, collecting results eagerly
             completed_counts: dict[str, int] = {s: 0 for s in active}
+            collected: set[str] = set()
             total_expected = len(active) * n_samples
             total_done = 0
 
-            while total_done < total_expected:
-                try:
-                    msg = progress_queue.get(timeout=0.5) if progress_queue else None
-                    if msg is not None:
-                        sc_name, count = msg
-                        completed_counts[sc_name] = count
-                        total_done = sum(completed_counts.values())
-                        if progress_callback:
-                            progress_callback(sc_name, count, n_samples)
-                except Exception:
-                    # Check if all workers are done
-                    if all(ar.ready() for ar in async_results.values()):
-                        break
+            while len(collected) < len(active):
+                # Drain available progress messages
+                if progress_queue is not None:
+                    try:
+                        msg = progress_queue.get(timeout=0.2)
+                        if msg is not None:
+                            sc_name, count = msg
+                            completed_counts[sc_name] = count
+                            total_done = sum(completed_counts.values())
+                            if progress_callback:
+                                progress_callback(sc_name, count, n_samples)
+                    except Exception:
+                        pass
 
-            # Collect results
-            for scenario_name in active:
-                scenario_results = async_results[scenario_name].get()
-                all_results.extend(scenario_results)
-                stats = compute_scenario_stats(
-                    scenario_results, acc.compliance_threshold,
-                )
-                scenario_stats[scenario_name] = stats
+                # Collect any newly finished scenarios immediately
+                for sc_name, ar in async_results.items():
+                    if sc_name not in collected and ar.ready():
+                        scenario_results = ar.get()
+                        all_results.extend(scenario_results)
+                        stats = compute_scenario_stats(
+                            scenario_results, acc.compliance_threshold,
+                        )
+                        scenario_stats[sc_name] = stats
+                        collected.add(sc_name)
+                        if scenario_done_callback:
+                            scenario_done_callback(sc_name, stats)
     else:
         # Single scenario — run in-process
         for run_idx, scenario_name in enumerate(active):
@@ -733,6 +742,8 @@ def run_monte_carlo(
                 scenario_results, acc.compliance_threshold,
             )
             scenario_stats[scenario_name] = stats
+            if scenario_done_callback:
+                scenario_done_callback(scenario_name, stats)
 
     all_passed = all(s.passed for s in scenario_stats.values())
 

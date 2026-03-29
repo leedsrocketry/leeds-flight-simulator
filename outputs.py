@@ -119,7 +119,7 @@ def create_results_dir(
     results_root = simulation_yaml_path.parent / "results"
 
     if _clear and results_root.exists():
-        shutil.rmtree(results_root)
+        shutil.rmtree(results_root, ignore_errors=True)
 
     if wind_profile_suffix is not None:
         results_dir = results_root / wind_profile_suffix

@@ -25,15 +25,15 @@
 [ ] Update docs to point to felect changes in structure
 
 ## UI
-[ ] Remove the red error message when verification dosen't pass. Just throw a warning.
-[ ] Place PASS/FAIL on the right hand side of each scenario progress bar in "reverse" style
-[ ] Make the progres bar stuff monotone (changing colours when 100% progress makes it seem like all the results passed as opposed to the simulation is just complete)
-[ ] Make the elipses "..." the same colour as the text in the cli status messages
-[ ] Add a CLI status message (same format as the others) before running the simulations
-[ ] Remove the PASS/FAIL table, warnings summary and acceptance summary text from the CLI.
-[ ] Warnings in yellow bordered boxes with some vertical spacing between them and whatever comes next
-[ ] Throw warnings when optimisation and verification are skipped over
-[ ] Throw a warning when some of the scenarios mentioned in simulation.yaml acceptance criteria are not active.
+[x] Remove the red error message when verification dosen't pass. Just throw a warning.
+[x] Place PASS/FAIL on the right hand side of each scenario progress bar in "reverse" style
+[x] Make the progres bar stuff monotone (changing colours when 100% progress makes it seem like all the results passed as opposed to the simulation is just complete)
+[x] Make the elipses "..." the same colour as the text in the cli status messages
+[x] Add a CLI status message (same format as the others) before running the simulations
+[x] Remove the PASS/FAIL table, warnings summary and acceptance summary text from the CLI.
+[x] Warnings in yellow bordered boxes with some vertical spacing between them and whatever comes next
+[x] Throw warnings when optimisation and verification are skipped over
+[x] Throw a warning when some of the scenarios mentioned in simulation.yaml acceptance criteria are not active.
 
 ## Output
 [ ] Remove fields from summary.yaml which are covered in the simulation or vehicle setup yamls
@@ -57,5 +57,5 @@
 ## UX
 [x] Don't create a new simulation output folder with the timestamp every time the simulation is run, overwrite the results that are already there, call the folder "results/". Create a sub folder for each day simulated with the name of that day's ind profile. verification plot is in the results/ folder, while everything else is in that day's sub folder. If only one day then don't bother with the sub folder. Each time the simulation is rerun, clear the contents of the results/ folder. Create the results/ folder in the same place as currently.
 [x] Add the results/ directory to .gitignore
-[x] Better name for --no-warn. The warnings still generated, it's just non-blocking.
-[x] Implement abbreviated flags that can also be used for the non-blocking warnings and pop-up arguments
+[x] Better name for --no-warn. The warnings still generated, it's just non-blocking. (Removed blocking behaviour entirely; warnings are always non-blocking.)
+[x] Implement abbreviated flags that can also be used for the non-blocking warnings and pop-up arguments (-q for --no-popup; --non-blocking removed)
