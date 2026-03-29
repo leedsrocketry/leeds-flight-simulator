@@ -196,6 +196,8 @@ def write_summary_yaml(
     sim_cfg: SimulationConfig,
     opt_result: OptimisationResult | None,
     output_dir: Path,
+    *,
+    simulation_yaml_path: Path | None = None,
 ) -> Path:
     """Write the run summary to ``summary.yaml``.
 
@@ -209,6 +211,9 @@ def write_summary_yaml(
         Optimisation diagnostics, if optimisation was run.
     output_dir : Path
         Directory to write the YAML into.
+    simulation_yaml_path : Path or None
+        Absolute path to the simulation YAML file, recorded in the summary
+        so that ``replay`` can locate the original configuration.
 
     Returns
     -------
@@ -218,9 +223,14 @@ def write_summary_yaml(
     summary: dict = {}
 
     # run_details
+    config_path_str = (
+        str(simulation_yaml_path)
+        if simulation_yaml_path is not None
+        else str(sim_cfg.vehicle.parent / sim_cfg.vehicle.name)
+    )
     summary["run_details"] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "simulation_config": str(sim_cfg.vehicle.parent / sim_cfg.vehicle.name),
+        "simulation_config": config_path_str,
         "master_seed": sim_cfg.monte_carlo.seed,
     }
 
