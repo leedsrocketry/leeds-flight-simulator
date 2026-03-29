@@ -297,7 +297,8 @@ def main():
 @main.command()
 @click.argument("config_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-q", "--no-popup", is_flag=True, help="Do not open figures after execution.")
-def run(config_path: Path, no_popup: bool) -> None:
+@click.option("-p", "--points", is_flag=True, help="Draw apogee and landing points on the dispersion plot.")
+def run(config_path: Path, no_popup: bool, points: bool) -> None:
     """Run a Monte Carlo flight safety analysis."""
     config_path = Path(config_path).resolve()
     sim_cfg = load_simulation_config(config_path)
@@ -486,6 +487,7 @@ def run(config_path: Path, no_popup: bool) -> None:
             mc_result.all_results, sim_cfg,
             sim_cfg.monte_carlo.acceptance.compliance_threshold,
             results_dir,
+            show_points=points,
         )
         figure_paths.extend([alt_path, disp_path])
 

@@ -89,8 +89,10 @@ class SampleResult:
     apogee_lon: float
     landing_lat: float
     landing_lon: float
-    landing_north: float       # NED metres (for dispersion plot)
-    landing_east: float        # NED metres
+    apogee_north: float         # NED metres (for dispersion plot)
+    apogee_east: float          # NED metres
+    landing_north: float        # NED metres (for dispersion plot)
+    landing_east: float         # NED metres
     flight_time_s: float
     peak_mach: float
     peak_altitude_ft: float
@@ -316,7 +318,9 @@ def run_sample(
         site.latitude, site.longitude,
     )
 
-    # --- Post-trajectory acceptance checks ---
+    # --- Extract NED positions ---
+    apogee_north = float(result.apogee_position[0])
+    apogee_east = float(result.apogee_position[1])
     landing_north = float(result.landing_position[0])
     landing_east = float(result.landing_position[1])
 
@@ -362,6 +366,8 @@ def run_sample(
         apogee_lon=apogee_lon,
         landing_lat=landing_lat,
         landing_lon=landing_lon,
+        apogee_north=apogee_north,
+        apogee_east=apogee_east,
         landing_north=landing_north,
         landing_east=landing_east,
         flight_time_s=result.flight_time,

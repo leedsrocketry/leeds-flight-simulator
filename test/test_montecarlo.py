@@ -144,6 +144,8 @@ def _make_sample_result(
         apogee_m=apogee_m,
         apogee_lat=58.61,
         apogee_lon=-4.94,
+        apogee_north=2000.0,
+        apogee_east=300.0,
         landing_lat=58.62,
         landing_lon=-4.93,
         landing_north=landing_north,

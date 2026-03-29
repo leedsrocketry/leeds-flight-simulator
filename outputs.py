@@ -646,6 +646,8 @@ def save_dispersion_plot(
     sim_cfg: SimulationConfig,
     compliance_threshold: float,
     output_dir: Path,
+    *,
+    show_points: bool = False,
 ) -> Path:
     """Generate and save the landing dispersion plot.
 
@@ -659,6 +661,8 @@ def save_dispersion_plot(
         Fraction of samples the ellipse must contain (from acceptance config).
     output_dir : Path
         Directory to save the plot into.
+    show_points : bool
+        If True, overlay individual apogee and landing points on the plot.
 
     Returns
     -------
@@ -852,6 +856,40 @@ def save_dispersion_plot(
         legend_handles.append(mpatches.Patch(
             facecolor="none", edgecolor=colour, alpha=0.6,
             linestyle=style, linewidth=2, label=label,
+        ))
+
+    # --- Scatter points (apogee + landing, when --points is set) ---
+    if show_points:
+        # Landing points — coloured per scenario
+        for key, pts_list in scenario_points.items():
+            pts_arr = np.array(pts_list)
+            colour = ellipse_colours.get(key, "grey")
+            wm_pts = np.array([
+                km_to_wm(n, e) for n, e in pts_arr
+            ])
+            ax.scatter(
+                wm_pts[:, 0], wm_pts[:, 1],
+                s=1, c=colour, alpha=0.4, zorder=8, linewidths=0,
+            )
+        legend_handles.append(mlines.Line2D(
+            [], [], marker="o", color="none",
+            markerfacecolor="grey", markeredgecolor="none",
+            markersize=3, linestyle="None", label="Landing Points",
+        ))
+
+        # Apogee points — uniform grey
+        apogee_wm = np.array([
+            km_to_wm(r.apogee_north / 1000.0, r.apogee_east / 1000.0)
+            for r in results
+        ])
+        ax.scatter(
+            apogee_wm[:, 0], apogee_wm[:, 1],
+            s=1, c="blue", alpha=0.3, zorder=8, linewidths=0,
+        )
+        legend_handles.append(mlines.Line2D(
+            [], [], marker="o", color="none",
+            markerfacecolor="blue", markeredgecolor="none",
+            markersize=3, linestyle="None", label="Apogee Points",
         ))
 
     # --- Map markers (unique per location) ---

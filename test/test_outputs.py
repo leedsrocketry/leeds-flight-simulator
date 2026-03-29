@@ -51,6 +51,8 @@ def _make_sample(
         apogee_m=15000.0,
         apogee_lat=58.75,
         apogee_lon=-4.80,
+        apogee_north=2000.0,
+        apogee_east=300.0,
         landing_lat=58.62,
         landing_lon=-4.93,
         landing_north=landing_north,
