@@ -8,4 +8,4 @@ dist/
 .claude/
 CLAUDE.md
 map-tile-cache/
-example/results
+simulations/g2b2-safety-case/results

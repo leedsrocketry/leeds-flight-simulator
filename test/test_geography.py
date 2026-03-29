@@ -39,11 +39,11 @@ from geography import (
 # ---------------------------------------------------------------------------
 # Paths to example data
 # ---------------------------------------------------------------------------
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent / "example"
+EXAMPLE_DIR = Path(__file__).resolve().parent.parent / "simulations" / "g2b2-safety-case"
 D802_PATH = EXAMPLE_DIR / "d802.geojson"
 COASTLINE_PATH = EXAMPLE_DIR / "coastline.geojson"
 
-# Launch site from example/simulation.yaml
+# Launch site from simulations/g2b2-safety-case/cape-wrath.yaml
 LAUNCH_LAT = 58.6104700
 LAUNCH_LON = -4.9434804
 

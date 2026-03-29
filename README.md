@@ -58,7 +58,7 @@ python . --help
 ## Quick Start
 
 ```
-python . run example/simulation.yaml
+python . run simulations/g2b2-safety-case/cape-wrath.yaml
 ```
 
 This runs all active descent scenarios and prints a results table:
@@ -104,7 +104,7 @@ python . run <simulation.yaml>
 Example:
 
 ```
-python . run example/simulation.yaml --no-warn --no-popup
+python . run simulations/g2b2-safety-case/cape-wrath.yaml --no-warn --no-popup
 ```
 
 ### Replaying Samples
@@ -189,11 +189,11 @@ When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`
 
 ## Input Files
 
-Example input files are provided in `example/`. The values in those files are justified in the G2B2 safety case (see [Background](#background)).
+Example input files are provided in `simulations/g2b2-safety-case/`. The values in those files are justified in the G2B2 safety case (see [Background](#background)).
 
 ### `simulation.yaml`
 
-Main simulation configuration. All file paths are resolved relative to the directory containing `simulation.yaml`. See `example/simulation.yaml` for a fully annotated example with comments for every parameter.
+Main simulation configuration. All file paths are resolved relative to the directory containing the simulation YAML. See `simulations/g2b2-safety-case/cape-wrath.yaml` for a fully annotated example with comments for every parameter.
 
 Key sections:
 
@@ -212,7 +212,7 @@ Defines the vehicle's physical properties. All distances are in metres from the 
 - **Reference area:** A_ref = pi * d^2 / 4 (same convention as RASAero)
 - **Reference length:** Rocket's overall length, used for Reynolds number calculation (same convention as RASAero)
 
-See `example/g2b2.yaml` for a fully annotated example.
+See `simulations/g2b2-safety-case/g2b2.yaml` for a fully annotated example.
 
 ### Motor File (`.eng`)
 
@@ -325,7 +325,7 @@ Before relying on the simulator for a safety case, verify it against an independ
 ### Unit Tests
 
 ```
-python -m pytest verification/
+python -m pytest test/
 ```
 
 Checks ISA against published tables, quaternion maths, launch rail exit velocity, terminal descent, aero interpolation and per-component local AoA damping, the `.eng` parser, AoA computation, and wind `.npz` loading.

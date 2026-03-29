@@ -490,18 +490,18 @@ def test_active_scenarios_no_chutes(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_real_simulation_yaml_loads():
-    """The committed example/simulation.yaml must parse without errors."""
-    real = Path(__file__).parent.parent / "example" / "simulation.yaml"
+    """The committed simulations/g2b2-safety-case/cape-wrath.yaml must parse without errors."""
+    real = Path(__file__).parent.parent / "simulations" / "g2b2-safety-case" / "cape-wrath.yaml"
     if not real.exists():
-        pytest.skip("example/simulation.yaml not present")
+        pytest.skip("simulations/g2b2-safety-case/cape-wrath.yaml not present")
     cfg = load_simulation_config(real)
     assert cfg.site.latitude == pytest.approx(58.61047)
 
 
 def test_real_vehicle_yaml_loads():
-    """The committed example/g2b2.yaml must parse without errors."""
-    real = Path(__file__).parent.parent / "example" / "g2b2.yaml"
+    """The committed simulations/g2b2-safety-case/g2b2.yaml must parse without errors."""
+    real = Path(__file__).parent.parent / "simulations" / "g2b2-safety-case" / "g2b2.yaml"
     if not real.exists():
-        pytest.skip("example/g2b2.yaml not present")
+        pytest.skip("simulations/g2b2-safety-case/g2b2.yaml not present")
     v = load_vehicle_config(real)
     assert v.geometry.diameter == pytest.approx(0.130)

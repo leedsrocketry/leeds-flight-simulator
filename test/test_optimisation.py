@@ -48,8 +48,8 @@ from geography import (
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent / "example"
-SIM_YAML = EXAMPLE_DIR / "simulation.yaml"
+EXAMPLE_DIR = Path(__file__).resolve().parent.parent / "simulations" / "g2b2-safety-case"
+SIM_YAML = EXAMPLE_DIR / "cape-wrath.yaml"
 
 # Launch site
 LAUNCH_LAT = 58.6104700

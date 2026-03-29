@@ -15,9 +15,9 @@
 [ ] Check that the 3 dof descent portion of the flight is treating the vehicle as a point mass, always moving in the direction and at the speed of the local wind vector.
 
 ## Organisation
-[ ] Rename verification/ to test/
-[ ] Rename example/ to simulations/g2b2-safety-case/
-[ ] Rename simulation.yaml to cape-wrath.yaml
+[x] Rename verification/ to test/
+[x] Rename example/ to simulations/g2b2-safety-case/
+[x] Rename simulation.yaml to cape-wrath.yaml
 [ ] Remove reference/ folder when done with it
 
 ## Documentation

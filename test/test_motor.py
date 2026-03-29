@@ -107,9 +107,9 @@ def test_non_monotonic_times_raises(tmp_path):
 
 
 def test_real_motor_file_loads():
-    real = Path(__file__).parent.parent / "example" / "o3400.eng"
+    real = Path(__file__).parent.parent / "simulations" / "g2b2-safety-case" / "o3400.eng"
     if not real.exists():
-        pytest.skip("example/o3400.eng not present")
+        pytest.skip("simulations/g2b2-safety-case/o3400.eng not present")
     md = load_motor(real)
     assert md.m_prop_kg > 0
     assert md.thrust_n[-1] == pytest.approx(0.0)

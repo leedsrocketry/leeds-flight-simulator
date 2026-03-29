@@ -207,10 +207,10 @@ def test_grids_are_sorted(tmp_path):
 
 
 def test_real_aero_dir_loads():
-    """The committed example/aero_tables directory must load without errors."""
-    real = Path(__file__).parent.parent / "example" / "aero_tables"
+    """The committed simulations/g2b2-safety-case aero_tables directory must load without errors."""
+    real = Path(__file__).parent.parent / "simulations" / "g2b2-safety-case" / "aero_tables"
     if not real.exists() or not list(real.glob("*.csv")):
-        pytest.skip("example/aero_tables not present or empty")
+        pytest.skip("simulations/g2b2-safety-case/aero_tables not present or empty")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         model = build_aero_model(real)

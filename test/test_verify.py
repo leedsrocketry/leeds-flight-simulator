@@ -1,4 +1,4 @@
-"""Tests for the trajectory comparison tool (verification/verify.py, §18.1).
+"""Tests for the trajectory comparison tool (verify.py, §18.1).
 
 Tests:
 - Reference CSV loading: column matching, aliases, case insensitivity, missing columns
