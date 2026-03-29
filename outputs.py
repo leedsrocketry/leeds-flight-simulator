@@ -2,7 +2,7 @@
 
 Public API
 ----------
-create_results_dir      — create timestamped results directory
+create_results_dir      — create/clear fixed results directory
 write_samples_csv       — per-sample CSV (§16.1)
 write_summary_yaml      — run summary YAML (§16.2)
 save_altitude_plot      — altitude-time plot (§16.5)
@@ -82,32 +82,50 @@ _TO_WM = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
 def create_results_dir(
     simulation_yaml_path: Path,
     wind_profile_suffix: str | None = None,
+    *,
+    _clear: bool = True,
 ) -> Path:
-    """Create a timestamped results directory next to the simulation YAML.
+    """Create a ``results/`` directory next to the simulation YAML.
 
-    When the analysis uses multiple wind profile files (§5.1), each run
-    gets its own sub-folder suffixed with the wind profile filename::
+    On each run the contents of ``results/`` are cleared before writing.
+    When multiple wind profiles are used, each gets a sub-folder named
+    after the ``.npz`` stem::
 
-        results/<timestamp>/                   # single .npz
-        results/<timestamp>-profile_a/         # directory of .npz files
-        results/<timestamp>-profile_b/
+        results/                         # single wind profile
+        results/monday/                  # multi-profile day sub-folder
+        results/tuesday/
+
+    The verification plot is always placed directly in ``results/``.
 
     Parameters
     ----------
     simulation_yaml_path : Path
         Path to the simulation configuration file.
     wind_profile_suffix : str or None
-        If not None, appended to the directory name with a hyphen separator.
-        Typically the stem of the ``.npz`` file (e.g. ``"day1"``).
+        If not None, a sub-folder is created inside ``results/`` with this
+        name.  Typically the stem of the ``.npz`` file (e.g. ``"monday"``).
+    _clear : bool
+        If True (default), clear existing contents of ``results/`` before
+        creating the directory.  Set to False in tests to avoid side-effects.
 
     Returns
     -------
     Path
-        The created results directory.
+        The created results directory (either ``results/`` itself or a
+        wind-profile sub-folder within it).
     """
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")
-    dirname = timestamp if wind_profile_suffix is None else f"{timestamp}-{wind_profile_suffix}"
-    results_dir = simulation_yaml_path.parent / "results" / dirname
+    import shutil
+
+    results_root = simulation_yaml_path.parent / "results"
+
+    if _clear and results_root.exists():
+        shutil.rmtree(results_root)
+
+    if wind_profile_suffix is not None:
+        results_dir = results_root / wind_profile_suffix
+    else:
+        results_dir = results_root
+
     results_dir.mkdir(parents=True, exist_ok=True)
     return results_dir
 

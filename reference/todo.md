@@ -55,7 +55,7 @@
 [ ] Buffer Zone legend distance should be driven by simulation config yaml, if not already. Ensure the full danger area is in view on the dispersion plot.
 
 ## UX
-[ ] Don't create a new simulation output folder with the timestamp every time the simulation is run, overwrite the results that are already there, call the folder "results/". Create a sub folder for each day simulated with the name of that day's ind profile. verification plot is in the results/ folder, while everything else is in that day's sub folder. If only one day then don't bother with the sub folder. Each time the simulation is rerun, clear the contents of the results/ folder. Create the results/ folder in the same place as currently.
-[ ] Add the results/ directory to .gitignore
-[ ] Better name for --no-warn. The warnings still generated, it's just non-blocking.
-[ ] Implement abbreviated flags that can also be used for the non-blocking warnings and pop-up arguments
+[x] Don't create a new simulation output folder with the timestamp every time the simulation is run, overwrite the results that are already there, call the folder "results/". Create a sub folder for each day simulated with the name of that day's ind profile. verification plot is in the results/ folder, while everything else is in that day's sub folder. If only one day then don't bother with the sub folder. Each time the simulation is rerun, clear the contents of the results/ folder. Create the results/ folder in the same place as currently.
+[x] Add the results/ directory to .gitignore
+[x] Better name for --no-warn. The warnings still generated, it's just non-blocking.
+[x] Implement abbreviated flags that can also be used for the non-blocking warnings and pop-up arguments

@@ -78,7 +78,7 @@ This runs all active descent scenarios and prints a results table:
 
 ALL ACCEPTANCE CRITERIA MET
 
-Results saved to: ./results/20260620_093000/
+Results saved to: ./results/
 ```
 
 If `azimuth` or `inclination` is set to `"auto"`, the optimisation routine runs first, then the main Monte Carlo analysis proceeds with the optimised values.
@@ -98,13 +98,13 @@ python . run <simulation.yaml>
 
 | Flag | Effect |
 |------|--------|
-| `--no-warn` | Suppress interactive blocking prompts for warnings (warnings still appear in the summary) |
-| `--no-popup` | Suppress automatic opening of generated figures at the end of execution (figures are still saved) |
+| `-n`, `--non-blocking` | Suppress interactive blocking prompts for warnings (warnings still appear in the summary) |
+| `-q`, `--no-popup` | Suppress automatic opening of generated figures at the end of execution (figures are still saved) |
 
 Example:
 
 ```
-python . run simulations/g2b2-safety-case/cape-wrath.yaml --no-warn --no-popup
+python . run simulations/g2b2-safety-case/cape-wrath.yaml --non-blocking --no-popup
 ```
 
 ### Replaying Samples
@@ -112,13 +112,13 @@ python . run simulations/g2b2-safety-case/cape-wrath.yaml --no-warn --no-popup
 Replay a specific sample:
 
 ```
-python . replay results/<timestamp>/summary.yaml --seed 42 --run 3 --sample 117
+python . replay results/summary.yaml --seed 42 --run 3 --sample 117
 ```
 
 Replay all non-compliant samples from a completed run:
 
 ```
-python . replay results/<timestamp>/summary.yaml --non-compliant
+python . replay results/summary.yaml --non-compliant
 ```
 
 ### Warnings
@@ -131,7 +131,7 @@ WARNING: Only one aeroplot .csv found. Per-component force and moment computatio
 Press Enter to continue, or Ctrl-C to abort.
 ```
 
-Warnings always appear in the results summary regardless of `--no-warn`.
+Warnings always appear in the results summary regardless of `--non-blocking`.
 
 
 ## Key Concepts
@@ -170,7 +170,7 @@ Scenarios listed in `sea_check_scenarios` or `los_check_scenarios` that are not 
 The `wind_profiles` field in `simulation.yaml` can point to either a single `.npz` file or a directory of `.npz` files:
 
 - **Single file** -- one analysis run using this wind ensemble.
-- **Directory** -- the full analysis runs independently for each `.npz` file, with output folders suffixed by filename (e.g. `results/20260620_093000-day1/`, `results/20260620_093000-day2/`). This allows a multi-day wind campaign to be assessed in a single invocation.
+- **Directory** -- the full analysis runs independently for each `.npz` file, with output in sub-folders named after each profile (e.g. `results/day1/`, `results/day2/`). This allows a multi-day wind campaign to be assessed in a single invocation.
 
 The simulator has no knowledge of how the profiles were generated; all source-specific logic (EarthGRAM, GFS, ECMWF, radiosonde, perturbation modelling) is handled by a separate wind profile generator tool. Each `.npz` file must contain:
 
@@ -280,7 +280,7 @@ At the start of execution, the simulator runs a small batch of samples at tight 
 
 ## Output Files
 
-Results are saved to `results/<timestamp>/`, relative to the directory containing `simulation.yaml`.
+Results are saved to `results/`, relative to the directory containing `simulation.yaml`. The contents are cleared on each run.
 
 | File | Contents |
 |------|----------|

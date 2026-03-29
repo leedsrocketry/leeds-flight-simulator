@@ -56,10 +56,10 @@ console = Console()
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _warn_blocking(message: str, no_warn: bool) -> None:
-    """Print a warning; block for acknowledgement unless *no_warn*."""
+def _warn_blocking(message: str, non_blocking: bool) -> None:
+    """Print a warning; block for acknowledgement unless *non_blocking*."""
     console.print(f"[yellow]WARNING:[/yellow] {message}")
-    if not no_warn:
+    if not non_blocking:
         try:
             input("Press Enter to continue, or Ctrl-C to abort. ")
         except KeyboardInterrupt:
@@ -68,7 +68,7 @@ def _warn_blocking(message: str, no_warn: bool) -> None:
 
 
 def _install_warning_hook(
-    all_warnings: list[str], no_warn: bool,
+    all_warnings: list[str], non_blocking: bool,
 ) -> None:
     """Override :func:`warnings.showwarning` so that *UserWarning*s are
     displayed via :func:`_warn_blocking` and collected into *all_warnings*.
@@ -83,7 +83,7 @@ def _install_warning_hook(
     ) -> None:
         text = str(message)
         all_warnings.append(text)
-        _warn_blocking(text, no_warn)
+        _warn_blocking(text, non_blocking)
 
     warnings.showwarning = _showwarning
 
@@ -224,14 +224,14 @@ def main():
 
 @main.command()
 @click.argument("config_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--no-warn", is_flag=True, help="Suppress blocking warning prompts.")
-@click.option("--no-popup", is_flag=True, help="Do not open figures after execution.")
-def run(config_path: Path, no_warn: bool, no_popup: bool) -> None:
+@click.option("-n", "--non-blocking", is_flag=True, help="Suppress blocking warning prompts.")
+@click.option("-q", "--no-popup", is_flag=True, help="Do not open figures after execution.")
+def run(config_path: Path, non_blocking: bool, no_popup: bool) -> None:
     """Run a Monte Carlo flight safety analysis."""
     config_path = Path(config_path).resolve()
     sim_cfg = load_simulation_config(config_path)
     all_warnings: list[str] = []
-    _install_warning_hook(all_warnings, no_warn)
+    _install_warning_hook(all_warnings, non_blocking)
 
     # --- Detect wind profile mode (single file or directory) ---
     wind_path = sim_cfg.launch.wind_profiles
@@ -247,24 +247,31 @@ def run(config_path: Path, no_warn: bool, no_popup: bool) -> None:
     console.print("[bold]Loading configuration and models...[/]")
     vehicle_cfg, motor_model, aero_model, wind_ensemble = load_all_models(sim_cfg)
 
+    # --- Create results directory (cleared once per run) ---
+    results_root = config_path.parent / "results"
+    import shutil
+    if results_root.exists():
+        shutil.rmtree(results_root)
+    results_root.mkdir(parents=True, exist_ok=True)
+
     # --- Verification (runs once, before optimisation) ---
     verification_figure_path: Path | None = None
     if sim_cfg.verification is not None:
         console.print("[bold]Running trajectory verification...[/]")
         ver_result = run_verification(sim_cfg, vehicle_cfg, motor_model, aero_model)
+        if ver_result.figure is not None:
+            ver_fig_path = results_root / "verification_plot.png"
+            ver_result.figure.savefig(ver_fig_path, dpi=150, bbox_inches="tight")
+            verification_figure_path = ver_fig_path
         if ver_result.passed:
             console.print("[green]Verification PASSED[/]")
         else:
             console.print("[red]Verification FAILED[/]")
-            if ver_result.figure is not None:
-                ver_fig_path = config_path.parent / "verification_plot.png"
-                ver_result.figure.savefig(ver_fig_path, dpi=150, bbox_inches="tight")
-                verification_figure_path = ver_fig_path
-                if not no_popup:
-                    _open_figures([ver_fig_path])
-            msg = "Trajectory verification failed — see verification_plot.png"
+            if verification_figure_path is not None and not no_popup:
+                _open_figures([verification_figure_path])
+            msg = "Trajectory verification failed — see results/verification_plot.png"
             all_warnings.append(msg)
-            _warn_blocking(msg, no_warn)
+            _warn_blocking(msg, non_blocking)
 
     # --- Optimisation (runs once) ---
     opt_result = None
@@ -366,7 +373,7 @@ def run(config_path: Path, no_warn: bool, no_popup: bool) -> None:
         burnout_time = float(motor_model.times[-1])
 
         # --- Create results directory and write outputs ---
-        results_dir = create_results_dir(config_path, wind_suffix)
+        results_dir = create_results_dir(config_path, wind_suffix, _clear=False)
 
         has_coastline = sim_cfg.site.coastline is not None
         has_coverage = (

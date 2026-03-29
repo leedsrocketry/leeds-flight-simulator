@@ -229,36 +229,37 @@ class TestCreateResultsDir:
     def test_creates_directory(self, tmp_path: Path):
         sim_yaml = tmp_path / "simulation.yaml"
         sim_yaml.touch()
-        results_dir = create_results_dir(sim_yaml)
+        results_dir = create_results_dir(sim_yaml, _clear=False)
         assert results_dir.exists()
         assert results_dir.is_dir()
+        assert results_dir.name == "results"
+        assert results_dir.parent == tmp_path
+
+    def test_clears_existing_contents(self, tmp_path: Path):
+        sim_yaml = tmp_path / "simulation.yaml"
+        sim_yaml.touch()
+        # Pre-populate results/
+        old_results = tmp_path / "results"
+        old_results.mkdir()
+        (old_results / "old_file.txt").write_text("stale")
+        results_dir = create_results_dir(sim_yaml, _clear=True)
+        assert results_dir.exists()
+        assert not (results_dir / "old_file.txt").exists()
+
+    def test_wind_profile_subfolder(self, tmp_path: Path):
+        """When multiple wind profiles are used, a sub-folder is created."""
+        sim_yaml = tmp_path / "simulation.yaml"
+        sim_yaml.touch()
+        results_dir = create_results_dir(sim_yaml, wind_profile_suffix="day1", _clear=False)
+        assert results_dir.name == "day1"
         assert results_dir.parent.name == "results"
-        assert results_dir.parent.parent == tmp_path
-
-    def test_timestamp_format(self, tmp_path: Path):
-        sim_yaml = tmp_path / "simulation.yaml"
-        sim_yaml.touch()
-        results_dir = create_results_dir(sim_yaml)
-        # Name should be an ISO-ish timestamp
-        name = results_dir.name
-        assert len(name) > 10
-        assert "T" in name
-
-    def test_wind_profile_suffix(self, tmp_path: Path):
-        """When multiple wind profiles are used, directory name is suffixed."""
-        sim_yaml = tmp_path / "simulation.yaml"
-        sim_yaml.touch()
-        results_dir = create_results_dir(sim_yaml, wind_profile_suffix="day1")
-        assert results_dir.name.endswith("-day1")
         assert results_dir.exists()
 
-    def test_no_suffix_when_none(self, tmp_path: Path):
+    def test_no_subfolder_when_none(self, tmp_path: Path):
         sim_yaml = tmp_path / "simulation.yaml"
         sim_yaml.touch()
-        results_dir = create_results_dir(sim_yaml, wind_profile_suffix=None)
-        assert "-" not in results_dir.name.split("T")[-1].split("-", 3)[-1] if results_dir.name.count("-") > 2 else True
-        # Simpler: no suffix means name is just the timestamp
-        assert "T" in results_dir.name
+        results_dir = create_results_dir(sim_yaml, wind_profile_suffix=None, _clear=False)
+        assert results_dir.name == "results"
 
 
 # ---------------------------------------------------------------------------
