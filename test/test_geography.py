@@ -37,13 +37,13 @@ from geography import (
 )
 
 # ---------------------------------------------------------------------------
-# Paths to example data
+# Paths to example data (directory from conftest.py)
 # ---------------------------------------------------------------------------
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent / "simulations" / "g2b2-safety-case"
-D802_PATH = EXAMPLE_DIR / "d802.geojson"
-COASTLINE_PATH = EXAMPLE_DIR / "coastline.geojson"
+from conftest import EXAMPLE_SIM_DIR
+D802_PATH = EXAMPLE_SIM_DIR / "d802.geojson"
+COASTLINE_PATH = EXAMPLE_SIM_DIR / "coastline.geojson"
 
-# Launch site from simulations/g2b2-safety-case/cape-wrath.yaml
+# Launch site from cape-wrath.yaml
 LAUNCH_LAT = 58.6104700
 LAUNCH_LON = -4.9434804
 

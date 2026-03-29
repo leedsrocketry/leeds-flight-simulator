@@ -206,14 +206,11 @@ def test_grids_are_sorted(tmp_path):
     assert np.all(np.diff(model.alpha_grid) > 0)
 
 
-def test_real_aero_dir_loads():
-    """The committed simulations/g2b2-safety-case aero_tables directory must load without errors."""
-    real = Path(__file__).parent.parent / "simulations" / "g2b2-safety-case" / "aero_tables"
-    if not real.exists() or not list(real.glob("*.csv")):
-        pytest.skip("simulations/g2b2-safety-case/aero_tables not present or empty")
+def test_real_aero_dir_loads(aero_dir):
+    """The committed aero_tables directory must load without errors."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        model = build_aero_model(real)
+        model = build_aero_model(aero_dir)
     assert isinstance(model, AeroModel)
 
 

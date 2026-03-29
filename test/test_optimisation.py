@@ -46,10 +46,10 @@ from geography import (
 
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths (directory from conftest.py)
 # ---------------------------------------------------------------------------
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent / "simulations" / "g2b2-safety-case"
-SIM_YAML = EXAMPLE_DIR / "cape-wrath.yaml"
+from conftest import EXAMPLE_SIM_DIR
+SIM_YAML = EXAMPLE_SIM_DIR / "cape-wrath.yaml"
 
 # Launch site
 LAUNCH_LAT = 58.6104700

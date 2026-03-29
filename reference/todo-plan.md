@@ -26,6 +26,15 @@ Renames and restructure. No logic changes.
 ### 1.4 Commit checkpoint
 - Run full test suite, then commit: "Reorganise directory structure".
 
+### 1.5 Add `test/conftest.py` and remove `pyproject.toml`
+- Create `test/conftest.py` with:
+  - `sys.path` setup for project root (replaces `pyproject.toml`'s `pythonpath` setting).
+  - `EXAMPLE_SIM_DIR` constant pointing to `simulations/g2b2-safety-case/`.
+  - Session-scoped fixtures for common example data paths (`sim_yaml_path`, `vehicle_yaml_path`, `motor_path`, `aero_dir`, `d802_path`, `coastline_path`), each skipping if absent.
+- Update test files to use conftest fixtures/constants instead of hardcoded paths.
+- Delete `pyproject.toml` (its only purpose was `pythonpath`).
+- Run full test suite, then commit.
+
 ---
 
 ## Phase 2 — UX
