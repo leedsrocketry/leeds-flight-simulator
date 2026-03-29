@@ -9,6 +9,7 @@ Scope
 - Coastline check (sea / land modes)
 - Observation-station coverage
 - polygon_to_arrays round-trip
+- ned_to_latlon inverse projection
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from geography import (
     check_coastline,
     check_observation_coverage,
     load_polygon_ned,
+    ned_to_latlon,
     polygon_to_arrays,
     prepare_zone,
 )
@@ -338,3 +340,57 @@ class TestPolygonToArrays:
         east, north = polygon_to_arrays(poly)
         assert east[0] == east[-1]
         assert north[0] == north[-1]
+
+
+# ===========================================================================
+# 8. ned_to_latlon inverse projection
+# ===========================================================================
+
+class TestNedToLatlon:
+    def test_origin_returns_launch_site(self):
+        """NED origin (0, 0) maps back to the launch site."""
+        lat, lon = ned_to_latlon(0.0, 0.0, LAUNCH_LAT, LAUNCH_LON)
+        assert lat == pytest.approx(LAUNCH_LAT, abs=1e-10)
+        assert lon == pytest.approx(LAUNCH_LON, abs=1e-10)
+
+    def test_round_trip_single_point(self):
+        """Forward then inverse projection recovers the original lat/lon."""
+        test_lat, test_lon = 58.65, -4.85
+        # Forward: (lon, lat) → (east, north)
+        ned_coords = _lonlat_to_ned(
+            [(test_lon, test_lat)], LAUNCH_LAT, LAUNCH_LON,
+        )
+        east, north = ned_coords[0]
+        # Inverse: (north, east) → (lat, lon)
+        recovered_lat, recovered_lon = ned_to_latlon(
+            north, east, LAUNCH_LAT, LAUNCH_LON,
+        )
+        assert recovered_lat == pytest.approx(test_lat, abs=1e-8)
+        assert recovered_lon == pytest.approx(test_lon, abs=1e-8)
+
+    @pytest.mark.parametrize("lat, lon", [
+        (58.75, -4.50),    # NE corner of D802
+        (58.50, -5.00),    # SW corner of D802
+        (58.61, -4.94),    # near launch site
+        (59.00, -4.00),    # well outside danger area
+    ])
+    def test_round_trip_various_points(self, lat: float, lon: float):
+        """Round-trip accuracy across a range of positions."""
+        ned_coords = _lonlat_to_ned([(lon, lat)], LAUNCH_LAT, LAUNCH_LON)
+        east, north = ned_coords[0]
+        rec_lat, rec_lon = ned_to_latlon(north, east, LAUNCH_LAT, LAUNCH_LON)
+        assert rec_lat == pytest.approx(lat, abs=1e-8)
+        assert rec_lon == pytest.approx(lon, abs=1e-8)
+
+    def test_large_offset_north(self):
+        """10 km north produces a latitude increase of roughly 0.09 degrees."""
+        lat, lon = ned_to_latlon(10_000.0, 0.0, LAUNCH_LAT, LAUNCH_LON)
+        assert lat > LAUNCH_LAT
+        assert lat == pytest.approx(LAUNCH_LAT + 10_000 / 111_320, rel=1e-3)
+        assert lon == pytest.approx(LAUNCH_LON, abs=1e-10)
+
+    def test_large_offset_east(self):
+        """10 km east produces a longitude increase; latitude unchanged."""
+        lat, lon = ned_to_latlon(0.0, 10_000.0, LAUNCH_LAT, LAUNCH_LON)
+        assert lat == pytest.approx(LAUNCH_LAT, abs=1e-10)
+        assert lon > LAUNCH_LON

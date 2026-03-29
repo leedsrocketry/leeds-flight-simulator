@@ -1471,7 +1471,7 @@ def run_trajectory(
     _in_buffer = True  # assume compliant until proven otherwise
 
     if poly_e is not None and poly_n is not None:
-        from geofence import all_points_in_polygon
+        from geography import all_points_in_polygon
         _in_buffer = all_points_in_polygon(
             s_asc[:, 0], s_asc[:, 1], poly_e, poly_n,
         )
@@ -1552,7 +1552,7 @@ def run_trajectory(
 
     # ---- Descent footprint check ----
     if poly_e is not None and poly_n is not None:
-        from geofence import all_points_in_polygon
+        from geography import all_points_in_polygon
         if not all_points_in_polygon(
             y_desc[:n_desc, 0], y_desc[:n_desc, 1], poly_e, poly_n,
         ):
