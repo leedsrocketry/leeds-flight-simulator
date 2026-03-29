@@ -7,5 +7,5 @@ dist/
 .env
 .claude/
 CLAUDE.md
-map-tile-cache/
+.map_cache/
 results/

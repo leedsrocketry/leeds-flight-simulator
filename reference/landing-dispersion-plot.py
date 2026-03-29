@@ -258,7 +258,7 @@ _OS_TILE_URL  = (
     f"https://api.os.uk/maps/raster/v1/zxy/"
     f"{OS_TILE_STYLE}/{{z}}/{{x}}/{{y}}.png?key={OS_API_KEY}"
 )
-_TILE_CACHE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "map-tile-cache")
+_TILE_CACHE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".map_cache")
 
 def _km_to_wm(north_km: float, east_km: float) -> tuple[float, float]:
     """True-ground km offset from origin → Web Mercator (x, y)."""

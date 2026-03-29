@@ -957,7 +957,7 @@ def save_dispersion_plot(
     ax.set_ylim(ymin, ymax)
 
     tile_cache = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "map-tile-cache",
+        os.path.dirname(os.path.abspath(__file__)), ".map_cache",
     )
     os.makedirs(tile_cache, exist_ok=True)
     cx.set_cache_dir(tile_cache)
