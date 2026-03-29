@@ -12,7 +12,7 @@ geometry:
   fin_cp_radius: 0.095   # fin CP spanwise distance from centreline (m)
 
 mass:
-  wet_mass: 26.5               # total mass at launch — airframe + loaded motor (kg)
+  wet_mass: 24.5               # total mass at launch — airframe + loaded motor (kg)
   wet_cg: 1.15                 # wet vehicle CG from nosecone tip (m)
   wet_motor_cg: 1.82           # loaded motor CG from nosecone tip (m)
   propellant_inertia_roll:    1.4   # propellant roll inertia about roll axis (kg·m²)
