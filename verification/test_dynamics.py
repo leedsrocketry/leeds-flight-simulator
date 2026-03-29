@@ -1,10 +1,11 @@
-"""6DoF dynamics and integrator verification (§18.2, §18.3).
+"""Dynamics module verification — 6DoF, frames, launch rail, and descent (§18.2, §18.3).
 
 Tests:
-- Gravity-only free fall (no thrust, no aero): body falls, position matches
-- Integrator convergence: tighter tolerance → consistent results (§18.3)
-- 6DoF derivative: gravity direction in body frame
-- Apogee detection: vertical velocity sign change
+- Quaternion / DCM / frame transforms: round-trip identity, known rotations,
+  normalisation, quaternion rate consistency, DCM orthogonality
+- Launch rail exit velocity: constant thrust analytical solutions
+- 6DoF gravity-only free fall, integrator convergence, derivative checks
+- Terminal descent: terminal velocity, free fall, landing, wind displacement
 """
 
 import math
@@ -17,13 +18,20 @@ from dynamics import (
     _sixdof_deriv,
     quat_from_rail,
     quat_to_dcm_nb,
+    quat_rate,
+    quat_normalize,
     simulate_rail,
+    _rail_direction,
+    integrate_descent,
+    SCENARIO_DROGUE_ONLY,
+    SCENARIO_BALLISTIC,
 )
 from integrator import error_norm, optimal_step_factor
+from atmosphere import density
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 def _zero_wind():
@@ -32,6 +40,10 @@ def _zero_wind():
     north = np.zeros(2, dtype=np.float64)
     return alt, east, north
 
+
+# ---------------------------------------------------------------------------
+# 6DoF helpers
+# ---------------------------------------------------------------------------
 
 def _zero_aero():
     """Aero tables with C_A = C_N = 0 everywhere."""
@@ -53,6 +65,400 @@ def _dead_motor():
     total_impulse = 1e-6
     return times, thrusts, m_prop_0, total_impulse
 
+
+# ---------------------------------------------------------------------------
+# Rail helpers
+# ---------------------------------------------------------------------------
+
+def _constant_thrust_motor(thrust_n: float, burn_time: float):
+    """Return (times, thrusts) for a constant-thrust motor."""
+    times = np.array([0.0, burn_time], dtype=np.float64)
+    thrusts = np.array([thrust_n, thrust_n], dtype=np.float64)
+    return times, thrusts
+
+
+def _dummy_rail_aero():
+    """Minimal aero tables that return C_A = 0 everywhere."""
+    mach_g = np.array([0.0, 10.0], dtype=np.float64)
+    re_g = np.array([0.0, 1e8], dtype=np.float64)
+    alpha_g = np.array([0.0, 180.0], dtype=np.float64)
+    ca_tbl = np.zeros((2, 2, 2), dtype=np.float64)
+    return mach_g, re_g, alpha_g, ca_tbl
+
+
+def _nonzero_rail_aero(ca_val: float):
+    """Aero tables returning constant C_A everywhere."""
+    mach_g = np.array([0.0, 10.0], dtype=np.float64)
+    re_g = np.array([0.0, 1e8], dtype=np.float64)
+    alpha_g = np.array([0.0, 180.0], dtype=np.float64)
+    ca_tbl = np.full((2, 2, 2), ca_val, dtype=np.float64)
+    return mach_g, re_g, alpha_g, ca_tbl
+
+
+# ---------------------------------------------------------------------------
+# Descent helpers
+# ---------------------------------------------------------------------------
+
+def _dummy_descent_aero():
+    """Minimal aero tables (C_A = 1.0) for descent tests."""
+    mach_g = np.array([0.0, 10.0], dtype=np.float64)
+    re_g = np.array([0.0, 1e8], dtype=np.float64)
+    alpha_g = np.array([0.0, 180.0], dtype=np.float64)
+    ca_tbl = np.ones((2, 2, 2), dtype=np.float64)
+    return mach_g, re_g, alpha_g, ca_tbl
+
+
+# ===========================================================================
+# FRAMES — quaternion / DCM / rail direction
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# quat_from_rail → DCM → body x-axis should align with rail direction
+# ---------------------------------------------------------------------------
+
+_RAIL_CASES = [
+    # (azimuth_deg, inclination_deg, description)
+    (0.0, 90.0, "vertical, north"),
+    (0.0, 85.0, "5° from vertical, north"),
+    (90.0, 85.0, "5° from vertical, east"),
+    (180.0, 80.0, "10° from vertical, south"),
+    (270.0, 75.0, "15° from vertical, west"),
+    (45.0, 85.0, "5° from vertical, NE"),
+    (0.0, 45.0, "45° from horizontal, north"),
+]
+
+
+@pytest.mark.parametrize("az_deg, inc_deg, desc", _RAIL_CASES)
+def test_body_x_aligns_with_rail(az_deg, inc_deg, desc):
+    """Body x-axis (via C_nb · [1,0,0]) should equal the rail direction in NED."""
+    az = math.radians(az_deg)
+    inc = math.radians(inc_deg)
+
+    q0, q1, q2, q3 = quat_from_rail(az, inc)
+    C_nb = quat_to_dcm_nb(q0, q1, q2, q3)
+
+    # Body x-axis in NED = first column of C_nb
+    body_x_ned = np.array([C_nb[0, 0], C_nb[1, 0], C_nb[2, 0]])
+
+    eN, eE, eD = _rail_direction(az, inc)
+    rail_ned = np.array([eN, eE, eD])
+
+    np.testing.assert_allclose(body_x_ned, rail_ned, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# DCM properties: orthogonal, det = +1
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("az_deg, inc_deg, desc", _RAIL_CASES)
+def test_dcm_orthogonal(az_deg, inc_deg, desc):
+    """C_nb must be orthogonal: C_nb^T C_nb = I."""
+    az = math.radians(az_deg)
+    inc = math.radians(inc_deg)
+    q0, q1, q2, q3 = quat_from_rail(az, inc)
+    C = quat_to_dcm_nb(q0, q1, q2, q3)
+    np.testing.assert_allclose(C.T @ C, np.eye(3), atol=1e-12)
+
+
+@pytest.mark.parametrize("az_deg, inc_deg, desc", _RAIL_CASES)
+def test_dcm_determinant(az_deg, inc_deg, desc):
+    """det(C_nb) must be +1 (proper rotation)."""
+    az = math.radians(az_deg)
+    inc = math.radians(inc_deg)
+    q0, q1, q2, q3 = quat_from_rail(az, inc)
+    C = quat_to_dcm_nb(q0, q1, q2, q3)
+    assert np.linalg.det(C) == pytest.approx(1.0, abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Quaternion normalisation
+# ---------------------------------------------------------------------------
+
+def test_quat_normalize_unit():
+    """Already-unit quaternion should be unchanged."""
+    q0, q1, q2, q3 = quat_normalize(1.0, 0.0, 0.0, 0.0)
+    assert (q0, q1, q2, q3) == pytest.approx((1.0, 0.0, 0.0, 0.0), abs=1e-15)
+
+
+def test_quat_normalize_scaled():
+    """Scaled quaternion should normalise to unit length."""
+    q0, q1, q2, q3 = quat_normalize(2.0, 0.0, 0.0, 0.0)
+    assert (q0, q1, q2, q3) == pytest.approx((1.0, 0.0, 0.0, 0.0), abs=1e-15)
+
+    # General case
+    q0, q1, q2, q3 = quat_normalize(3.0, 4.0, 0.0, 0.0)
+    norm = math.sqrt(q0**2 + q1**2 + q2**2 + q3**2)
+    assert norm == pytest.approx(1.0, abs=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# Quaternion rate: dq/dt consistency
+# ---------------------------------------------------------------------------
+
+def test_quat_rate_zero_omega():
+    """Zero angular velocity → zero quaternion rate."""
+    dq0, dq1, dq2, dq3 = quat_rate(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    assert (dq0, dq1, dq2, dq3) == pytest.approx((0.0, 0.0, 0.0, 0.0), abs=1e-15)
+
+
+def test_quat_rate_pure_roll():
+    """Pure roll (p ≠ 0, q = r = 0) at identity quaternion.
+
+    dq/dt = 0.5 * [-p*q1, p*q0, p*q3, -p*q2]
+    At identity q = [1,0,0,0]: dq = [0, 0.5*p, 0, 0]
+    """
+    p = 2.0
+    dq0, dq1, dq2, dq3 = quat_rate(1.0, 0.0, 0.0, 0.0, p, 0.0, 0.0)
+    assert dq0 == pytest.approx(0.0, abs=1e-15)
+    assert dq1 == pytest.approx(0.5 * p, abs=1e-15)
+    assert dq2 == pytest.approx(0.0, abs=1e-15)
+    assert dq3 == pytest.approx(0.0, abs=1e-15)
+
+
+def test_quat_rate_preserves_norm():
+    """q · dq/dt = 0 (quaternion rate is tangent to the unit sphere)."""
+    q0, q1, q2, q3 = quat_from_rail(math.radians(45), math.radians(80))
+    p, q, r = 0.5, -0.3, 0.1
+    dq0, dq1, dq2, dq3 = quat_rate(q0, q1, q2, q3, p, q, r)
+    dot = q0 * dq0 + q1 * dq1 + q2 * dq2 + q3 * dq3
+    assert dot == pytest.approx(0.0, abs=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# Rail direction vector sanity
+# ---------------------------------------------------------------------------
+
+def test_rail_direction_vertical():
+    """90° inclination should point straight up (NED Down = -1)."""
+    eN, eE, eD = _rail_direction(0.0, math.radians(90.0))
+    assert eN == pytest.approx(0.0, abs=1e-12)
+    assert eE == pytest.approx(0.0, abs=1e-12)
+    assert eD == pytest.approx(-1.0, abs=1e-12)
+
+
+def test_rail_direction_horizontal_north():
+    """0° inclination, 0° azimuth should point North."""
+    eN, eE, eD = _rail_direction(0.0, 0.0)
+    assert eN == pytest.approx(1.0, abs=1e-12)
+    assert eE == pytest.approx(0.0, abs=1e-12)
+    assert eD == pytest.approx(0.0, abs=1e-12)
+
+
+def test_rail_direction_unit_vector():
+    """Rail direction must have unit length."""
+    for az_deg in [0, 45, 90, 135, 270]:
+        for inc_deg in [0, 30, 60, 85, 90]:
+            eN, eE, eD = _rail_direction(
+                math.radians(az_deg), math.radians(inc_deg),
+            )
+            length = math.sqrt(eN**2 + eE**2 + eD**2)
+            assert length == pytest.approx(1.0, abs=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# Gravity in body frame via DCM
+# ---------------------------------------------------------------------------
+
+def test_gravity_body_frame_vertical_rail():
+    """On a vertical rail (90° inc), gravity in body frame should be along -x.
+
+    g_NED = [0, 0, g]. Body x points up (NED Down = -1).
+    grav_body = C_bn @ g_NED = C_nb^T @ [0,0,g].
+    For vertical rail, body x = -NED_D, so grav_body_x = -g.
+    """
+    q0, q1, q2, q3 = quat_from_rail(0.0, math.radians(90.0))
+    C_nb = quat_to_dcm_nb(q0, q1, q2, q3)
+    g = 9.80665
+    g_ned = np.array([0.0, 0.0, g])
+    grav_body = C_nb.T @ g_ned
+
+    assert grav_body[0] == pytest.approx(-g, rel=1e-10)
+    assert grav_body[1] == pytest.approx(0.0, abs=1e-10)
+    assert grav_body[2] == pytest.approx(0.0, abs=1e-10)
+
+
+# ===========================================================================
+# LAUNCH RAIL
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Test: constant thrust, no drag, no gravity (horizontal rail)
+# ---------------------------------------------------------------------------
+
+def test_rail_no_drag_no_gravity():
+    """Horizontal rail, constant thrust, zero drag.
+
+    Analytical: a = F/m (constant mass since we set m_prop_0 ~ 0).
+    V_exit = sqrt(2 * a * L).
+    """
+    F = 1000.0       # N
+    m_dry = 10.0      # kg
+    m_prop_0 = 1e-6   # effectively zero propellant
+    rail_length = 3.0  # m
+    burn_time = 5.0    # s (longer than rail time)
+
+    times, thrusts = _constant_thrust_motor(F, burn_time)
+    total_impulse = float(np.trapz(thrusts, times))
+    mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
+
+    # Horizontal rail (0° inclination) pointing north (0° azimuth)
+    # → no gravity component along rail
+    V_exit, t_exit, rN, rE, rD = simulate_rail(
+        rail_azimuth_rad=0.0,
+        rail_inclination_rad=0.0,
+        rail_length=rail_length,
+        motor_times=times,
+        motor_thrusts=thrusts,
+        nozzle_area=0.0,          # no altitude correction
+        impulse_factor=1.0,
+        m_prop_0=m_prop_0,
+        total_impulse=total_impulse,
+        m_dry=m_dry,
+        mach_g=mach_g,
+        re_g=re_g,
+        alpha_g=alpha_g,
+        ca_tbl=ca_tbl,
+        A_ref=0.01,               # irrelevant with zero C_A
+        length=1.0,
+        rtol=1e-9,
+        atol=1e-9,
+    )
+
+    a = F / m_dry
+    V_analytical = math.sqrt(2.0 * a * rail_length)
+    t_analytical = math.sqrt(2.0 * rail_length / a)
+
+    assert V_exit == pytest.approx(V_analytical, rel=1e-4)
+    assert t_exit == pytest.approx(t_analytical, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Test: vertical rail with gravity, no drag
+# ---------------------------------------------------------------------------
+
+def test_rail_vertical_with_gravity():
+    """Vertical rail, constant thrust, zero drag.
+
+    Analytical: a_net = F/m - g.  V_exit = sqrt(2 * a_net * L).
+    """
+    F = 500.0
+    m_dry = 10.0
+    m_prop_0 = 1e-6
+    rail_length = 3.0
+    burn_time = 5.0
+    g = 9.80665
+
+    times, thrusts = _constant_thrust_motor(F, burn_time)
+    total_impulse = float(np.trapz(thrusts, times))
+    mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
+
+    V_exit, t_exit, rN, rE, rD = simulate_rail(
+        rail_azimuth_rad=0.0,
+        rail_inclination_rad=math.radians(90.0),
+        rail_length=rail_length,
+        motor_times=times,
+        motor_thrusts=thrusts,
+        nozzle_area=0.0,
+        impulse_factor=1.0,
+        m_prop_0=m_prop_0,
+        total_impulse=total_impulse,
+        m_dry=m_dry,
+        mach_g=mach_g,
+        re_g=re_g,
+        alpha_g=alpha_g,
+        ca_tbl=ca_tbl,
+        A_ref=0.01,
+        length=1.0,
+        rtol=1e-9,
+        atol=1e-9,
+    )
+
+    a_net = F / m_dry - g
+    V_analytical = math.sqrt(2.0 * a_net * rail_length)
+
+    assert V_exit == pytest.approx(V_analytical, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Test: exit position matches rail direction × distance
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("az_deg, inc_deg", [
+    (0.0, 85.0),
+    (90.0, 80.0),
+    (45.0, 70.0),
+])
+def test_rail_exit_position_direction(az_deg, inc_deg):
+    """Exit NED position should be approximately rail_length × e_rail."""
+    F = 2000.0
+    m_dry = 10.0
+    m_prop_0 = 1e-6
+    rail_length = 2.0
+    burn_time = 5.0
+
+    times, thrusts = _constant_thrust_motor(F, burn_time)
+    total_impulse = float(np.trapz(thrusts, times))
+    mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
+
+    az = math.radians(az_deg)
+    inc = math.radians(inc_deg)
+
+    V_exit, t_exit, rN, rE, rD = simulate_rail(
+        az, inc, rail_length,
+        times, thrusts, 0.0, 1.0,
+        m_prop_0, total_impulse, m_dry,
+        mach_g, re_g, alpha_g, ca_tbl,
+        0.01, 1.0, 1e-9, 1e-9,
+    )
+
+    eN, eE, eD = _rail_direction(az, inc)
+    # Position should be along rail direction
+    pos = np.array([rN, rE, rD])
+    expected = np.array([eN, eE, eD]) * rail_length
+    # Allow some overshoot since integration may step slightly past rail_length
+    np.testing.assert_allclose(pos / rail_length, expected / rail_length, atol=0.05)
+
+
+# ---------------------------------------------------------------------------
+# Test: impulse factor scaling
+# ---------------------------------------------------------------------------
+
+def test_rail_impulse_factor():
+    """Doubling impulse factor should increase exit velocity.
+
+    With constant mass (no propellant): V ∝ sqrt(F), so
+    V(k=2) / V(k=1) = sqrt(2).
+    """
+    F = 1000.0
+    m_dry = 10.0
+    m_prop_0 = 1e-6
+    rail_length = 3.0
+    burn_time = 5.0
+
+    times, thrusts = _constant_thrust_motor(F, burn_time)
+    total_impulse = float(np.trapz(thrusts, times))
+    mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
+
+    common = dict(
+        rail_azimuth_rad=0.0,
+        rail_inclination_rad=0.0,
+        rail_length=rail_length,
+        motor_times=times, motor_thrusts=thrusts,
+        nozzle_area=0.0,
+        m_prop_0=m_prop_0, total_impulse=total_impulse, m_dry=m_dry,
+        mach_g=mach_g, re_g=re_g, alpha_g=alpha_g, ca_tbl=ca_tbl,
+        A_ref=0.01, length=1.0, rtol=1e-9, atol=1e-9,
+    )
+
+    V1, *_ = simulate_rail(impulse_factor=1.0, **common)
+    V2, *_ = simulate_rail(impulse_factor=2.0, **common)
+
+    assert V2 / V1 == pytest.approx(math.sqrt(2.0), rel=1e-3)
+
+
+# ===========================================================================
+# 6DoF DYNAMICS
+# ===========================================================================
 
 # ---------------------------------------------------------------------------
 # Test: gravity-only 6DoF — vertical rail, no aero, no thrust
@@ -246,3 +652,164 @@ def test_sixdof_deriv_gravity_direction():
     assert dy[10] == pytest.approx(0.0, abs=1e-10)
     assert dy[11] == pytest.approx(0.0, abs=1e-10)
     assert dy[12] == pytest.approx(0.0, abs=1e-10)
+
+
+# ===========================================================================
+# TERMINAL DESCENT
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Test: terminal velocity under constant drag
+# ---------------------------------------------------------------------------
+
+def test_terminal_velocity_drogue():
+    """Vehicle dropped from high altitude converges to terminal velocity.
+
+    V_terminal = sqrt(2 * m * g / (rho * CdA))
+
+    Use sea-level density for a short drop (altitude effect is small).
+    """
+    m = 10.0         # kg
+    g = 9.80665      # m/s²
+    cda = 0.5        # m² — drogue CdA
+    h0 = 500.0       # m — drop altitude (low enough for ~constant rho)
+    rho_sl = density(0.0)
+
+    V_terminal = math.sqrt(2.0 * m * g / (rho_sl * cda))
+
+    # Start from rest at h0
+    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, 0.0], dtype=np.float64)
+    w_alt, w_east, w_north = _zero_wind()
+    mach_g, re_g, alpha_g, ca_tbl = _dummy_descent_aero()
+
+    t_out, y_out, n = integrate_descent(
+        0.0, state0,
+        w_alt, w_east, w_north,
+        mach_g, re_g, alpha_g, ca_tbl,
+        A_ref=0.01, ref_length=1.0,
+        m=m,
+        drogue_cda=cda, main_cda=0.0, main_deploy_alt=0.0,
+        scenario=SCENARIO_DROGUE_ONLY,
+        rtol=1e-8, atol=1e-8,
+    )
+
+    # Final downward velocity (NED: vD > 0 means descending)
+    vD_final = y_out[n - 1, 5]
+
+    # Should be close to terminal velocity (within 2% — density varies slightly
+    # over the 500 m drop)
+    assert vD_final == pytest.approx(V_terminal, rel=0.02)
+
+
+# ---------------------------------------------------------------------------
+# Test: free fall (no drag)
+# ---------------------------------------------------------------------------
+
+def test_free_fall_no_drag():
+    """With zero CdA, vehicle should free-fall: vD = g*t, rD = rD0 + 0.5*g*t².
+
+    We use ballistic scenario with C_A = 0 everywhere.
+    """
+    m = 10.0
+    g = 9.80665
+    h0 = 200.0
+
+    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, 0.0], dtype=np.float64)
+    w_alt, w_east, w_north = _zero_wind()
+
+    # Zero C_A aero tables
+    mach_g = np.array([0.0, 10.0], dtype=np.float64)
+    re_g = np.array([0.0, 1e8], dtype=np.float64)
+    alpha_g = np.array([0.0, 180.0], dtype=np.float64)
+    ca_tbl = np.zeros((2, 2, 2), dtype=np.float64)
+
+    t_out, y_out, n = integrate_descent(
+        0.0, state0,
+        w_alt, w_east, w_north,
+        mach_g, re_g, alpha_g, ca_tbl,
+        A_ref=0.01, ref_length=1.0,
+        m=m,
+        drogue_cda=0.0, main_cda=0.0, main_deploy_alt=0.0,
+        scenario=SCENARIO_BALLISTIC,
+        rtol=1e-9, atol=1e-9,
+    )
+
+    # Check a few interior points
+    for i in range(1, min(n, 10)):
+        t = t_out[i]
+        rD_expected = -h0 + 0.5 * g * t * t
+        vD_expected = g * t
+        assert y_out[i, 2] == pytest.approx(rD_expected, rel=1e-4)
+        assert y_out[i, 5] == pytest.approx(vD_expected, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Test: landing at ground (rD >= 0)
+# ---------------------------------------------------------------------------
+
+def test_descent_lands_at_ground():
+    """Vehicle must reach rD >= 0 (ground) by the last stored step."""
+    m = 10.0
+    h0 = 300.0
+    cda = 0.3
+
+    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, 0.0], dtype=np.float64)
+    w_alt, w_east, w_north = _zero_wind()
+    mach_g, re_g, alpha_g, ca_tbl = _dummy_descent_aero()
+
+    t_out, y_out, n = integrate_descent(
+        0.0, state0,
+        w_alt, w_east, w_north,
+        mach_g, re_g, alpha_g, ca_tbl,
+        A_ref=0.01, ref_length=1.0,
+        m=m,
+        drogue_cda=cda, main_cda=0.0, main_deploy_alt=0.0,
+        scenario=SCENARIO_DROGUE_ONLY,
+        rtol=1e-6, atol=1e-6,
+    )
+
+    assert y_out[n - 1, 2] >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test: wind displaces landing point
+# ---------------------------------------------------------------------------
+
+def test_descent_wind_displacement():
+    """Constant east wind should displace the landing point eastward."""
+    m = 10.0
+    h0 = 300.0
+    cda = 0.5
+    wind_speed = 10.0  # m/s eastward
+
+    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, 0.0], dtype=np.float64)
+
+    # Constant east wind
+    w_alt = np.array([0.0, 50000.0], dtype=np.float64)
+    w_east = np.array([wind_speed, wind_speed], dtype=np.float64)
+    w_north = np.zeros(2, dtype=np.float64)
+    mach_g, re_g, alpha_g, ca_tbl = _dummy_descent_aero()
+
+    # With wind
+    _, y_wind, n_wind = integrate_descent(
+        0.0, state0.copy(),
+        w_alt, w_east, w_north,
+        mach_g, re_g, alpha_g, ca_tbl,
+        0.01, 1.0, m, cda, 0.0, 0.0,
+        SCENARIO_DROGUE_ONLY, 1e-6, 1e-6,
+    )
+
+    # Without wind
+    w_east_zero = np.zeros(2, dtype=np.float64)
+    _, y_nowind, n_nowind = integrate_descent(
+        0.0, state0.copy(),
+        w_alt, w_east_zero, w_north,
+        mach_g, re_g, alpha_g, ca_tbl,
+        0.01, 1.0, m, cda, 0.0, 0.0,
+        SCENARIO_DROGUE_ONLY, 1e-6, 1e-6,
+    )
+
+    # With east wind, landing East position (index 1) should be larger
+    east_with = y_wind[n_wind - 1, 1]
+    east_without = y_nowind[n_nowind - 1, 1]
+    assert east_with > east_without + 1.0  # at least 1 m displacement
