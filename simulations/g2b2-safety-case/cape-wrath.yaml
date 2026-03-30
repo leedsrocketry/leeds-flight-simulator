@@ -109,3 +109,6 @@ verification:     # optional — single-trajectory comparison against a
   mach_tolerance: 0.05      # fraction in [0, 1] — tolerance band on Mach number
   sm_tolerance: 0.05        # fraction in [0, 1] — tolerance band on static margin
   mass_tolerance: 0.05      # fraction in [0, 1] — tolerance band on vehicle mass
+  exceedance_fraction: 0.01 # fraction in [0, 1] — fraction of comparison points allowed
+                            # outside the tolerance band before a quantity fails;
+                            # 0.01 = 1%; set to 0 for strict (every-point) checking

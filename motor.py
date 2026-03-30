@@ -92,6 +92,13 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
     """
     times = np.ascontiguousarray(motor_data.time_s, dtype=np.float64)
     thrusts = np.ascontiguousarray(motor_data.thrust_n, dtype=np.float64)
+
+    # Prepend (0, 0) if the .eng data doesn't start at t=0, matching
+    # RASAero's implicit ignition ramp convention (linear ramp from zero).
+    if times[0] > 0.0:
+        times   = np.concatenate(([0.0], times))
+        thrusts = np.concatenate(([0.0], thrusts))
+
     total_impulse = float(np.trapz(thrusts, times))
 
     if total_impulse <= 0:

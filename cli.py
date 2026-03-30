@@ -109,7 +109,7 @@ class _RunDisplay:
     def __init__(self, con: Console) -> None:
         self._console = con
         self._warnings: list[str] = []
-        self._spinner = Spinner("dots", text="Initialising...")
+        self._spinner = Spinner("line", text="Initialising...")
         self._progress = Progress(*_progress_columns(), auto_refresh=False)
         self._live = Live(
             self._build(), console=con, refresh_per_second=12,
@@ -665,15 +665,19 @@ def verify(config_path: Path, dof: str, dump_csv: Path | None, no_popup: bool) -
     import numpy as np
     for qty_name, cmp in ver_result.comparisons.items():
         err = cmp.sim_values - cmp.ref_values
-        nonzero = np.abs(cmp.ref_values) > 1e-12
         max_abs = float(np.max(np.abs(err)))
         rms = float(np.sqrt(np.mean(err ** 2)))
         mean_bias = float(np.mean(err))
 
+        n_fail = int(np.sum(~cmp.within_tolerance))
+        n_total = len(cmp.within_tolerance)
         if cmp.passed:
-            result_str = "[bold green]PASS[/bold green]"
+            if n_fail == 0:
+                result_str = "[bold green]PASS[/bold green]"
+            else:
+                pct = 100.0 * n_fail / n_total
+                result_str = f"[bold green]PASS[/bold green] ({pct:.2f}%)"
         else:
-            n_fail = int(np.sum(~cmp.within_tolerance))
             result_str = f"[bold red]FAIL[/bold red] ({n_fail} pts)"
 
         table.add_row(
@@ -716,5 +720,10 @@ def verify(config_path: Path, dof: str, dump_csv: Path | None, no_popup: bool) -
 
         console.print(f"\nComparison data written to: {dump_path}")
 
-    if ver_result.figure is not None and not no_popup:
-        plt.show()
+    if ver_result.figure is not None:
+        fig_path = config_path.parent / "results" / "verification_plot.png"
+        fig_path.parent.mkdir(parents=True, exist_ok=True)
+        ver_result.figure.savefig(fig_path, dpi=150, bbox_inches="tight")
+        console.print(f"\nFigure saved to: {fig_path}")
+        if not no_popup:
+            plt.show()

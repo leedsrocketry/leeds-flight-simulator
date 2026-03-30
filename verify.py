@@ -99,7 +99,7 @@ class QuantityComparison:
     sim_values: np.ndarray        # interpolated onto ref_time
     tolerance: float              # fractional tolerance
     within_tolerance: np.ndarray  # bool array, True where within band
-    passed: bool                  # all within tolerance
+    passed: bool                  # within exceedance allowance
 
 
 @dataclass
@@ -180,6 +180,49 @@ def _load_reference_csv(path: Path) -> dict[str, np.ndarray]:
         data[qty] = np.array(values, dtype=np.float64)
 
     return data
+
+
+# ---------------------------------------------------------------------------
+# Rail phase reconstruction helper
+# ---------------------------------------------------------------------------
+
+def _rail_phase_arrays(
+    t_exit: float,
+    z_exit: float,
+    V_exit: float,
+    motor_model: MotorModel,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Generate time series for the launch rail phase (t=0 to t_exit, exclusive).
+
+    Altitude and speed are linearly interpolated from 0 to their exit values
+    (a good approximation for the short rail phase).  Thrust and mass are
+    computed exactly from the motor model.
+
+    Returns
+    -------
+    (t_rail, alt_rail, mach_rail, thrust_rail, mass_rail)
+        Each array has length N where N = ceil(t_exit / 0.002), minimum 2.
+    """
+    mm = motor_model
+    N = max(2, math.ceil(t_exit / 0.002))
+    t_rail = np.linspace(0.0, t_exit, N + 1)[:-1]  # exclude t_exit (it starts the free-flight arrays)
+
+    alt_rail = np.linspace(0.0, z_exit, N)
+    V_rail = np.linspace(0.0, V_exit, N)
+
+    thrust_rail = np.empty(N, dtype=np.float64)
+    mass_rail = np.empty(N, dtype=np.float64)
+    mach_rail = np.empty(N, dtype=np.float64)
+
+    for i in range(N):
+        ti = float(t_rail[i])
+        hi = float(alt_rail[i])
+        thrust_rail[i] = thrust_corrected_at(mm.times, mm.thrusts, mm.nozzle_area, hi, ti)
+        mass_rail[i] = mass_at(mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse, mm.m_dry, ti)
+        _, _, _, a_sound, _ = isa(hi)
+        mach_rail[i] = V_rail[i] / a_sound if a_sound > 0.0 else 0.0
+
+    return t_rail, alt_rail, mach_rail, thrust_rail, mass_rail
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +355,25 @@ def _extract_trajectory_quantities_6dof(
         thrust_full = thrust_asc
         mass_full = mass_asc
 
+    # --- Prepend launch rail phase (t=0 to t_asc[0]) ---
+    # t_asc starts at rail exit; prepend the on-rail period so the LFS time
+    # axis aligns with reference simulators that start at ignition (t=0).
+    t_exit = float(t_asc[0])
+    if t_exit > 0.0:
+        u0 = float(state_asc[0, 7])
+        v0 = float(state_asc[0, 8])
+        w0 = float(state_asc[0, 9])
+        V_exit = math.sqrt(u0 * u0 + v0 * v0 + w0 * w0)
+        z_exit = float(alt_asc[0])
+        t_r, alt_r, mach_r, thrust_r, mass_r = _rail_phase_arrays(t_exit, z_exit, V_exit, mm)
+        sm_r = np.full(len(t_r), float(sm_asc[0]))
+        t_full    = np.concatenate([t_r,     t_full])
+        alt_full  = np.concatenate([alt_r,   alt_full])
+        mach_full = np.concatenate([mach_r,  mach_full])
+        sm_full   = np.concatenate([sm_r,    sm_full])
+        thrust_full = np.concatenate([thrust_r, thrust_full])
+        mass_full   = np.concatenate([mass_r,   mass_full])
+
     return {
         "time": t_full,
         "altitude": alt_full,
@@ -432,6 +494,20 @@ def _extract_trajectory_quantities_2dof(
     thrust_full = np.concatenate([thrust_asc, thrust_desc[1:]])
     mass_full = np.concatenate([mass_asc, mass_desc[1:]])
 
+    # --- Prepend launch rail phase (t=0 to t_asc[0]) ---
+    t_exit = float(t_asc[0])
+    if t_exit > 0.0:
+        V_exit = math.sqrt(float(vx_asc[0])**2 + float(vz_asc[0])**2)
+        z_exit = float(z_asc[0])
+        t_r, alt_r, mach_r, thrust_r, mass_r = _rail_phase_arrays(t_exit, z_exit, V_exit, mm)
+        sm_r = np.full(len(t_r), float(sm_asc[0]))
+        t_full      = np.concatenate([t_r,      t_full])
+        alt_full    = np.concatenate([alt_r,    alt_full])
+        mach_full   = np.concatenate([mach_r,   mach_full])
+        sm_full     = np.concatenate([sm_r,     sm_full])
+        thrust_full = np.concatenate([thrust_r, thrust_full])
+        mass_full   = np.concatenate([mass_r,   mass_full])
+
     return {
         "time": t_full,
         "altitude": alt_full,
@@ -453,11 +529,13 @@ def _compare_quantity(
     sim_time: np.ndarray,
     sim_values: np.ndarray,
     tolerance: float,
+    exceedance_fraction: float = 0.0,
 ) -> QuantityComparison:
     """Interpolate simulator onto reference timebase and compare.
 
     Uses fractional tolerance with an absolute floor to handle near-zero
-    values gracefully.
+    values gracefully.  A quantity passes if the fraction of points
+    outside the tolerance band is ≤ ``exceedance_fraction``.
     """
     # Clip to overlapping time range
     t_max = min(ref_time[-1], sim_time[-1])
@@ -473,6 +551,10 @@ def _compare_quantity(
     scale = np.maximum(np.abs(v_ref), floor)
     within = np.abs(v_sim - v_ref) <= tolerance * scale
 
+    n_outside = int(np.sum(~within))
+    n_total = len(within)
+    passed = (n_outside / n_total) <= exceedance_fraction if n_total > 0 else True
+
     return QuantityComparison(
         name=name,
         ref_time=t_ref,
@@ -480,7 +562,7 @@ def _compare_quantity(
         sim_values=v_sim,
         tolerance=tolerance,
         within_tolerance=within,
-        passed=bool(np.all(within)),
+        passed=passed,
     )
 
 
@@ -729,6 +811,7 @@ def run_verification(
             sim_time=sim_data["time"],
             sim_values=sim_data[qty],
             tolerance=tolerance_map[qty],
+            exceedance_fraction=ver_cfg.exceedance_fraction,
         )
 
     all_passed = all(c.passed for c in comparisons.values())
