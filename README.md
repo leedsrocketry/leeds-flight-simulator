@@ -242,13 +242,13 @@ A run passes if ≥ `compliance_threshold` fraction of samples are compliant. Al
 
 When `azimuth` and/or `inclination` are set to `"auto"`, a four-phase optimisation routine runs before the main Monte Carlo analysis:
 
-1. **Phase 1 — Inclination Selection.** Deterministic 3-DoF simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (maximising apogee) whose ballistic landing is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
+1. **Inclination Selection.** Deterministic 3-DoF simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (maximising apogee) whose ballistic landing is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
 
-2. **Phase 2 — Azimuth Narrowing.** Analytically filters integer azimuths in `azimuth_range` using mean wind drift, discarding any whose estimated premature-main landing centroid falls outside the buffered danger area.
+2. **Azimuth Narrowing.** Analytically filters integer azimuths in `azimuth_range` using mean wind drift, discarding any whose estimated premature-main landing centroid falls outside the buffered danger area.
 
-3. **Phase 3 — Azimuth Optimisation.** Bayesian optimisation (Gaussian Process, UCB acquisition) over surviving azimuths. Each iteration runs premature-main Monte Carlo simulations with wind uncertainty to estimate containment probability.
+3. **Azimuth Optimisation.** Bayesian optimisation (Gaussian Process, UCB acquisition) over surviving azimuths. Each iteration runs premature-main Monte Carlo simulations with wind uncertainty to estimate containment probability.
 
-4. **Phase 4 — Candidate Validation.** Top candidate azimuths validated with the full uncertainty set (wind, impulse, launch angles, fin cant). Selects the azimuth with the greatest containment margin.
+4. **Candidate Validation.** Top candidate azimuths validated with the full uncertainty set (wind, impulse, launch angles, fin cant). Selects the azimuth with the greatest containment margin.
 
 If only inclination is `"auto"`, only Phase 1 runs. If only azimuth is `"auto"`, Phases 2–4 run with the provided inclination.
 

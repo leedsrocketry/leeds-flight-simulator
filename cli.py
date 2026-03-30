@@ -603,3 +603,51 @@ def replay(
 
     if figure_paths:
         _open_figures(figure_paths)
+
+
+@main.command()
+@click.argument("config_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-d", "--dof", type=click.Choice(["2", "6"]), default="6",
+              help="Ascent model: 6 (full 6DoF) or 2 (point-mass).")
+def verify(config_path: Path, dof: str) -> None:
+    """Compare a single trajectory against a reference CSV."""
+    import matplotlib.pyplot as plt
+
+    config_path = Path(config_path).resolve()
+    sim_cfg = load_simulation_config(config_path)
+
+    if sim_cfg.verification is None:
+        console.print(Panel(
+            "No verification section in config.",
+            border_style="red", title="ERROR", title_align="left",
+        ))
+        sys.exit(1)
+
+    display = _RunDisplay(console)
+
+    def _showwarning(
+        message: Warning | str,
+        category: type[Warning],
+        filename: str,
+        lineno: int,
+        file: object = None,
+        line: str | None = None,
+    ) -> None:
+        display.add_warning(str(message))
+
+    warnings.showwarning = _showwarning
+
+    display.start()
+    display.update_status("Loading configuration and models...")
+    vehicle_cfg, motor_model, aero_model, _ = load_all_models(sim_cfg)
+
+    display.update_status(f"Running {dof}DoF verification trajectory...")
+    ver_result = run_verification(
+        sim_cfg, vehicle_cfg, motor_model, aero_model, dof=int(dof),
+    )
+
+    display.update_status("Done.")
+    display.stop()
+
+    if ver_result.figure is not None:
+        plt.show()

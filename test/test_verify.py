@@ -86,23 +86,26 @@ class TestLoadReferenceCsv:
         data = _load_reference_csv(csv_path)
         assert "altitude" in data
 
-    def test_missing_column_raises(self, tmp_path: Path) -> None:
-        """ValueError raised when a required column is missing."""
+    def test_missing_column_warns(self, tmp_path: Path) -> None:
+        """Missing optional columns produce a warning, not an error."""
         csv_path = self._write_csv(tmp_path, """\
             time,altitude,mass,sm
             0.0,0.0,53.0,2.12
         """)
-        with pytest.raises(ValueError, match="mach"):
-            _load_reference_csv(csv_path)
+        with pytest.warns(UserWarning, match="mach"):
+            data = _load_reference_csv(csv_path)
+        assert "mach" not in data
 
     def test_multiple_missing_columns(self, tmp_path: Path) -> None:
-        """All missing columns are listed in the error."""
+        """All missing columns are listed in the warning."""
         csv_path = self._write_csv(tmp_path, """\
             time,altitude
             0.0,0.0
         """)
-        with pytest.raises(ValueError, match="mach"):
-            _load_reference_csv(csv_path)
+        with pytest.warns(UserWarning, match="mach"):
+            data = _load_reference_csv(csv_path)
+        assert "mach" not in data
+        assert "mass" not in data
 
     def test_first_match_wins(self, tmp_path: Path) -> None:
         """When two columns match the same alias, the first one wins."""
@@ -235,14 +238,16 @@ class TestPlotGeneration:
         )
 
     def test_figure_has_correct_axes(self) -> None:
-        """The comparison figure should have one axis per compared quantity."""
+        """The 3×2 grid should have 6 axes, with 5 visible."""
         comparisons = {
             qty: self._make_comparison(qty, True)
             for qty in _COMPARED_QUANTITIES
         }
         fig = _build_comparison_figure(comparisons)
 
-        assert len(fig.axes) == len(_COMPARED_QUANTITIES)
+        assert len(fig.axes) == 6  # 3×2 grid
+        visible = [ax for ax in fig.axes if ax.get_visible()]
+        assert len(visible) == len(_COMPARED_QUANTITIES)
         plt.close(fig)
 
     def test_pass_colour_is_green(self) -> None:

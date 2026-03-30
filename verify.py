@@ -4,9 +4,12 @@ Runs a single nominal trajectory with mean inputs and zero wind, then
 compares altitude, Mach, stability margin, and mass against a reference
 CSV from an external flight simulator.
 
+Supports both the full 6DoF model and the simplified 2DoF point-mass
+model (rail → 2DoF ascent → 3DoF descent).
+
 Public API
 ----------
-run_verification(sim_cfg, vehicle_cfg, motor_model, aero_model)
+run_verification(sim_cfg, vehicle_cfg, motor_model, aero_model, dof=6)
     → VerificationResult
 
 Supporting dataclasses:
@@ -29,13 +32,15 @@ import matplotlib.pyplot as plt
 import matplotlib.figure
 
 from config import SimulationConfig, VehicleConfig, VerificationConfig
-from motor import MotorModel, mass_at, cg_at
+from motor import MotorModel, mass_at, cg_at, thrust_corrected_at
 from aerodynamics import AeroModel, aero_forces_moments
 from atmosphere import isa
 from wind import WindEnsemble
 from dynamics import (
     TrajectoryResult,
     run_trajectory,
+    simulate_ascent_2dof,
+    integrate_descent,
     SCENARIO_NOMINAL,
 )
 from montecarlo import build_sim_params
@@ -45,6 +50,7 @@ from montecarlo import build_sim_params
 # Constants
 # ---------------------------------------------------------------------------
 _DEG2RAD: float = math.pi / 180.0
+_G0: float = 9.80665
 
 # Absolute floors for fractional tolerance comparison (avoid false failures
 # near zero).  Physically motivated minimum-significance thresholds.
@@ -53,6 +59,7 @@ _TOLERANCE_FLOORS: dict[str, float] = {
     "mach": 0.01,       # dimensionless
     "sm": 0.1,          # calibres
     "mass": 0.1,        # kg
+    "thrust": 10.0,     # newtons
 }
 
 # Column alias map: quantity → list of substrings to match (case-insensitive).
@@ -63,6 +70,7 @@ _COLUMN_ALIASES: dict[str, list[str]] = {
     "mach": ["mach"],
     "mass": ["mass", "weight"],
     "sm": ["stability margin", "stability", "sm"],
+    "thrust": ["thrust", "force"],
 }
 
 # Plot labels for each quantity
@@ -70,11 +78,12 @@ _PLOT_LABELS: dict[str, str] = {
     "altitude": "Altitude (m)",
     "mach": "Mach",
     "sm": "Stability Margin (cal)",
+    "thrust": "Thrust (N)",
     "mass": "Mass (kg)",
 }
 
-# Quantities to compare (excludes "time" which is the independent variable)
-_COMPARED_QUANTITIES: list[str] = ["altitude", "mach", "sm"]
+# Quantities to compare — 3×2 grid (last cell empty)
+_COMPARED_QUANTITIES: list[str] = ["altitude", "mach", "sm", "thrust", "mass"]
 
 
 # ---------------------------------------------------------------------------
@@ -144,12 +153,19 @@ def _load_reference_csv(path: Path) -> dict[str, np.ndarray]:
                 col_map[qty] = col_idx
                 break
 
-    # Check all required columns found
+    # Warn about missing optional columns (time is still required)
     missing = [q for q in _COLUMN_ALIASES if q not in col_map]
-    if missing:
+    if "time" in missing:
         raise ValueError(
-            f"Reference CSV {path.name} is missing columns for: "
-            f"{', '.join(missing)}.  Headers found: {raw_headers}"
+            f"Reference CSV {path.name} has no recognisable time column.  "
+            f"Headers found: {raw_headers}"
+        )
+    optional_missing = [q for q in missing if q != "time"]
+    if optional_missing:
+        warnings.warn(
+            f"Reference CSV is missing columns for: "
+            f"{', '.join(optional_missing)} — these quantities will be "
+            f"skipped in the comparison."
         )
 
     # Parse numeric data
@@ -167,70 +183,72 @@ def _load_reference_csv(path: Path) -> dict[str, np.ndarray]:
 
 
 # ---------------------------------------------------------------------------
-# Trajectory quantity extraction
+# Trajectory quantity extraction — 6DoF
 # ---------------------------------------------------------------------------
 
-def _extract_trajectory_quantities(
+def _extract_trajectory_quantities_6dof(
     result: TrajectoryResult,
     motor_model: MotorModel,
     aero_model: AeroModel,
     vehicle_cfg: VehicleConfig,
 ) -> dict[str, np.ndarray]:
-    """Extract altitude, Mach, SM, and mass time series from a trajectory.
+    """Extract altitude, Mach, SM, thrust, and mass from a 6DoF trajectory.
+
+    Includes both the ascent and descent phases.
 
     Returns
     -------
-    dict with keys "time", "altitude", "mach", "sm", "mass" → 1-D arrays.
+    dict with keys "time", "altitude", "mach", "sm", "thrust", "mass"
+    → 1-D arrays.
     """
-    t = result.t_ascent
-    state = result.state_ascent
-    n = len(t)
+    # --- Ascent ---
+    t_asc = result.t_ascent
+    state_asc = result.state_ascent
+    n_asc = len(t_asc)
 
-    # Altitude: -D (NED, D is down)
-    altitude = -state[:, 2]
+    alt_asc = -state_asc[:, 2]
 
-    # Pre-allocate
-    mach_arr = np.empty(n, dtype=np.float64)
-    mass_arr = np.empty(n, dtype=np.float64)
-    sm_arr = np.empty(n, dtype=np.float64)
+    mach_asc = np.empty(n_asc, dtype=np.float64)
+    thrust_asc = np.empty(n_asc, dtype=np.float64)
+    mass_asc = np.empty(n_asc, dtype=np.float64)
+    sm_asc = np.empty(n_asc, dtype=np.float64)
 
     mm = motor_model
     am = aero_model
     geom = vehicle_cfg.geometry
     diameter = geom.diameter
 
-    for i in range(n):
-        ti = float(t[i])
-        h = max(float(altitude[i]), 0.0)
+    for i in range(n_asc):
+        ti = float(t_asc[i])
+        h = max(float(alt_asc[i]), 0.0)
 
-        # Atmosphere
         T, p, rho, a, mu = isa(h)
 
-        # Body-frame velocities (zero wind → these are relative velocities)
-        u = float(state[i, 7])
-        v = float(state[i, 8])
-        w = float(state[i, 9])
+        u = float(state_asc[i, 7])
+        v = float(state_asc[i, 8])
+        w = float(state_asc[i, 9])
         V = math.sqrt(u * u + v * v + w * w)
 
-        # Mach
-        mach_arr[i] = V / a if a > 0.0 else 0.0
+        mach_asc[i] = V / a if a > 0.0 else 0.0
 
-        # Mass
-        mass_arr[i] = mass_at(
+        thrust_asc[i] = thrust_corrected_at(
+            mm.times, mm.thrusts, mm.nozzle_area, h, ti,
+        )
+
+        mass_asc[i] = mass_at(
             mm.times, mm.thrusts, mm.m_prop_0,
             mm.total_impulse, mm.m_dry, ti,
         )
 
-        # CG and CP → stability margin
         cg = cg_at(
             mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
             mm.m_dry, mm.cg_dry, mm.motor_cg_loaded, ti,
         )
 
-        M = mach_arr[i]
+        M = mach_asc[i]
         Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
-        q_rate = float(state[i, 11])
-        r_rate = float(state[i, 12])
+        q_rate = float(state_asc[i, 11])
+        r_rate = float(state_asc[i, 12])
 
         _, _, _, _, _, cp_whole = aero_forces_moments(
             am.mach_grid, am.re_grid, am.alpha_grid,
@@ -240,14 +258,187 @@ def _extract_trajectory_quantities(
             u, v, w, q_rate, r_rate, cg,
         )
 
-        sm_arr[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+        sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+
+    # --- Descent (thrust is zero, mass is dry) ---
+    if result.t_descent is not None and result.n_descent > 0:
+        n_desc = result.n_descent
+        t_desc = result.t_descent[:n_desc]
+        state_desc = result.state_descent[:n_desc]
+        alt_desc = -state_desc[:, 2]
+
+        mach_desc = np.empty(n_desc, dtype=np.float64)
+        thrust_desc = np.zeros(n_desc, dtype=np.float64)
+        mass_desc = np.full(n_desc, mm.m_dry, dtype=np.float64)
+        sm_desc = np.empty(n_desc, dtype=np.float64)
+
+        for i in range(n_desc):
+            h = max(float(alt_desc[i]), 0.0)
+            _, _, rho, a, mu = isa(h)
+
+            vN = float(state_desc[i, 3])
+            vE = float(state_desc[i, 4])
+            vD = float(state_desc[i, 5])
+            V = math.sqrt(vN * vN + vE * vE + vD * vD)
+
+            mach_desc[i] = V / a if a > 0.0 else 0.0
+
+            cg = mm.cg_dry
+            M = mach_desc[i]
+            Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
+
+            _, _, _, _, _, cp_whole = aero_forces_moments(
+                am.mach_grid, am.re_grid, am.alpha_grid,
+                am.ca_table, am.cn_table, am.cp_table,
+                am.cn_comp, am.cp_comp, am.has_components,
+                M, Re, rho, V, geom.reference_area,
+                vN, 0.0, vD, 0.0, 0.0, cg,
+            )
+
+            sm_desc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+
+        # Stitch (skip first descent point to avoid overlap at apogee)
+        t_full = np.concatenate([t_asc, t_desc[1:]])
+        alt_full = np.concatenate([alt_asc, alt_desc[1:]])
+        mach_full = np.concatenate([mach_asc, mach_desc[1:]])
+        sm_full = np.concatenate([sm_asc, sm_desc[1:]])
+        thrust_full = np.concatenate([thrust_asc, thrust_desc[1:]])
+        mass_full = np.concatenate([mass_asc, mass_desc[1:]])
+    else:
+        t_full = t_asc
+        alt_full = alt_asc
+        mach_full = mach_asc
+        sm_full = sm_asc
+        thrust_full = thrust_asc
+        mass_full = mass_asc
 
     return {
-        "time": t.copy(),
-        "altitude": altitude,
-        "mach": mach_arr,
-        "sm": sm_arr,
-        "mass": mass_arr,
+        "time": t_full,
+        "altitude": alt_full,
+        "mach": mach_full,
+        "sm": sm_full,
+        "thrust": thrust_full,
+        "mass": mass_full,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Trajectory quantity extraction — 2DoF
+# ---------------------------------------------------------------------------
+
+def _extract_trajectory_quantities_2dof(
+    t_asc: np.ndarray,
+    z_asc: np.ndarray,
+    vx_asc: np.ndarray,
+    vz_asc: np.ndarray,
+    t_desc: np.ndarray,
+    state_desc: np.ndarray,
+    n_desc: int,
+    motor_model: MotorModel,
+    aero_model: AeroModel,
+    vehicle_cfg: VehicleConfig,
+) -> dict[str, np.ndarray]:
+    """Extract altitude, Mach, SM, thrust, and mass from a 2DoF ascent + 3DoF descent.
+
+    Returns
+    -------
+    dict with keys "time", "altitude", "mach", "sm", "thrust", "mass"
+    → 1-D arrays.
+    """
+    mm = motor_model
+    am = aero_model
+    geom = vehicle_cfg.geometry
+    diameter = geom.diameter
+    n_asc = len(t_asc)
+
+    # --- Ascent quantities ---
+    mach_asc = np.empty(n_asc, dtype=np.float64)
+    thrust_asc = np.empty(n_asc, dtype=np.float64)
+    mass_asc = np.empty(n_asc, dtype=np.float64)
+    sm_asc = np.empty(n_asc, dtype=np.float64)
+
+    for i in range(n_asc):
+        ti = float(t_asc[i])
+        h = max(float(z_asc[i]), 0.0)
+        _, _, rho, a, mu = isa(h)
+
+        V = math.sqrt(float(vx_asc[i])**2 + float(vz_asc[i])**2)
+        mach_asc[i] = V / a if a > 0.0 else 0.0
+
+        thrust_asc[i] = thrust_corrected_at(
+            mm.times, mm.thrusts, mm.nozzle_area, h, ti,
+        )
+
+        mass_asc[i] = mass_at(
+            mm.times, mm.thrusts, mm.m_prop_0,
+            mm.total_impulse, mm.m_dry, ti,
+        )
+
+        # SM at α=0
+        cg = cg_at(
+            mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
+            mm.m_dry, mm.cg_dry, mm.motor_cg_loaded, ti,
+        )
+        M = mach_asc[i]
+        Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
+
+        _, _, _, _, _, cp_whole = aero_forces_moments(
+            am.mach_grid, am.re_grid, am.alpha_grid,
+            am.ca_table, am.cn_table, am.cp_table,
+            am.cn_comp, am.cp_comp, am.has_components,
+            M, Re, rho, V, geom.reference_area,
+            V, 0.0, 0.0, 0.0, 0.0, cg,
+        )
+        sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+
+    # --- Descent quantities (thrust is zero, mass is dry) ---
+    t_d = t_desc[:n_desc]
+    state_d = state_desc[:n_desc]
+    alt_desc = -state_d[:, 2]
+
+    mach_desc = np.empty(n_desc, dtype=np.float64)
+    thrust_desc = np.zeros(n_desc, dtype=np.float64)
+    mass_desc = np.full(n_desc, mm.m_dry, dtype=np.float64)
+    sm_desc = np.empty(n_desc, dtype=np.float64)
+
+    for i in range(n_desc):
+        h = max(float(alt_desc[i]), 0.0)
+        _, _, rho, a, mu = isa(h)
+
+        vN = float(state_d[i, 3])
+        vE = float(state_d[i, 4])
+        vD = float(state_d[i, 5])
+        V = math.sqrt(vN * vN + vE * vE + vD * vD)
+        mach_desc[i] = V / a if a > 0.0 else 0.0
+
+        cg = mm.cg_dry
+        M = mach_desc[i]
+        Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
+
+        _, _, _, _, _, cp_whole = aero_forces_moments(
+            am.mach_grid, am.re_grid, am.alpha_grid,
+            am.ca_table, am.cn_table, am.cp_table,
+            am.cn_comp, am.cp_comp, am.has_components,
+            M, Re, rho, V, geom.reference_area,
+            vN, 0.0, vD, 0.0, 0.0, cg,
+        )
+        sm_desc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+
+    # Stitch (skip first descent point to avoid overlap at apogee)
+    t_full = np.concatenate([t_asc, t_d[1:]])
+    alt_full = np.concatenate([z_asc, alt_desc[1:]])
+    mach_full = np.concatenate([mach_asc, mach_desc[1:]])
+    sm_full = np.concatenate([sm_asc, sm_desc[1:]])
+    thrust_full = np.concatenate([thrust_asc, thrust_desc[1:]])
+    mass_full = np.concatenate([mass_asc, mass_desc[1:]])
+
+    return {
+        "time": t_full,
+        "altitude": alt_full,
+        "mach": mach_full,
+        "sm": sm_full,
+        "thrust": thrust_full,
+        "mass": mass_full,
     }
 
 
@@ -300,23 +491,23 @@ def _compare_quantity(
 def _build_comparison_figure(
     comparisons: dict[str, QuantityComparison],
 ) -> matplotlib.figure.Figure:
-    """Build a single-column comparison figure with shared x-axis.
+    """Build a 3×2 comparison figure.
 
-    Reference in grey with tolerance band; simulator overlay in green
-    (pass) or red (fail).
+    Five quantities fill positions (0,0), (0,1), (1,0), (1,1), (2,0);
+    position (2,1) is left empty.  Reference in grey with tolerance band;
+    simulator overlay in green (pass) or red (fail).
     """
-    n_qty = len(comparisons)
-    fig, axes = plt.subplots(
-        n_qty, 1, figsize=(10, 3 * n_qty), sharex=True,
-    )
-    fig.subplots_adjust(hspace=0.15, left=0.12, right=0.96,
-                        top=0.92, bottom=0.08)
+    fig, axes = plt.subplots(3, 2, figsize=(12, 9))
+    fig.subplots_adjust(hspace=0.30, wspace=0.25, left=0.08, right=0.96,
+                        top=0.95, bottom=0.07)
 
-    # Ensure axes is always iterable (even for a single subplot)
-    if n_qty == 1:
-        axes = [axes]
+    # Flatten to iterate in row-major order
+    ax_flat = axes.ravel()
 
-    for ax, qty_name in zip(axes, _COMPARED_QUANTITIES):
+    plotted_quantities = [q for q in _COMPARED_QUANTITIES if q in comparisons]
+
+    for idx, qty_name in enumerate(plotted_quantities):
+        ax = ax_flat[idx]
         cmp = comparisons[qty_name]
 
         # Reference: grey line + tolerance band
@@ -335,11 +526,13 @@ def _build_comparison_figure(
                 color=sim_colour, linewidth=1.2, label="LFS")
 
         ax.set_ylabel(_PLOT_LABELS[qty_name])
+        ax.set_xlabel("Time (s)")
         ax.legend(fontsize=8)
         ax.spines[["right", "top"]].set_visible(False)
 
-    # Only the bottom subplot gets an x-axis label
-    axes[-1].set_xlabel("Time (s)")
+    # Hide any unused axes
+    for idx in range(len(plotted_quantities), len(ax_flat)):
+        ax_flat[idx].set_visible(False)
 
     return fig
 
@@ -388,6 +581,7 @@ def run_verification(
     vehicle_cfg: VehicleConfig,
     motor_model: MotorModel,
     aero_model: AeroModel,
+    dof: int = 6,
 ) -> VerificationResult:
     """Run a nominal trajectory and compare against the reference CSV.
 
@@ -402,6 +596,9 @@ def run_verification(
         Simulation configuration (must have ``verification`` set).
     vehicle_cfg, motor_model, aero_model
         Pre-loaded vehicle/motor/aero models.
+    dof : int
+        Degrees of freedom for the ascent model: 6 (full 6DoF) or 2
+        (point-mass in a vertical plane).
 
     Returns
     -------
@@ -421,22 +618,93 @@ def run_verification(
     azimuth = _resolve_rail_angle(rail.azimuth, rail.azimuth_range)
     inclination = _resolve_rail_angle(rail.inclination, rail.inclination_range)
 
-    # --- Run nominal trajectory with zero wind ---
+    geom = vehicle_cfg.geometry
     zero_wind = _zero_wind_ensemble()
-    params = build_sim_params(
-        sim_cfg, vehicle_cfg, motor_model, aero_model, zero_wind,
-        wind_profile_index=0,
-        azimuth_deg=azimuth,
-        inclination_deg=inclination,
-        impulse_factor=1.0,
-        fin_cant_deg=0.0,
-    )
-    traj = run_trajectory(params, SCENARIO_NOMINAL, None, None, float("inf"))
 
-    # --- Extract simulator quantities ---
-    sim_data = _extract_trajectory_quantities(
-        traj, motor_model, aero_model, vehicle_cfg,
-    )
+    if dof == 6:
+        # --- Full 6DoF trajectory ---
+        params = build_sim_params(
+            sim_cfg, vehicle_cfg, motor_model, aero_model, zero_wind,
+            wind_profile_index=0,
+            azimuth_deg=azimuth,
+            inclination_deg=inclination,
+            impulse_factor=1.0,
+            fin_cant_deg=0.0,
+        )
+        traj = run_trajectory(params, SCENARIO_NOMINAL, None, None, float("inf"))
+
+        sim_data = _extract_trajectory_quantities_6dof(
+            traj, motor_model, aero_model, vehicle_cfg,
+        )
+    elif dof == 2:
+        # --- 2DoF ascent + 3DoF nominal descent ---
+        t_asc, x_asc, z_asc, vx_asc, vz_asc = simulate_ascent_2dof(
+            rail_inclination_rad=inclination * _DEG2RAD,
+            rail_length=rail.length,
+            motor_times=motor_model.times,
+            motor_thrusts=motor_model.thrusts,
+            nozzle_area=motor_model.nozzle_area,
+            impulse_factor=1.0,
+            m_prop_0=motor_model.m_prop_0,
+            total_impulse=motor_model.total_impulse,
+            m_dry=motor_model.m_dry,
+            mach_g=aero_model.mach_grid,
+            re_g=aero_model.re_grid,
+            alpha_g=aero_model.alpha_grid,
+            ca_tbl=aero_model.ca_table,
+            A_ref=geom.reference_area,
+            ref_length=geom.length,
+            rtol=1.0e-6,
+            atol=1.0e-6,
+        )
+
+        # Set up descent from apogee in NED (azimuth=0: x=North)
+        apN = float(x_asc[-1])
+        apD = -float(z_asc[-1])
+        t_apogee = float(t_asc[-1])
+
+        # Rotate apogee to the configured azimuth
+        az_rad = azimuth * _DEG2RAD
+        cos_az = math.cos(az_rad)
+        sin_az = math.sin(az_rad)
+        apN_rot = apN * cos_az
+        apE_rot = apN * sin_az
+
+        descent_state0 = np.array([
+            apN_rot, apE_rot, apD, 0.0, 0.0, 0.0,
+        ], dtype=np.float64)
+
+        # Recovery CdA
+        rec = vehicle_cfg.recovery
+        has_drogue = rec.drogue is not None
+        has_main = rec.main is not None
+        drogue_cda = rec.drogue.cd * rec.drogue.area if has_drogue else 0.0
+        main_cda = rec.main.cd * rec.main.area if has_main else 0.0
+        main_deploy_alt = float(rec.main.threshold) if has_main and rec.main.threshold != "apogee" else -1.0
+
+        zero_wind_alt = np.array([0.0, 50000.0], dtype=np.float64)
+        zero_wind_e = np.zeros(2, dtype=np.float64)
+        zero_wind_n = np.zeros(2, dtype=np.float64)
+
+        t_desc, y_desc, n_desc = integrate_descent(
+            t_apogee, descent_state0,
+            zero_wind_alt, zero_wind_e, zero_wind_n,
+            aero_model.mach_grid, aero_model.re_grid,
+            aero_model.alpha_grid, aero_model.ca_table,
+            geom.reference_area, geom.length,
+            motor_model.m_dry,
+            drogue_cda, main_cda, main_deploy_alt,
+            SCENARIO_NOMINAL,
+            1.0e-6, 1.0e-6,
+        )
+
+        sim_data = _extract_trajectory_quantities_2dof(
+            t_asc, z_asc, vx_asc, vz_asc,
+            t_desc, y_desc, n_desc,
+            motor_model, aero_model, vehicle_cfg,
+        )
+    else:
+        raise ValueError(f"dof must be 2 or 6, got {dof}")
 
     # --- Load reference CSV ---
     ref_data = _load_reference_csv(ver_cfg.reference_trajectory)
@@ -446,11 +714,14 @@ def run_verification(
         "altitude": ver_cfg.altitude_tolerance,
         "mach": ver_cfg.mach_tolerance,
         "sm": ver_cfg.sm_tolerance,
+        "thrust": ver_cfg.thrust_tolerance,
         "mass": ver_cfg.mass_tolerance,
     }
 
     comparisons: dict[str, QuantityComparison] = {}
     for qty in _COMPARED_QUANTITIES:
+        if qty not in ref_data:
+            continue
         comparisons[qty] = _compare_quantity(
             name=qty,
             ref_time=ref_data["time"],

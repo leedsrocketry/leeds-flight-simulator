@@ -1216,7 +1216,7 @@ def integrate_descent(
 
 
 # ---------------------------------------------------------------------------
-# 2DoF Point-Mass Ascent (for optimisation)
+# 2DoF Point-Mass Ascent (for optimisation and verification)
 # ---------------------------------------------------------------------------
 
 @nb.njit(cache=True, fastmath=True)
@@ -1238,7 +1238,7 @@ def simulate_ascent_2dof(
     ref_length: float,
     rtol: float,
     atol: float,
-) -> tuple[float, float, float]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Point-mass 2DoF ascent in a vertical plane: α=0, no wind.
 
     Two translational degrees of freedom (downrange x and altitude z) in
@@ -1249,7 +1249,8 @@ def simulate_ascent_2dof(
     Azimuth-independent: the optimisation routine rotates the resulting
     apogee point to the desired azimuth.
 
-    Returns ``(apogee_downrange, apogee_alt, t_apogee)``.
+    Returns ``(t, x, z, vx, vz)`` — full history arrays from rail exit
+    to apogee (inclusive).
     """
     # Rail phase at azimuth=0 — only inclination matters for the 2DoF plane
     V_exit, t_exit, rN, _, rD = simulate_rail(
@@ -1274,6 +1275,21 @@ def simulate_ascent_2dof(
     t_burnout = motor_times[motor_times.shape[0] - 1]
     max_steps = 100000
 
+    # Pre-allocate history buffers
+    t_hist = np.empty(max_steps + 1, dtype=np.float64)
+    x_hist = np.empty(max_steps + 1, dtype=np.float64)
+    z_hist = np.empty(max_steps + 1, dtype=np.float64)
+    vx_hist = np.empty(max_steps + 1, dtype=np.float64)
+    vz_hist = np.empty(max_steps + 1, dtype=np.float64)
+
+    # Record initial state (rail exit)
+    t_hist[0] = t
+    x_hist[0] = x
+    z_hist[0] = z
+    vx_hist[0] = vx
+    vz_hist[0] = vz
+    n = 1
+
     for _ in range(max_steps):
         alt = z if z > 0.0 else 0.0
         _, _, rho, a_sound, mu = isa(alt)
@@ -1294,29 +1310,36 @@ def simulate_ascent_2dof(
             # Net force along velocity vector
             F_along = F_thrust - F_drag
             # Decompose into x and z
-            ax = F_along * vx / V_abs
-            az = F_along * vz / V_abs - _G0 * m
+            accel_x = F_along * vx / V_abs
+            accel_z = F_along * vz / V_abs - _G0 * m
         else:
-            ax = 0.0
-            az = F_thrust - _G0 * m
+            accel_x = 0.0
+            accel_z = F_thrust - _G0 * m
 
-        ax /= m
-        az /= m
+        accel_x /= m
+        accel_z /= m
 
         dt = 0.01 if t < t_burnout else 0.05
 
         # Symplectic Euler (velocity then position)
-        vx += ax * dt
-        vz += az * dt
+        vx += accel_x * dt
+        vz += accel_z * dt
         x += vx * dt
         z += vz * dt
         t += dt
+
+        t_hist[n] = t
+        x_hist[n] = x
+        z_hist[n] = z
+        vx_hist[n] = vx
+        vz_hist[n] = vz
+        n += 1
 
         # Apogee: vertical velocity crosses zero
         if vz <= 0.0:
             break
 
-    return x, z, t
+    return t_hist[:n], x_hist[:n], z_hist[:n], vx_hist[:n], vz_hist[:n]
 
 
 # ---------------------------------------------------------------------------

@@ -6,14 +6,14 @@ aero_tables: "aero_table.csv"  # path to a single RASAero II Aeroplot CSV, or a 
 
 geometry:
   diameter: 0.130        # body diameter (m)
-  length: 2.6            # total length (m)
-  nozzle_position: 2.55  # nozzle exit plane from nosecone tip (m)
-  nozzle_diameter: 0.08  # nozzle exit diameter (m)
+  length: 2.654          # total length (m)
+  nozzle_position: 2.6   # nozzle exit plane from nosecone tip (m)
+  nozzle_diameter: 0.069 # nozzle exit diameter (m)
   fin_cp_radius: 0.095   # fin CP spanwise distance from centreline (m)
 
 mass:
-  wet_mass: 24.5               # total mass at launch — airframe + loaded motor (kg)
-  wet_cg: 1.15                 # wet vehicle CG from nosecone tip (m)
+  wet_mass: 24                 # total mass at launch — airframe + loaded motor (kg)
+  wet_cg: 1.745                # wet vehicle CG from nosecone tip (m)
   wet_motor_cg: 1.82           # loaded motor CG from nosecone tip (m)
   propellant_inertia_roll:    1.4   # propellant roll inertia about roll axis (kg·m²)
   propellant_inertia_lateral: 1.3   # propellant lateral inertia about propellant CG (kg·m²)

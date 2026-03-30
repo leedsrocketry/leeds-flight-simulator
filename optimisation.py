@@ -269,7 +269,7 @@ def select_inclination(
 
     for idx, inc in enumerate(candidates):
         # 2DoF point-mass ascent, no wind, no uncertainty
-        ap_downrange, ap_alt, t_ap = simulate_ascent_2dof(
+        t_hist, x_hist, z_hist, _, _ = simulate_ascent_2dof(
             rail_inclination_rad=inc * _DEG2RAD,
             rail_length=rail_cfg.length,
             motor_times=motor_model.times,
@@ -289,8 +289,9 @@ def select_inclination(
             atol=1.0e-6,
         )
         # Store as NED at azimuth=0: downrange is North, East=0
-        apN = ap_downrange
-        apD = -ap_alt
+        apN = float(x_hist[-1])
+        apD = -float(z_hist[-1])
+        t_ap = float(t_hist[-1])
         apogee_positions[inc] = (apN, 0.0, apD)
         apogee_times[inc] = t_ap
 
@@ -847,7 +848,7 @@ def run_optimisation(
         selected_inc = int(rail.inclination)
         # Still need a 2DoF ascent at this inclination for Phases 2-4
         geom = vehicle_cfg.geometry
-        ap_downrange, ap_alt, t_ap = simulate_ascent_2dof(
+        t_hist, x_hist, z_hist, _, _ = simulate_ascent_2dof(
             rail_inclination_rad=selected_inc * _DEG2RAD,
             rail_length=rail.length,
             motor_times=motor_model.times,
@@ -866,8 +867,8 @@ def run_optimisation(
             rtol=1.0e-6,
             atol=1.0e-6,
         )
-        apogee_positions = {selected_inc: (ap_downrange, 0.0, -ap_alt)}
-        apogee_times = {selected_inc: t_ap}
+        apogee_positions = {selected_inc: (float(x_hist[-1]), 0.0, -float(z_hist[-1]))}
+        apogee_times = {selected_inc: float(t_hist[-1])}
         ballistic_landings = {}
 
     t_apogee = apogee_times[selected_inc]

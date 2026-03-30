@@ -120,6 +120,7 @@ class VerificationConfig:
     mach_tolerance: float       # fractional tolerance on Mach number
     sm_tolerance: float         # fractional tolerance on static margin
     mass_tolerance: float       # fractional tolerance on vehicle mass
+    thrust_tolerance: float     # fractional tolerance on thrust
 
 
 @dataclass(frozen=True)
@@ -394,6 +395,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             mach_tolerance=float(ver_raw["mach_tolerance"]),
             sm_tolerance=float(ver_raw["sm_tolerance"]),
             mass_tolerance=float(ver_raw["mass_tolerance"]),
+            thrust_tolerance=float(ver_raw.get("thrust_tolerance", ver_raw["altitude_tolerance"])),
         )
     else:
         verification = None
