@@ -32,7 +32,7 @@ from motor import PropellantModel, MotorData, load_motor, build_propellant_model
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class MonitourStation:
+class MonitorStation:
     name: str
     latitude: float   # degrees
     longitude: float  # degrees
@@ -57,13 +57,13 @@ class SiteConfig:
     ballistic_exclusion_radius: float              # metres — minimum ballistic landing distance
                                                    # from launch site; used during inclination
                                                    # optimisation (§13.2)
-    launch_monitour_radius: float               # metres — radius of the automatic monitour
+    launch_monitor_radius: float               # metres — radius of the automatic monitor
                                                    # station at the launch site
     altitude_ceiling: float                        # metres
     danger_area: Path
     coastline: Path | None                         # None → sea-landing check disabled
     coastline_mode: str                            # "sea" or "land" (§14.2)
-    monitour_stations: tuple[MonitourStation, ...]
+    monitor_stations: tuple[MonitorStation, ...]
     map_markers: tuple[MapMarker, ...]
 
 
@@ -109,8 +109,8 @@ class AcceptanceConfig:
     sm_supersonic_min: float           # calibres (M >= sm_transition_mach)
     aoa_max: float                     # degrees
     sm_aoa_threshold: float            # degrees: SM check applies when AoA < this
-    sea_check_scenarios: tuple[str, ...]  # scenarios checked for sea landing
-    monitour_check_scenarios: tuple[str, ...]  # scenarios checked for monitour station coverage
+    coastline_check_scenarios: tuple[str, ...]  # scenarios checked for sea landing
+    monitor_check_scenarios: tuple[str, ...]  # scenarios checked for monitor station coverage
 
 
 @dataclass(frozen=True)
@@ -131,7 +131,6 @@ class VerificationConfig:
     thrust_tolerance: float     # fractional tolerance on thrust
     cd_tolerance: float         # fractional tolerance on drag coefficient
     exceedance_fraction: float  # fraction of points allowed outside tolerance (0 = strict)
-    azimuth: float | None       # degrees — override launch.rail.azimuth for verification
     inclination: float | None   # degrees — override launch.rail.inclination for verification
 
 
@@ -291,7 +290,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
 
     # -- site
     site_raw = raw["site"]
-    stations_raw = site_raw.get("monitour_stations") or []
+    stations_raw = site_raw.get("monitor_stations") or []
     markers_raw = site_raw.get("map_markers") or []
     coastline_raw = site_raw.get("coastline")
     coastline: Path | None = None if coastline_raw is None else _resolve(coastline_raw)
@@ -305,13 +304,13 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         latitude=float(site_raw["latitude"]),
         longitude=float(site_raw["longitude"]),
         ballistic_exclusion_radius=float(site_raw["ballistic_exclusion_radius"]),
-        launch_monitour_radius=float(site_raw["launch_monitour_radius"]),
+        launch_monitor_radius=float(site_raw["launch_monitor_radius"]),
         altitude_ceiling=float(site_raw["altitude_ceiling"]),
         danger_area=_resolve(site_raw["danger_area"]),
         coastline=coastline,
         coastline_mode=coastline_mode_raw,
-        monitour_stations=tuple(
-            MonitourStation(
+        monitor_stations=tuple(
+            MonitorStation(
                 name=str(s["name"]),
                 latitude=float(s["latitude"]),
                 longitude=float(s["longitude"]),
@@ -401,11 +400,11 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             sm_supersonic_min=float(acc_raw["sm_supersonic_min"]),
             aoa_max=float(acc_raw["aoa_max"]),
             sm_aoa_threshold=float(acc_raw["sm_aoa_threshold"]),
-            sea_check_scenarios=tuple(
-                str(s) for s in (acc_raw.get("sea_check_scenarios") or [])
+            coastline_check_scenarios=tuple(
+                str(s) for s in (acc_raw.get("coastline_check_scenarios") or [])
             ),
-            monitour_check_scenarios=tuple(
-                str(s) for s in (acc_raw.get("monitour_check_scenarios") or [])
+            monitor_check_scenarios=tuple(
+                str(s) for s in (acc_raw.get("monitor_check_scenarios") or [])
             ),
         ),
     )
@@ -423,7 +422,6 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             thrust_tolerance=float(ver_raw.get("thrust_tolerance", ver_raw["altitude_tolerance"])),
             cd_tolerance=float(ver_raw.get("cd_tolerance", ver_raw.get("mach_tolerance", 0.05))),
             exceedance_fraction=float(ver_raw.get("exceedance_fraction", 0.0)),
-            azimuth=float(ver_raw["azimuth"]) if "azimuth" in ver_raw else None,
             inclination=float(ver_raw["inclination"]) if "inclination" in ver_raw else None,
         )
     else:

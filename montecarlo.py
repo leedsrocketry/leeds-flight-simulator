@@ -50,7 +50,7 @@ from geography import (
     polygon_to_arrays,
     prepare_zone,
     check_coastline,
-    check_monitour_coverage,
+    check_monitor_coverage,
     ned_to_latlon,
     R_EARTH,
 )
@@ -105,7 +105,7 @@ class SampleResult:
     below_ceiling: bool
     stability_compliant: bool
     landing_at_sea: bool | None    # None if coastline check disabled
-    in_coverage: bool | None       # None if monitour check not applicable
+    in_coverage: bool | None       # None if monitor check not applicable
     violation_reason: str
 
     # Stochastic inputs (for CSV / replay)
@@ -331,35 +331,35 @@ def run_sample(
     # Coastline check (only for configured scenarios)
     landing_at_sea: bool | None = None
     sea_compliant = True
-    if coastline_prepared is not None and scenario_name in acc.sea_check_scenarios:
+    if coastline_prepared is not None and scenario_name in acc.coastline_check_scenarios:
         landing_at_sea = check_coastline(
             landing_north, landing_east,
             coastline_prepared, site.coastline_mode,
         )
         sea_compliant = landing_at_sea
 
-    # Monitour coverage check (only for configured scenarios)
+    # Monitor coverage check (only for configured scenarios)
     in_coverage: bool | None = None
-    monitour_compliant = True
-    if station_norths is not None and scenario_name in acc.monitour_check_scenarios:
-        in_coverage = check_monitour_coverage(
+    monitor_compliant = True
+    if station_norths is not None and scenario_name in acc.monitor_check_scenarios:
+        in_coverage = check_monitor_coverage(
             landing_north, landing_east,
             station_norths, station_easts, station_radii,
         )
-        monitour_compliant = in_coverage
+        monitor_compliant = in_coverage
 
     # --- Final compliance ---
     compliant = (
         result.compliant
         and sea_compliant
-        and monitour_compliant
+        and monitor_compliant
     )
 
     violation = result.violation_reason
     if not sea_compliant and not violation:
         violation = "Landing fails coastline check"
-    elif not monitour_compliant and not violation:
-        violation = "Landing outside monitoured area"
+    elif not monitor_compliant and not violation:
+        violation = "Landing outside monitored area"
 
     return SampleResult(
         sample_id=sample_index,
@@ -429,11 +429,11 @@ def _prepare_geofence(
         )
         coastline_prepared = prepare_zone(coast_poly)
 
-    # Monitour stations (including automatic launch-site station)
+    # Monitor stations (including automatic launch-site station)
     station_norths = None
     station_easts = None
     station_radii = None
-    if site.monitour_stations or site.launch_monitour_radius > 0:
+    if site.monitor_stations or site.launch_monitor_radius > 0:
         lat0_rad = math.radians(site.latitude)
         deg2m_north = R_EARTH * math.pi / 180.0
         deg2m_east = R_EARTH * math.cos(lat0_rad) * math.pi / 180.0
@@ -442,13 +442,13 @@ def _prepare_geofence(
         easts: list[float] = []
         radii: list[float] = []
 
-        # Automatic launch-site monitour station
-        if site.launch_monitour_radius > 0:
+        # Automatic launch-site monitor station
+        if site.launch_monitor_radius > 0:
             norths.append(0.0)
             easts.append(0.0)
-            radii.append(site.launch_monitour_radius)
+            radii.append(site.launch_monitor_radius)
 
-        for st in site.monitour_stations:
+        for st in site.monitor_stations:
             norths.append((st.latitude - site.latitude) * deg2m_north)
             easts.append((st.longitude - site.longitude) * deg2m_east)
             radii.append(st.radius)
@@ -658,16 +658,16 @@ def run_monte_carlo(
     acc = sim_cfg.monte_carlo.acceptance
 
     # Warn about configured checks on inactive scenarios
-    for s in acc.sea_check_scenarios:
+    for s in acc.coastline_check_scenarios:
         if s not in active:
             warnings_list.append(
-                f"sea_check_scenarios includes '{s}' which is not active "
+                f"coastline_check_scenarios includes '{s}' which is not active "
                 f"for this vehicle configuration"
             )
-    for s in acc.monitour_check_scenarios:
+    for s in acc.monitor_check_scenarios:
         if s not in active:
             warnings_list.append(
-                f"monitour_check_scenarios includes '{s}' which is not active "
+                f"monitor_check_scenarios includes '{s}' which is not active "
                 f"for this vehicle configuration"
             )
 

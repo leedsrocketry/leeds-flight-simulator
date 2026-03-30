@@ -470,13 +470,13 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
         results_dir = create_results_dir(config_path, wind_suffix, _clear=False)
 
         has_coastline = sim_cfg.site.coastline is not None
-        has_monitour = (
-            bool(sim_cfg.site.monitour_stations)
-            or sim_cfg.site.launch_monitour_radius > 0
+        has_monitor = (
+            bool(sim_cfg.site.monitor_stations)
+            or sim_cfg.site.launch_monitor_radius > 0
         )
 
         display.update_status("Writing results...")
-        write_samples_csv(mc_result.all_results, results_dir, has_coastline, has_monitour)
+        write_samples_csv(mc_result.all_results, results_dir, has_coastline, has_monitor)
         write_summary_yaml(
             mc_result, sim_cfg, opt_result, results_dir,
             simulation_yaml_path=config_path,
@@ -607,17 +607,14 @@ def replay(
 
 @main.command()
 @click.argument("config_path", type=click.Path(exists=True, path_type=Path))
-@click.option("-a", "--azimuth", type=float, default=None,
-              help="Launch rail azimuth (degrees). Overrides config value.")
 @click.option("-i", "--inclination", type=float, default=None,
               help="Launch rail inclination (degrees). Overrides config value.")
 @click.option("--dump-csv", type=click.Path(path_type=Path), default=None,
               help="Write comparison data to a CSV file.")
 @click.option("-q", "--no-popup", is_flag=True,
               help="Do not open figures after execution.")
-def verify(config_path: Path, azimuth: float | None,
-           inclination: float | None, dump_csv: Path | None,
-           no_popup: bool) -> None:
+def verify(config_path: Path, inclination: float | None,
+           dump_csv: Path | None, no_popup: bool) -> None:
     """Compare a single trajectory against a reference CSV."""
     import matplotlib.pyplot as plt
 
@@ -653,7 +650,7 @@ def verify(config_path: Path, azimuth: float | None,
     display.update_status("Running 6DoF verification trajectory...")
     ver_result = run_verification(
         sim_cfg, vehicle, propellant, aero_model,
-        azimuth_override=azimuth, inclination_override=inclination,
+        inclination_override=inclination,
     )
 
     display.update_status("Done.")

@@ -50,10 +50,10 @@ _MINIMAL_SIM_YAML = """
       latitude: 58.61
       longitude: -4.94
       ballistic_exclusion_radius: 500
-      launch_monitour_radius: 200
+      launch_monitor_radius: 200
       altitude_ceiling: 16764
       danger_area: "danger_area.geojson"
-      monitour_stations:
+      monitor_stations:
         - name: "Station A"
           latitude: 58.40
           longitude: -4.76
@@ -88,10 +88,10 @@ _MINIMAL_SIM_YAML = """
         sm_supersonic_min: 2.0
         aoa_max: 12.0
         sm_aoa_threshold: 5.0
-        sea_check_scenarios:
+        coastline_check_scenarios:
           - nominal
           - ballistic
-        monitour_check_scenarios:
+        monitor_check_scenarios:
           - ballistic
           - drogue_only
     """
@@ -144,7 +144,7 @@ def test_site_values(tmp_path):
     assert cfg.site.latitude == pytest.approx(58.61)
     assert cfg.site.longitude == pytest.approx(-4.94)
     assert cfg.site.ballistic_exclusion_radius == pytest.approx(500.0)
-    assert cfg.site.launch_monitour_radius == pytest.approx(200.0)
+    assert cfg.site.launch_monitor_radius == pytest.approx(200.0)
     assert cfg.site.altitude_ceiling == pytest.approx(16764.0)
 
 
@@ -154,7 +154,8 @@ def test_site_danger_area_resolved(tmp_path):
 
 
 def test_coastline_omitted(tmp_path):
-    lines = [l for l in _MINIMAL_SIM_YAML.splitlines() if "coastline" not in l]
+    lines = [l for l in _MINIMAL_SIM_YAML.splitlines()
+             if "coastline:" not in l and "coastline_mode" not in l]
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", "\n".join(lines)))
     assert cfg.site.coastline is None
 
@@ -224,11 +225,11 @@ def test_acceptance(tmp_path):
     assert acc.aoa_max == pytest.approx(12.0)
 
 
-def test_monitour_stations(tmp_path):
+def test_monitor_stations(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
-    assert len(cfg.site.monitour_stations) == 1
-    assert cfg.site.monitour_stations[0].name == "Station A"
-    assert cfg.site.monitour_stations[0].radius == pytest.approx(10000)
+    assert len(cfg.site.monitor_stations) == 1
+    assert cfg.site.monitor_stations[0].name == "Station A"
+    assert cfg.site.monitor_stations[0].radius == pytest.approx(10000)
 
 
 def test_map_markers(tmp_path):
@@ -264,20 +265,20 @@ def test_config_is_frozen(tmp_path):
 def test_acceptance_scenario_lists(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
     acc = cfg.monte_carlo.acceptance
-    assert "nominal" in acc.sea_check_scenarios
-    assert "ballistic" in acc.sea_check_scenarios
-    assert "ballistic" in acc.monitour_check_scenarios
-    assert "drogue_only" in acc.monitour_check_scenarios
+    assert "nominal" in acc.coastline_check_scenarios
+    assert "ballistic" in acc.coastline_check_scenarios
+    assert "ballistic" in acc.monitor_check_scenarios
+    assert "drogue_only" in acc.monitor_check_scenarios
 
 
 def test_acceptance_scenario_lists_empty_when_omitted(tmp_path):
     """Omitting scenario lists gives empty tuples — no check runs."""
     lines = [l for l in _MINIMAL_SIM_YAML.splitlines()
-             if not any(k in l for k in ("sea_check", "monitour_check", "- nominal",
+             if not any(k in l for k in ("sea_check", "monitor_check", "- nominal",
                                          "- ballistic", "- drogue_only"))]
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", "\n".join(lines)))
-    assert cfg.monte_carlo.acceptance.sea_check_scenarios == ()
-    assert cfg.monte_carlo.acceptance.monitour_check_scenarios == ()
+    assert cfg.monte_carlo.acceptance.coastline_check_scenarios == ()
+    assert cfg.monte_carlo.acceptance.monitor_check_scenarios == ()
 
 
 # ---------------------------------------------------------------------------

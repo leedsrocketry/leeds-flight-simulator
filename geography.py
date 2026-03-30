@@ -22,7 +22,7 @@ Numba containment (called between integration phases):
 
 Post-sim queries (called once per sample):
     check_coastline            — landing point vs coastline polygon
-    check_monitour_coverage — landing point vs station radii
+    check_monitor_coverage — landing point vs station radii
 """
 
 from __future__ import annotations
@@ -306,24 +306,24 @@ def check_coastline(
         raise ValueError(f"Unknown coastline_mode: {mode!r}")
 
 
-def check_monitour_coverage(
+def check_monitor_coverage(
     north: float, east: float,
     station_norths: np.ndarray,
     station_easts: np.ndarray,
     station_radii: np.ndarray,
 ) -> bool:
-    """Check that the landing point is within range of at least one monitour station.
+    """Check that the landing point is within range of at least one monitor station.
 
     Uses Euclidean distance, which is valid in the NED metre coordinate
     system.  The station arrays should include the automatic launch-site
-    monitour station.
+    monitor station.
 
     Parameters
     ----------
     north, east : float
         Landing position in NED metres.
     station_norths, station_easts, station_radii : np.ndarray
-        1-D arrays for all monitour stations (including launch site).
+        1-D arrays for all monitor stations (including launch site).
     """
     dn = station_norths - north
     de = station_easts - east

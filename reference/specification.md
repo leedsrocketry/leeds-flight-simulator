@@ -483,14 +483,14 @@ A drogue parachute without a main parachute is not a valid configuration (loadin
 
 ### 9.3 Inactive Scenario Filtering and Warnings
 
-`sea_check_scenarios` and `los_check_scenarios` in `simulation.yaml` are user-supplied lists and may name scenarios that are inactive for the current vehicle configuration (e.g. `drogue_only` listed but no drogue configured). The simulator must not raise an error in this case. Instead:
+`coastline_check_scenarios` and `los_check_scenarios` in `simulation.yaml` are user-supplied lists and may name scenarios that are inactive for the current vehicle configuration (e.g. `drogue_only` listed but no drogue configured). The simulator must not raise an error in this case. Instead:
 
 1. At startup, compute the set of active scenarios via `VehicleRecovery.active_scenarios` (§9.2, implemented in `config.py`).
 2. For each check list, silently drop any scenario name that is not in the active set — only the intersection is checked.
 3. Emit a warning to the simulation output for each dropped scenario, e.g.:
 
    ```
-   WARNING: 'drogue_only' in sea_check_scenarios is not an active scenario for this vehicle configuration and will be skipped.
+   WARNING: 'drogue_only' in coastline_check_scenarios is not an active scenario for this vehicle configuration and will be skipped.
    ```
 
 Warnings are emitted once per run, before the Monte Carlo loop begins. They do not affect the compliance result.

@@ -9,8 +9,8 @@ site:
                                     # from the launch site; used during inclination optimisation;
                                     # has no effect when inclination is not "auto"
 
-  launch_monitour_radius: 5000      # metres — radius of the automatic monitour station
-                                    # placed at the launch site; added to every monitour check
+  launch_monitor_radius: 5000      # metres — radius of the automatic monitor station
+                                    # placed at the launch site; added to every monitor check
                                     # in addition to any stations listed below
 
   altitude_ceiling: 16764           # metres — danger area ceiling;
@@ -26,8 +26,8 @@ site:
                                     #   "land"           — landing must be inside the polygon
                                     #                      (on land)
 
-  monitour_stations:                # additional fixed monitour stations;
-                                    # the launch site is added automatically (see launch_monitour_radius)
+  monitor_stations:                # additional fixed monitor stations;
+                                    # the launch site is added automatically (see launch_monitor_radius)
     - name: "MOD Range Control"
       latitude: 58.60215            # degrees
       longitude: -4.77592           # degrees
@@ -89,15 +89,15 @@ monte_carlo:
 
     # Scenarios to apply the coastline check to (requires coastline above to be set).
     # Scenarios not active for the current vehicle configuration are skipped with a warning.
-    sea_check_scenarios:
+    coastline_check_scenarios:
       - nominal
       - ballistic
       - drogue_only
       - premature_main
 
-    # Scenarios to check for monitour station coverage.
+    # Scenarios to check for monitor station coverage.
     # Scenarios not active for the current vehicle configuration are skipped with a warning.
-    monitour_check_scenarios:
+    monitor_check_scenarios:
       - ballistic
       - drogue_only
 
@@ -105,8 +105,6 @@ verification:     # optional — single-trajectory comparison against a
                   # reference CSV from any other flight simulator;
                   # omit this section to skip the verification check
   reference_trajectory: "rasaero_nominal_simulation.csv" # path to reference CSV
-  # azimuth: 0              # degrees — override launch.rail.azimuth for verification;
-  #                         # omit to use launch.rail value (or 0 if "auto")
   # inclination: 80         # degrees — override launch.rail.inclination for verification;
   #                         # omit to use launch.rail value (or 0 if "auto")
   altitude_tolerance: 0.05  # fraction in [0, 1] — tolerance band on altitude

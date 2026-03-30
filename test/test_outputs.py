@@ -15,7 +15,7 @@ from optimisation import OptimisationResult
 from config import (
     SimulationConfig, SiteConfig, LaunchConfig, RailConfig,
     MonteCarloConfig, UncertaintiesConfig, AcceptanceConfig,
-    MonitourStation, MapMarker,
+    MonitorStation, MapMarker,
 )
 from outputs import (
     create_results_dir,
@@ -154,13 +154,13 @@ def _make_sim_cfg(tmp_path: Path) -> SimulationConfig:
             latitude=58.6105,
             longitude=-4.9435,
             ballistic_exclusion_radius=500.0,
-            launch_monitour_radius=200.0,
+            launch_monitor_radius=200.0,
             altitude_ceiling=16764.0,
             danger_area=geojson_path,
             coastline=None,
             coastline_mode="sea",
-            monitour_stations=(
-                MonitourStation(
+            monitor_stations=(
+                MonitorStation(
                     name="Visibility Coverage",
                     latitude=58.6105,
                     longitude=-4.9435,
@@ -199,8 +199,8 @@ def _make_sim_cfg(tmp_path: Path) -> SimulationConfig:
                 sm_supersonic_min=1.0,
                 aoa_max=15.0,
                 sm_aoa_threshold=5.0,
-                sea_check_scenarios=(),
-                monitour_check_scenarios=(),
+                coastline_check_scenarios=(),
+                monitor_check_scenarios=(),
             ),
         ),
         verification=None,
@@ -271,7 +271,7 @@ class TestCreateResultsDir:
 class TestWriteSamplesCsv:
     def test_basic_columns(self, tmp_path: Path):
         results = [_make_sample(i) for i in range(3)]
-        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitour=False)
+        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitor=False)
         assert path.exists()
         with open(path) as f:
             reader = csv.reader(f)
@@ -280,7 +280,7 @@ class TestWriteSamplesCsv:
         assert "scenario" in header
         assert "fin_cant_deg" in header
         assert "coastline_compliant" not in header
-        assert "monitour_compliant" not in header
+        assert "monitor_compliant" not in header
         assert "compliant" not in header
         # Removed columns should not appear
         assert "wind_profile_index" not in header
@@ -288,22 +288,22 @@ class TestWriteSamplesCsv:
 
     def test_coastline_column_present(self, tmp_path: Path):
         results = [_make_sample(0, landing_at_sea=False)]
-        path = write_samples_csv(results, tmp_path, has_coastline=True, has_monitour=False)
+        path = write_samples_csv(results, tmp_path, has_coastline=True, has_monitor=False)
         with open(path) as f:
             header = next(csv.reader(f))
         assert "coastline_compliant" in header
 
-    def test_monitour_column_present(self, tmp_path: Path):
+    def test_monitor_column_present(self, tmp_path: Path):
         results = [_make_sample(0, in_coverage=True)]
-        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitour=True)
+        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitor=True)
         with open(path) as f:
             header = next(csv.reader(f))
-        assert "monitour_compliant" in header
+        assert "monitor_compliant" in header
 
     def test_row_count(self, tmp_path: Path):
         n = 5
         results = [_make_sample(i) for i in range(n)]
-        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitour=False)
+        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitor=False)
         with open(path) as f:
             rows = list(csv.reader(f))
         assert len(rows) == n + 1  # header + data
@@ -311,7 +311,7 @@ class TestWriteSamplesCsv:
     def test_column_order_matches_spec(self, tmp_path: Path):
         """Verify columns: inputs → flight time → compliance → values → locations."""
         results = [_make_sample(0, landing_at_sea=True, in_coverage=True)]
-        path = write_samples_csv(results, tmp_path, has_coastline=True, has_monitour=True)
+        path = write_samples_csv(results, tmp_path, has_coastline=True, has_monitor=True)
         with open(path) as f:
             header = next(csv.reader(f))
         # Inputs first
@@ -327,7 +327,7 @@ class TestWriteSamplesCsv:
 
     def test_bool_values_written(self, tmp_path: Path):
         results = [_make_sample(0, compliant=True)]
-        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitour=False)
+        path = write_samples_csv(results, tmp_path, has_coastline=False, has_monitor=False)
         with open(path) as f:
             reader = csv.reader(f)
             header = next(reader)

@@ -592,7 +592,6 @@ def run_verification(
     vehicle: Vehicle,
     propellant: PropellantModel,
     aero_model: AeroModel,
-    azimuth_override: float | None = None,
     inclination_override: float | None = None,
 ) -> VerificationResult:
     """Run a nominal 6DoF trajectory and compare against the reference CSV.
@@ -602,8 +601,8 @@ def run_verification(
     search range is used (optimisation has not yet run at this point in
     the program flow).
 
-    *azimuth_override* and *inclination_override* (degrees), when not
-    ``None``, take precedence over any value in the config.
+    *inclination_override* (degrees), when not ``None``, takes precedence
+    over any value in the config.  Azimuth is always zero for verification.
 
     Parameters
     ----------
@@ -629,13 +628,9 @@ def run_verification(
 
     rail = sim_cfg.launch.rail
 
-    # Precedence: CLI override > verification config > launch config > 0 for "auto"
-    if azimuth_override is not None:
-        azimuth = azimuth_override
-    elif ver_cfg.azimuth is not None:
-        azimuth = ver_cfg.azimuth
-    else:
-        azimuth = 0.0 if rail.azimuth == "auto" else float(rail.azimuth)
+    # Azimuth is always zero for verification (wind is zero, so heading
+    # doesn't matter — simplifies comparison with 2DoF references).
+    azimuth = 0.0
 
     if inclination_override is not None:
         inclination = inclination_override

@@ -7,7 +7,7 @@ Scope
 - Ray-casting point-in-polygon (Numba)
 - all_points_in_polygon trajectory check
 - Coastline check (sea / land modes)
-- Monitour-station coverage
+- Monitor-station coverage
 - polygon_to_arrays round-trip
 - ned_to_latlon inverse projection
 """
@@ -29,7 +29,7 @@ from geography import (
     all_points_in_polygon,
     buffer_danger_area,
     check_coastline,
-    check_monitour_coverage,
+    check_monitor_coverage,
     load_polygon_ned,
     ned_to_latlon,
     polygon_to_arrays,
@@ -285,34 +285,34 @@ class TestCoastlineCheck:
 
 
 # ===========================================================================
-# 6. Monitour coverage
+# 6. Monitor coverage
 # ===========================================================================
 
-class TestMonitourCoverage:
+class TestMonitorCoverage:
     def test_within_radius(self):
         sn = np.array([0.0])
         se = np.array([0.0])
         sr = np.array([5000.0])
-        assert check_monitour_coverage(100.0, 100.0, sn, se, sr)
+        assert check_monitor_coverage(100.0, 100.0, sn, se, sr)
 
     def test_outside_radius(self):
         sn = np.array([0.0])
         se = np.array([0.0])
         sr = np.array([100.0])
-        assert not check_monitour_coverage(5000.0, 5000.0, sn, se, sr)
+        assert not check_monitor_coverage(5000.0, 5000.0, sn, se, sr)
 
     def test_multiple_stations_one_in_range(self):
         sn = np.array([0.0, 10000.0])
         se = np.array([0.0, 0.0])
         sr = np.array([100.0, 500.0])
         # Close to second station
-        assert check_monitour_coverage(10000.0, 200.0, sn, se, sr)
+        assert check_monitor_coverage(10000.0, 200.0, sn, se, sr)
 
     def test_multiple_stations_none_in_range(self):
         sn = np.array([0.0, 10000.0])
         se = np.array([0.0, 0.0])
         sr = np.array([100.0, 100.0])
-        assert not check_monitour_coverage(50000.0, 50000.0, sn, se, sr)
+        assert not check_monitor_coverage(50000.0, 50000.0, sn, se, sr)
 
 
 # ===========================================================================

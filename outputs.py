@@ -137,7 +137,7 @@ def write_samples_csv(
     results: list[SampleResult],
     output_dir: Path,
     has_coastline: bool,
-    has_monitour: bool,
+    has_monitor: bool,
 ) -> Path:
     """Write per-sample results to ``samples.csv``.
 
@@ -149,7 +149,7 @@ def write_samples_csv(
         Directory to write the CSV into.
     has_coastline : bool
         Whether to include the ``landing_at_sea`` column.
-    has_monitour : bool
+    has_monitor : bool
         Whether to include the ``in_coverage`` column.
 
     Returns
@@ -167,8 +167,8 @@ def write_samples_csv(
     if has_coastline:
         header.append("coastline_compliant")
     header.extend(["danger_area_footprint_compliant", "danger_area_ceiling_compliant"])
-    if has_monitour:
-        header.append("monitour_compliant")
+    if has_monitor:
+        header.append("monitor_compliant")
     header.extend([
         "stability_compliant",
         "min_SM_subsonic", "min_SM_supersonic_cal",
@@ -191,7 +191,7 @@ def write_samples_csv(
             if has_coastline:
                 row.append(r.landing_at_sea)
             row.extend([r.in_buffer, r.below_ceiling])
-            if has_monitour:
+            if has_monitor:
                 row.append(r.in_coverage)
             row.extend([
                 r.stability_compliant,
@@ -701,8 +701,8 @@ def save_dispersion_plot(
     extent_e = max(extent_e, np.max(da_ext_e) / 1000.0 + margin)
     extent_w = min(extent_w, np.min(da_ext_e) / 1000.0 - margin)
 
-    # Expand to include monitour stations
-    for obs in site.monitour_stations:
+    # Expand to include monitor stations
+    for obs in site.monitor_stations:
         ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
         obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
         r_km = obs.radius / 1000.0
@@ -711,8 +711,8 @@ def save_dispersion_plot(
         extent_e = max(extent_e, obs_e_km + r_km + margin)
         extent_w = min(extent_w, obs_e_km - r_km - margin)
 
-    # Expand to include launch site monitour circle
-    ls_obs_r_km = site.launch_monitour_radius / 1000.0
+    # Expand to include launch site monitor circle
+    ls_obs_r_km = site.launch_monitor_radius / 1000.0
     extent_n = max(extent_n, ls_obs_r_km + margin)
     extent_s = min(extent_s, -ls_obs_r_km - margin)
     extent_e = max(extent_e, ls_obs_r_km + margin)
@@ -786,7 +786,7 @@ def save_dispersion_plot(
         hatch="....", label=f"Buffer Zone ({buffer_dist / 1000.0:.0f} km)",
     ))
 
-    # --- Monitour circles (unified into single shape, no edge) ---
+    # --- Monitor circles (unified into single shape, no edge) ---
     n_circle_pts = 360
 
     def _obs_circle_wm(
@@ -802,14 +802,14 @@ def save_dispersion_plot(
         ]
         return ShapelyPolygon(wm_pts)
 
-    # Collect all monitour circles as Shapely polygons
+    # Collect all monitor circles as Shapely polygons
     obs_polys: list[ShapelyPolygon] = []
 
-    # Launch site monitour circle
-    obs_polys.append(_obs_circle_wm(0.0, 0.0, site.launch_monitour_radius / 1000.0))
+    # Launch site monitor circle
+    obs_polys.append(_obs_circle_wm(0.0, 0.0, site.launch_monitor_radius / 1000.0))
 
-    # Configured monitour stations
-    for obs in site.monitour_stations:
+    # Configured monitor stations
+    for obs in site.monitor_stations:
         ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
         obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
         obs_polys.append(_obs_circle_wm(obs_n_km, obs_e_km, obs.radius / 1000.0))
@@ -893,7 +893,7 @@ def save_dispersion_plot(
         ))
 
     # --- Map markers (unique per location) ---
-    # Marker pool for monitour stations and map markers
+    # Marker pool for monitor stations and map markers
     _marker_pool = ["s", "D", "^", "v", "p", "h", "8", "*"]
     _marker_idx = 0
 
@@ -912,8 +912,8 @@ def save_dispersion_plot(
         linestyle="None", label="Launch Site",
     ))
 
-    # Monitour station markers (each gets a unique symbol)
-    for obs in site.monitour_stations:
+    # Monitor station markers (each gets a unique symbol)
+    for obs in site.monitor_stations:
         ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
         obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
         mx, my = km_to_wm(obs_n_km, obs_e_km)
