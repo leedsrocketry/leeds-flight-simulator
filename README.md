@@ -307,9 +307,30 @@ Checks ISA against published tables, quaternion maths, launch rail exit velocity
 
 ### Trajectory Comparison Tool
 
-An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, mass. Column names are matched case-insensitively; missing columns are skipped.
+An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, thrust, mass. Column names are matched case-insensitively; missing columns are skipped.
 
 > **Note:** The reference CSV is assumed to use SI units (metres, seconds, calibres). There is no unit sanitisation — ensure your reference data is in SI before running verification.
+
+```
+python . verify <simulation.yaml>
+```
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `-d`, `--dof` `2`\|`6` | Ascent model: `6` (full 6DoF, default) or `2` (point-mass) |
+| `-q`, `--no-popup` | Do not open figures after execution |
+| `--dump-csv PATH` | Write per-timestep comparison data (reference, simulator, and error for each quantity) to a CSV file |
+
+Example:
+
+```
+python . verify simulations/g2b2-safety-case/cape-wrath.yaml --dof 2 -q
+python . verify simulations/g2b2-safety-case/cape-wrath.yaml --dump-csv debug/verify_comparison.csv -q
+```
+
+A summary table is printed to the console showing pass/fail, maximum absolute error, RMS error, and mean bias for each compared quantity. The comparison figure is saved and (unless `-q` is passed) opened automatically.
 
 ![Verification plot](simulations/g2b2-safety-case/results/verification_plot.png)
 

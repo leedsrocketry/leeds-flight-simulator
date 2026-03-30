@@ -609,7 +609,11 @@ def replay(
 @click.argument("config_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-d", "--dof", type=click.Choice(["2", "6"]), default="6",
               help="Ascent model: 6 (full 6DoF) or 2 (point-mass).")
-def verify(config_path: Path, dof: str) -> None:
+@click.option("--dump-csv", type=click.Path(path_type=Path), default=None,
+              help="Write comparison data to a CSV file.")
+@click.option("-q", "--no-popup", is_flag=True,
+              help="Do not open figures after execution.")
+def verify(config_path: Path, dof: str, dump_csv: Path | None, no_popup: bool) -> None:
     """Compare a single trajectory against a reference CSV."""
     import matplotlib.pyplot as plt
 
@@ -649,5 +653,68 @@ def verify(config_path: Path, dof: str) -> None:
     display.update_status("Done.")
     display.stop()
 
-    if ver_result.figure is not None:
+    # --- Print per-quantity summary table ---
+    from rich.table import Table
+    table = Table(title="Verification Summary", show_lines=False)
+    table.add_column("Quantity", style="bold")
+    table.add_column("Result", justify="centre")
+    table.add_column("Max |err|")
+    table.add_column("RMS err")
+    table.add_column("Mean bias")
+
+    import numpy as np
+    for qty_name, cmp in ver_result.comparisons.items():
+        err = cmp.sim_values - cmp.ref_values
+        nonzero = np.abs(cmp.ref_values) > 1e-12
+        max_abs = float(np.max(np.abs(err)))
+        rms = float(np.sqrt(np.mean(err ** 2)))
+        mean_bias = float(np.mean(err))
+
+        if cmp.passed:
+            result_str = "[bold green]PASS[/bold green]"
+        else:
+            n_fail = int(np.sum(~cmp.within_tolerance))
+            result_str = f"[bold red]FAIL[/bold red] ({n_fail} pts)"
+
+        table.add_row(
+            cmp.name.title(),
+            result_str,
+            f"{max_abs:.4g}",
+            f"{rms:.4g}",
+            f"{mean_bias:+.4g}",
+        )
+
+    console.print()
+    console.print(table)
+
+    overall = "[bold green]PASS[/bold green]" if ver_result.passed else "[bold red]FAIL[/bold red]"
+    console.print(f"\nOverall: {overall}")
+
+    # --- Dump comparison data to CSV ---
+    if dump_csv is not None:
+        import csv
+        dump_path = Path(dump_csv).resolve()
+        # All comparisons share the same ref_time (interpolated to reference timebase)
+        qty_names = list(ver_result.comparisons.keys())
+        first = ver_result.comparisons[qty_names[0]]
+
+        with open(dump_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            header = ["time_s"]
+            for q in qty_names:
+                header.extend([f"ref_{q}", f"lfs_{q}", f"err_{q}"])
+            writer.writerow(header)
+
+            for i in range(len(first.ref_time)):
+                row: list[object] = [f"{first.ref_time[i]:.6f}"]
+                for q in qty_names:
+                    c = ver_result.comparisons[q]
+                    row.append(f"{c.ref_values[i]:.6f}")
+                    row.append(f"{c.sim_values[i]:.6f}")
+                    row.append(f"{c.sim_values[i] - c.ref_values[i]:.6f}")
+                writer.writerow(row)
+
+        console.print(f"\nComparison data written to: {dump_path}")
+
+    if ver_result.figure is not None and not no_popup:
         plt.show()

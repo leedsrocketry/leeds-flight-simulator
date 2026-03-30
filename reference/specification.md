@@ -838,7 +838,7 @@ PASS rendered with green hilight and black text, NO in red hilight and white tex
 
 ### 18.1 Trajectory Comparison Tool
 
-Before the main MC run, an optional nominal trajectory comparison against any external flight simulator output. Configured via a `verification:` block in `simulation.yaml` (§15.1). The reference CSV may come from any tool; columns are matched case-insensitively. See `example/rasaero-nominal-simulation.csv` for reference implementation. Quantities compared: altitude, Mach, stability margin, mass vs time. Tolerance bands are configurable per-quantity. Mean values are used and wind at the surface and with altitude is set to zero.
+Before the main MC run, an optional nominal trajectory comparison against any external flight simulator output. Configured via a `verification:` block in `simulation.yaml` (§15.1). The reference CSV may come from any tool; columns are matched case-insensitively. See `example/rasaero_nominal_simulation.csv` for reference implementation. Quantities compared: altitude, Mach, stability margin, mass vs time. Tolerance bands are configurable per-quantity. Mean values are used and wind at the surface and with altitude is set to zero.
 
 Reference data plotted in grey with the configured tolerance band; simulator output overlaid in green (all within tolerance) or red (any out of tolerance). PASS/FAIL printed to console and recorded in `summary.yaml`. On failure, the figure opens and the user is prompted whether to continue (standard warning behaviour).
 
