@@ -114,11 +114,11 @@ _VEHICLE_YAML = """
     recovery:
       drogue:
         cd: 2.0
-        area: 0.15
+        diameter: 0.437019
         threshold: apogee
       main:
         cd: 2.0
-        area: 2.8
+        diameter: 1.888139
         threshold: 305
     """
 
@@ -361,11 +361,13 @@ def test_vehicle_recovery(tmp_path):
     v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.recovery.drogue is not None
     assert v.recovery.drogue.cd == pytest.approx(2.0)
-    assert v.recovery.drogue.area == pytest.approx(0.15)
+    assert v.recovery.drogue.diameter == pytest.approx(0.437019)
+    assert v.recovery.drogue.area == pytest.approx(0.15, rel=1e-4)
     assert v.recovery.drogue.threshold == "apogee"
     assert v.recovery.main is not None
     assert v.recovery.main.cd == pytest.approx(2.0)
-    assert v.recovery.main.area == pytest.approx(2.8)
+    assert v.recovery.main.diameter == pytest.approx(1.888139)
+    assert v.recovery.main.area == pytest.approx(2.8, rel=1e-4)
     assert v.recovery.main.threshold == pytest.approx(305.0)
 
 
@@ -382,7 +384,7 @@ def test_recovery_drogue_optional(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        area: 0.15\n"
+        "        diameter: 0.437019\n"
         "        threshold: apogee\n",
         "    recovery:\n",
     )
@@ -396,7 +398,7 @@ def test_recovery_drogue_without_main_raises(tmp_path):
     yaml_no_main = _VEHICLE_YAML.replace(
         "      main:\n"
         "        cd: 2.0\n"
-        "        area: 2.8\n"
+        "        diameter: 1.888139\n"
         "        threshold: 305\n",
         "",
     )
@@ -410,7 +412,7 @@ def test_recovery_main_only(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        area: 0.15\n"
+        "        diameter: 0.437019\n"
         "        threshold: apogee\n",
         "    recovery:\n",
     )
@@ -425,11 +427,11 @@ def test_recovery_no_chutes(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        area: 0.15\n"
+        "        diameter: 0.437019\n"
         "        threshold: apogee\n"
         "      main:\n"
         "        cd: 2.0\n"
-        "        area: 2.8\n"
+        "        diameter: 1.888139\n"
         "        threshold: 305\n",
         "    recovery:\n",
     )
@@ -471,7 +473,7 @@ def test_active_scenarios_main_only_numeric(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        area: 0.15\n"
+        "        diameter: 0.437019\n"
         "        threshold: apogee\n",
         "    recovery:\n",
     )
@@ -487,11 +489,11 @@ def test_active_scenarios_no_chutes(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        area: 0.15\n"
+        "        diameter: 0.437019\n"
         "        threshold: apogee\n"
         "      main:\n"
         "        cd: 2.0\n"
-        "        area: 2.8\n"
+        "        diameter: 1.888139\n"
         "        threshold: 305\n",
         "    recovery:\n",
     )

@@ -23,9 +23,9 @@ recovery:
   # See documentation for which descent scenarios are active for each configuration.
   drogue:
     cd: 0.97
-    area: 0.914         # reference area (m²)
-    threshold: apogee   # "apogee" or altitude in metres AGL
+    diameter: 0.914       # reference diameter (m); area = π·d²/4
+    threshold: apogee     # "apogee" or altitude in metres AGL
   main:
     cd: 2.2
-    area: 1.8           # reference area (m²)
+    diameter: 1.829     # reference diameter (m); area = π·d²/4
     threshold: 305      # metres AGL

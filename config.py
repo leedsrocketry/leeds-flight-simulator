@@ -174,8 +174,13 @@ class VehicleGeometry:
 class ParachuteConfig:
     """Configuration for a single parachute stage."""
     cd: float                                  # drag coefficient
-    area: float                                # m² — reference area
+    diameter: float                            # m — reference diameter
     threshold: float | Literal["apogee"]       # deploy altitude [m AGL] or "apogee"
+
+    @property
+    def area(self) -> float:
+        """π·d²/4 [m²] — reference area derived from diameter."""
+        return math.pi * self.diameter ** 2 / 4.0
 
 
 @dataclass(frozen=True)
@@ -503,7 +508,7 @@ def load_vehicle(path: Path | str) -> tuple[Vehicle, PropellantModel]:
             return None
         return ParachuteConfig(
             cd=float(r["cd"]),
-            area=float(r["area"]),
+            diameter=float(r["diameter"]),
             threshold=_parse_threshold(r["threshold"]),
         )
 

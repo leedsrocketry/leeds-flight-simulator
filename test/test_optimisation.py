@@ -121,8 +121,8 @@ class TestWorstDriftScenario:
         """When main deploys at apogee (no premature_main), nominal drifts most."""
         # Construct a recovery config where main.threshold = "apogee"
         recovery = VehicleRecovery(
-            drogue=ParachuteConfig(cd=1.0, area=0.5, threshold="apogee"),
-            main=ParachuteConfig(cd=1.5, area=10.0, threshold="apogee"),
+            drogue=ParachuteConfig(cd=1.0, diameter=0.797885, threshold="apogee"),
+            main=ParachuteConfig(cd=1.5, diameter=3.568248, threshold="apogee"),
         )
         assert "premature_main" not in recovery.active_scenarios
         assert "nominal" in recovery.active_scenarios
