@@ -609,11 +609,17 @@ def replay(
 @click.argument("config_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-d", "--dof", type=click.Choice(["2", "6"]), default="6",
               help="Ascent model: 6 (full 6DoF) or 2 (point-mass).")
+@click.option("-a", "--azimuth", type=float, default=None,
+              help="Launch rail azimuth (degrees). Overrides config value.")
+@click.option("-i", "--inclination", type=float, default=None,
+              help="Launch rail inclination (degrees). Overrides config value.")
 @click.option("--dump-csv", type=click.Path(path_type=Path), default=None,
               help="Write comparison data to a CSV file.")
 @click.option("-q", "--no-popup", is_flag=True,
               help="Do not open figures after execution.")
-def verify(config_path: Path, dof: str, dump_csv: Path | None, no_popup: bool) -> None:
+def verify(config_path: Path, dof: str, azimuth: float | None,
+           inclination: float | None, dump_csv: Path | None,
+           no_popup: bool) -> None:
     """Compare a single trajectory against a reference CSV."""
     import matplotlib.pyplot as plt
 
@@ -656,6 +662,7 @@ def verify(config_path: Path, dof: str, dump_csv: Path | None, no_popup: bool) -
     display.update_status(f"Running {dof}DoF verification trajectory...")
     ver_result = run_verification(
         sim_cfg, vehicle_cfg, motor_model, aero_model, dof=int(dof),
+        azimuth_override=azimuth, inclination_override=inclination,
     )
 
     display.update_status("Done.")

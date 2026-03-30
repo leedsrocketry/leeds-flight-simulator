@@ -689,6 +689,8 @@ def run_verification(
     motor_model: MotorModel,
     aero_model: AeroModel,
     dof: int = 6,
+    azimuth_override: float | None = None,
+    inclination_override: float | None = None,
 ) -> VerificationResult:
     """Run a nominal trajectory and compare against the reference CSV.
 
@@ -696,6 +698,9 @@ def run_verification(
     rail angles are set to ``"auto"``, the midpoint of the configured
     search range is used (optimisation has not yet run at this point in
     the program flow).
+
+    *azimuth_override* and *inclination_override* (degrees), when not
+    ``None``, take precedence over any value in the config.
 
     Parameters
     ----------
@@ -718,12 +723,26 @@ def run_verification(
 
     warnings.warn(
         "Reference trajectory CSV is assumed to use SI units "
-        "(metres, seconds, calibres). There is no unit sanitisation.",
+        "(metres, seconds, calibres). There is no unit sanitisation "
+        "and no check that both simulators used the same input parameters.",
     )
 
     rail = sim_cfg.launch.rail
-    azimuth = _resolve_rail_angle(rail.azimuth, rail.azimuth_range)
-    inclination = _resolve_rail_angle(rail.inclination, rail.inclination_range)
+
+    # Precedence: CLI override > verification config > launch config > 0 for "auto"
+    if azimuth_override is not None:
+        azimuth = azimuth_override
+    elif ver_cfg.azimuth is not None:
+        azimuth = ver_cfg.azimuth
+    else:
+        azimuth = 0.0 if rail.azimuth == "auto" else float(rail.azimuth)
+
+    if inclination_override is not None:
+        inclination = inclination_override
+    elif ver_cfg.inclination is not None:
+        inclination = ver_cfg.inclination
+    else:
+        inclination = 0.0 if rail.inclination == "auto" else float(rail.inclination)
 
     geom = vehicle_cfg.geometry
     zero_wind = _zero_wind_ensemble()

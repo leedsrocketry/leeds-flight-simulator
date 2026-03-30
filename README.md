@@ -309,7 +309,7 @@ Checks ISA against published tables, quaternion maths, launch rail exit velocity
 
 An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, thrust, mass. Column names are matched case-insensitively; missing columns are skipped.
 
-> **Note:** The reference CSV is assumed to use SI units (metres, seconds, calibres). There is no unit sanitisation — ensure your reference data is in SI before running verification.
+> **Note:** The reference CSV is assumed to use SI units (metres, seconds, calibres). There is no unit sanitisation and no check that both simulators used the same input parameters — ensure your reference data is in SI and that vehicle, motor, and atmospheric inputs match before running verification.
 
 ```
 python . verify <simulation.yaml>
@@ -320,13 +320,22 @@ python . verify <simulation.yaml>
 | Flag | Effect |
 |------|--------|
 | `-d`, `--dof` `2`\|`6` | Ascent model: `6` (full 6DoF, default) or `2` (point-mass) |
+| `-a`, `--azimuth` `FLOAT` | Launch rail azimuth (degrees); overrides config value |
+| `-i`, `--inclination` `FLOAT` | Launch rail inclination (degrees); overrides config value |
 | `-q`, `--no-popup` | Do not open figures after execution |
 | `--dump-csv PATH` | Write per-timestep comparison data (reference, simulator, and error for each quantity) to a CSV file |
+
+The verification azimuth and inclination can be set at three levels, with later entries taking precedence:
+
+1. `launch.rail.azimuth` / `launch.rail.inclination` in the simulation config (falls back to `0` if set to `"auto"`)
+2. `verification.azimuth` / `verification.inclination` in the simulation config (optional)
+3. `-a` / `-i` CLI flags (highest priority)
 
 Example:
 
 ```
 python . verify simulations/g2b2-safety-case/cape-wrath.yaml --dof 2 -q
+python . verify simulations/g2b2-safety-case/cape-wrath.yaml -i 85 -a 0 -q
 python . verify simulations/g2b2-safety-case/cape-wrath.yaml --dump-csv debug/verify_comparison.csv -q
 ```
 

@@ -105,6 +105,10 @@ verification:     # optional — single-trajectory comparison against a
                   # reference CSV from any other flight simulator;
                   # omit this section to skip the verification check
   reference_trajectory: "rasaero_nominal_simulation.csv" # path to reference CSV
+  # azimuth: 0              # degrees — override launch.rail.azimuth for verification;
+  #                         # omit to use launch.rail value (or 0 if "auto")
+  # inclination: 80         # degrees — override launch.rail.inclination for verification;
+  #                         # omit to use launch.rail value (or 0 if "auto")
   altitude_tolerance: 0.05  # fraction in [0, 1] — tolerance band on altitude
   mach_tolerance: 0.05      # fraction in [0, 1] — tolerance band on Mach number
   sm_tolerance: 0.05        # fraction in [0, 1] — tolerance band on static margin

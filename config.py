@@ -122,6 +122,8 @@ class VerificationConfig:
     mass_tolerance: float       # fractional tolerance on vehicle mass
     thrust_tolerance: float     # fractional tolerance on thrust
     exceedance_fraction: float  # fraction of points allowed outside tolerance (0 = strict)
+    azimuth: float | None       # degrees — override launch.rail.azimuth for verification
+    inclination: float | None   # degrees — override launch.rail.inclination for verification
 
 
 @dataclass(frozen=True)
@@ -398,6 +400,8 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             mass_tolerance=float(ver_raw["mass_tolerance"]),
             thrust_tolerance=float(ver_raw.get("thrust_tolerance", ver_raw["altitude_tolerance"])),
             exceedance_fraction=float(ver_raw.get("exceedance_fraction", 0.0)),
+            azimuth=float(ver_raw["azimuth"]) if "azimuth" in ver_raw else None,
+            inclination=float(ver_raw["inclination"]) if "inclination" in ver_raw else None,
         )
     else:
         verification = None
