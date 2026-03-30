@@ -263,10 +263,13 @@ def _quantities_from_rail_hist(
         )
         sm_arr[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
-        cd_arr[i] = ca_at(
-            am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
-            M, Re, 0.0,
-        )
+        if M >= am.mach_grid[0]:
+            cd_arr[i] = ca_at(
+                am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
+                M, Re, 0.0,
+            )
+        else:
+            cd_arr[i] = math.nan
 
     return t_hist.copy(), alt_hist.copy(), mach_arr, thrust_arr, mass_arr, sm_arr, cd_arr
 
@@ -356,16 +359,20 @@ def _extract_trajectory_quantities_6dof(
         sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
         # True drag coefficient: CD = CA·cos(α) + CN·sin(α)
+        # NaN when below the aero table's Mach range (no valid data).
         alpha_rad = math.atan2(math.sqrt(v * v + w * w), u) if V > 1.0e-6 else 0.0
-        ca = ca_at(
-            am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
-            M, Re, alpha_rad,
-        )
-        cn, _ = cn_cp_at(
-            am.mach_grid, am.re_grid, am.alpha_grid,
-            am.cn_table, am.cp_table, M, Re, alpha_rad,
-        )
-        cd_asc[i] = ca * math.cos(alpha_rad) + cn * math.sin(alpha_rad)
+        if M >= am.mach_grid[0]:
+            ca = ca_at(
+                am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
+                M, Re, alpha_rad,
+            )
+            cn, _ = cn_cp_at(
+                am.mach_grid, am.re_grid, am.alpha_grid,
+                am.cn_table, am.cp_table, M, Re, alpha_rad,
+            )
+            cd_asc[i] = ca * math.cos(alpha_rad) + cn * math.sin(alpha_rad)
+        else:
+            cd_asc[i] = math.nan
 
     # --- Descent (thrust is zero, mass is dry, under parachute) ---
     if result.t_descent is not None and result.n_descent > 0:
@@ -685,9 +692,8 @@ def run_verification(
         "cd": ver_cfg.cd_tolerance,
     }
 
-    # For CD, truncate at apogee: after apogee the reference CD is the
-    # parachute drag coefficient and the simulator sets CD to zero, so
-    # post-apogee values are not comparable as body aerodynamic CD.
+    # For CD, truncate at apogee (post-apogee CD is parachute drag, not
+    # body aero) and strip NaN values (below aero table Mach range).
     ref_apogee = int(np.argmax(ref_data["altitude"])) + 1
     sim_apogee = int(np.argmax(sim_data["altitude"])) + 1
 
@@ -700,6 +706,13 @@ def run_verification(
             ref_v = ref_data["cd"][:ref_apogee]
             sim_t = sim_data["time"][:sim_apogee]
             sim_v = sim_data["cd"][:sim_apogee]
+            # Drop points outside the valid aero table range: NaN from
+            # the simulator (below mach_grid lower bound) and zero from
+            # the reference (RASAero reports CD=0 at zero velocity).
+            ref_valid = ref_v > 0.0
+            ref_t, ref_v = ref_t[ref_valid], ref_v[ref_valid]
+            sim_valid = np.isfinite(sim_v)
+            sim_t, sim_v = sim_t[sim_valid], sim_v[sim_valid]
         else:
             ref_t = ref_data["time"]
             ref_v = ref_data[qty]
