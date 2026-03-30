@@ -15,8 +15,8 @@ mass:
   wet_cg: 1.745                # wet vehicle CG from nosecone tip (m)
   wet_inertia_lateral:  5.2    # wet vehicle lateral inertia about wet CG (kg·m²)
   wet_inertia_roll:     0.012  # wet vehicle roll inertia about roll axis (kg·m²)
-  # propellant_inner_diameter: 0.040   # propellant bore diameter (m); omit for solid cylinder
-  # casing_thickness: 0.002            # motor casing wall thickness (m); omit if unknown
+  propellant_outer_diameter: 0.086   # propellant grain outer diameter (m); omit to use full motor diameter
+  propellant_inner_diameter: 0.030   # propellant bore diameter (m); omit for solid cylinder
 
 recovery:
   # Omit a parachute section entirely to disable that stage.

@@ -27,7 +27,7 @@ Loaders:
 
 Builders:
     build_propellant_model(motor_data, vehicle_length,
-                           nozzle_area, casing_thickness,
+                           nozzle_area, propellant_outer_diameter,
                            propellant_inner_diameter)        → PropellantModel
 
 @njit functions — propellant-level only:
@@ -205,7 +205,7 @@ def build_propellant_model(
     motor_data: MotorData,
     vehicle_length: float,
     nozzle_area: float,
-    casing_thickness: float | None = None,
+    propellant_outer_diameter: float | None = None,
     propellant_inner_diameter: float | None = None,
 ) -> PropellantModel:
     """Build the propellant model from the .eng data and vehicle geometry.
@@ -218,9 +218,9 @@ def build_propellant_model(
         Total vehicle length [m] — motor is assumed flush with the aft end.
     nozzle_area
         Nozzle exit area [m²] — for pressure thrust correction.
-    casing_thickness
-        Motor casing wall thickness [m].  If None, propellant fills the full
-        motor diameter.
+    propellant_outer_diameter
+        Propellant grain outer diameter [m].  If None, propellant fills the
+        full motor diameter (i.e. no casing, liner, or insulator).
     propellant_inner_diameter
         Propellant bore diameter [m].  If None, propellant is a solid cylinder.
 
@@ -252,8 +252,8 @@ def build_propellant_model(
     nozzle_position = vehicle_length
 
     # Propellant annular geometry
-    if casing_thickness is not None:
-        prop_r_outer = r_motor - casing_thickness
+    if propellant_outer_diameter is not None:
+        prop_r_outer = propellant_outer_diameter / 2.0
     else:
         prop_r_outer = r_motor
 

@@ -200,16 +200,16 @@ Two optional fields in the `mass` section refine the propellant inertia model:
 
 | Field | Default | Effect |
 |-------|---------|--------|
+| `propellant_outer_diameter` | motor diameter | Propellant grain outer diameter [m]. Accounts for casing, liner, and insulator thickness. |
 | `propellant_inner_diameter` | 0 (solid cylinder) | Propellant bore diameter [m]. Defines the inner radius of the propellant annulus. |
-| `casing_thickness` | 0 (no casing) | Motor casing wall thickness [m]. Reduces the propellant outer radius by this amount. |
 
-A warning is emitted when either field is omitted, since the default assumptions (solid cylinder, no casing) underestimate propellant roll inertia for hollow-grain motors.
+A warning is emitted when either field is omitted, since the default assumptions (solid cylinder, full motor diameter) underestimate propellant roll inertia for hollow-grain motors.
 
 #### Motor inertia model
 
 Propellant is modelled as an annular cylinder with outer radius `r_o` and initial inner radius `r_i`:
 
-- `r_o = motor_diameter / 2 − casing_thickness`
+- `r_o = propellant_outer_diameter / 2`  (defaults to `motor_diameter / 2` if omitted)
 - `r_i = propellant_inner_diameter / 2`
 
 Initial propellant inertias (used to derive dry vehicle inertias from the user-supplied wet values):

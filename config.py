@@ -531,23 +531,23 @@ def load_vehicle(path: Path | str) -> tuple[Vehicle, PropellantModel]:
     motor_data = load_motor(motor_path)
 
     prop_inner_raw = mass.get("propellant_inner_diameter")
-    casing_raw = mass.get("casing_thickness")
+    prop_outer_raw = mass.get("propellant_outer_diameter")
     if prop_inner_raw is None:
         warnings.warn(
             "No propellant_inner_diameter specified; assuming solid cylinder. "
             "Propellant roll inertia will be underestimated for hollow grains."
         )
-    if casing_raw is None:
+    if prop_outer_raw is None:
         warnings.warn(
-            "No casing_thickness specified; assuming propellant fills the full "
-            "motor diameter."
+            "No propellant_outer_diameter specified; assuming propellant fills "
+            "the full motor diameter (no casing, liner, or insulator)."
         )
 
     propellant = build_propellant_model(
         motor_data,
         vehicle_length=geometry.length,
         nozzle_area=geometry.nozzle_area,
-        casing_thickness=float(casing_raw) if casing_raw is not None else None,
+        propellant_outer_diameter=float(prop_outer_raw) if prop_outer_raw is not None else None,
         propellant_inner_diameter=float(prop_inner_raw) if prop_inner_raw is not None else None,
     )
 

@@ -110,7 +110,7 @@ _VEHICLE_YAML = """
       wet_inertia_lateral: 5.2
       wet_inertia_roll: 0.012
       propellant_inner_diameter: 0.030
-      casing_thickness: 0.002
+      propellant_outer_diameter: 0.050
     recovery:
       drogue:
         cd: 2.0

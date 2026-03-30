@@ -135,7 +135,7 @@ _VEHICLE_YAML = (
 )
 # Derived values for hand-checking (m_prop=5.0, motor 98mm×732mm from _SIMPLE_ENG):
 #   motor_cg_loaded = 2.0 - 0.732/2 = 1.634 m
-#   prop_r_outer = 0.098/2 = 0.049 m  (no casing_thickness)
+#   prop_r_outer = 0.098/2 = 0.049 m  (no propellant_outer_diameter override)
 #   prop_r_inner_0 = 0.0 m  (no propellant_inner_diameter → solid cylinder)
 #   I_roll_prop_0 = 0.5 * 5.0 * 0.049² = 0.006003 kg·m²
 #   I_lat_prop_0 = 5.0 * (3*0.049² + 0.732²) / 12 = 0.22626 kg·m²
