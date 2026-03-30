@@ -315,7 +315,8 @@ class TrajectoryResult:
     state_ascent: np.ndarray      # (N, 13) 6DoF state history
     # Time history (descent, for altitude plot / replay)
     t_descent: np.ndarray | None = None
-    state_descent: np.ndarray | None = None   # (M, 6) NED pos+vel
+    state_descent: np.ndarray | None = None   # (M, 3) NED position
+    sm_descent: np.ndarray | None = None      # (M,) stability margin [cal]
     n_descent: int = 0
 
 
@@ -882,10 +883,12 @@ def integrate_sixdof(
     aoa_max_rad: float, sm_aoa_threshold_rad: float,
     # Tolerances
     rtol: float, atol: float,
+    # Termination
+    terminate_at_apogee: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, int,
            float, float, float, float, float,
            bool, int]:
-    """Integrate 6DoF free-flight from rail exit to apogee or violation.
+    """Integrate 6DoF free-flight from rail exit to apogee (or ground impact).
 
     Returns
     -------
@@ -1121,9 +1124,15 @@ def integrate_sixdof(
                         violation_code = 2
                         break
 
-            # Apogee detection: rD goes from decreasing to increasing
-            if y[2] > prev_rD and n > 2:
-                break
+            # Termination detection
+            if terminate_at_apogee:
+                # Apogee: rD goes from decreasing to increasing
+                if y[2] > prev_rD and n > 2:
+                    break
+            else:
+                # Continue to ground impact (rD >= 0)
+                if y[2] >= 0.0 and n > 2:
+                    break
 
         # Adjust step size
         factor = optimal_step_factor(err)
@@ -1139,14 +1148,27 @@ def integrate_sixdof(
 # ---------------------------------------------------------------------------
 
 @nb.njit(cache=True, fastmath=True)
+def _parachute_cda(
+    h: float,
+    drogue_cda: float, main_cda: float, main_deploy_alt: float,
+    scenario: int,
+) -> float:
+    """Return parachute CdA for the current altitude and scenario."""
+    if scenario == SCENARIO_NOMINAL:
+        if h <= main_deploy_alt:
+            return drogue_cda + main_cda
+        return drogue_cda
+    elif scenario == SCENARIO_DROGUE_ONLY:
+        return drogue_cda
+    else:  # SCENARIO_PREMATURE_MAIN
+        return drogue_cda + main_cda
+
+
+@nb.njit(cache=True, fastmath=True)
 def _descent_deriv(
     t: float, state: np.ndarray, dy: np.ndarray,
     # Wind
     wind_alt: np.ndarray, wind_east: np.ndarray, wind_north: np.ndarray,
-    # Aero (for ballistic scenario)
-    mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
-    ca_tbl: np.ndarray,
-    A_ref: float, ref_length: float,
     # Mass
     m: float,
     # Recovery
@@ -1154,56 +1176,28 @@ def _descent_deriv(
     # Scenario
     scenario: int,
 ) -> None:
-    """6-component derivative for descent: [rN, rE, rD, vN, vE, vD].
+    """3-component derivative for parachute descent: [rN, rE, rD].
 
-    Writes into *dy* (pre-allocated by caller).
-    ``scenario`` encoding: 0=nominal, 1=ballistic, 2=drogue_only,
-    3=premature_main.
+    The vehicle drifts horizontally at the local wind speed and descends
+    vertically at the quasi-steady terminal velocity under parachute.
     """
-    rD = state[2]
-    vN = state[3]; vE = state[4]; vD = state[5]
-    h = -rD
+    h = -state[2]
     if h < 0.0:
         h = 0.0
 
-    _, _, rho, a_sound, mu = isa(h)
     vN_wind, vE_wind = interpolate_wind(wind_alt, wind_east, wind_north, h)
 
-    vN_rel = vN - vN_wind
-    vE_rel = vE - vE_wind
-    vD_rel = vD
-    V_rel = (vN_rel * vN_rel + vE_rel * vE_rel + vD_rel * vD_rel) ** 0.5
+    cda = _parachute_cda(h, drogue_cda, main_cda, main_deploy_alt, scenario)
 
-    # CdA for this scenario
-    if scenario == SCENARIO_NOMINAL:
-        if h <= main_deploy_alt:
-            cda = drogue_cda + main_cda
-        else:
-            cda = drogue_cda
-    elif scenario == SCENARIO_BALLISTIC:
-        if V_rel > _EPS_V:
-            M = V_rel / a_sound
-            Re = rho * V_rel * ref_length / mu
-            C_A = ca_at(mach_g, re_g, alpha_g, ca_tbl, M, Re, 0.0)
-            cda = A_ref * C_A
-        else:
-            cda = A_ref * ca_at(mach_g, re_g, alpha_g, ca_tbl, 0.0, 0.0, 0.0)
-    elif scenario == SCENARIO_DROGUE_ONLY:
-        cda = drogue_cda
-    else:  # SCENARIO_PREMATURE_MAIN
-        cda = drogue_cda + main_cda
-
-    if V_rel > _EPS_V:
-        F_over_mV = 0.5 * rho * V_rel * cda / m  # |F|/(m·V) = 0.5·ρ·V·CdA/m
-        dy[3] = -F_over_mV * vN_rel
-        dy[4] = -F_over_mV * vE_rel
-        dy[5] = -F_over_mV * vD_rel + _G0
+    _, _, rho, _, _ = isa(h)
+    if cda > 1.0e-12 and rho > 0.0:
+        vD = (2.0 * m * _G0 / (rho * cda)) ** 0.5
     else:
-        dy[3] = 0.0
-        dy[4] = 0.0
-        dy[5] = _G0
+        vD = _G0  # free-fall fallback (1 step)
 
-    dy[0] = vN; dy[1] = vE; dy[2] = vD
+    dy[0] = vN_wind
+    dy[1] = vE_wind
+    dy[2] = vD
 
 
 @nb.njit(cache=True, fastmath=True)
@@ -1211,10 +1205,6 @@ def integrate_descent(
     t0: float, state0: np.ndarray,
     # Wind
     wind_alt: np.ndarray, wind_east: np.ndarray, wind_north: np.ndarray,
-    # Aero (for ballistic)
-    mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
-    ca_tbl: np.ndarray,
-    A_ref: float, ref_length: float,
     # Mass
     m: float,
     # Recovery
@@ -1223,21 +1213,27 @@ def integrate_descent(
     scenario: int,
     # Tolerances
     rtol: float, atol: float,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """Integrate descent until ground impact (rD >= 0).
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Integrate parachute descent until ground impact (rD >= 0).
 
-    Returns (t_out, y_out, n_steps).
+    The vehicle is a point mass drifting at the local wind speed and
+    descending at the quasi-steady terminal velocity under parachute.
+    State is position only: [rN, rE, rD].
+
+    Returns (t_out, y_out, sm_out, n_steps).  SM is zero throughout
+    (no aerodynamic stability under parachute).
     """
     MAX_STEPS = 20000
-    NS = 6
+    NS = 3
     t_out = np.empty(MAX_STEPS)
     y_out = np.empty((MAX_STEPS, NS))
+    sm_out = np.zeros(MAX_STEPS, dtype=np.float64)
 
     y = state0.copy()
     t = t0
-    h_step = 0.01
-    h_min = 1.0e-4
-    h_max = 1.0
+    h_step = 0.5
+    h_min = 1.0e-3
+    h_max = 5.0
 
     n = 0
     t_out[0] = t
@@ -1253,7 +1249,6 @@ def integrate_descent(
 
     _descent_deriv(
         t, y, k1, wind_alt, wind_east, wind_north,
-        mach_g, re_g, alpha_g, ca_tbl, A_ref, ref_length,
         m, drogue_cda, main_cda, main_deploy_alt, scenario,
     )
 
@@ -1266,7 +1261,6 @@ def integrate_descent(
         _descent_deriv(
             t + DP_C[1] * h_step, ys, k2,
             wind_alt, wind_east, wind_north,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, ref_length,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
         )
 
@@ -1276,7 +1270,6 @@ def integrate_descent(
         _descent_deriv(
             t + DP_C[2] * h_step, ys, k3,
             wind_alt, wind_east, wind_north,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, ref_length,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
         )
 
@@ -1288,7 +1281,6 @@ def integrate_descent(
         _descent_deriv(
             t + DP_C[3] * h_step, ys, k4,
             wind_alt, wind_east, wind_north,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, ref_length,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
         )
 
@@ -1301,7 +1293,6 @@ def integrate_descent(
         _descent_deriv(
             t + DP_C[4] * h_step, ys, k5,
             wind_alt, wind_east, wind_north,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, ref_length,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
         )
 
@@ -1315,7 +1306,6 @@ def integrate_descent(
         _descent_deriv(
             t + DP_C[5] * h_step, ys, k6,
             wind_alt, wind_east, wind_north,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, ref_length,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
         )
 
@@ -1330,7 +1320,6 @@ def integrate_descent(
         _descent_deriv(
             t + h_step, y_new, k7,
             wind_alt, wind_east, wind_north,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, ref_length,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
         )
 
@@ -1361,7 +1350,7 @@ def integrate_descent(
         factor = optimal_step_factor(err)
         h_step = clamp_step(h_step * factor, h_min, h_max)
 
-    return t_out, y_out, n
+    return t_out, y_out, sm_out, n
 
 
 # ---------------------------------------------------------------------------
@@ -1502,7 +1491,11 @@ def run_trajectory(
     poly_n: np.ndarray | None = None,
     buffered_ceiling: float = float('inf'),
 ) -> TrajectoryResult:
-    """Run a complete trajectory: rail → 6DoF ascent → 3DoF descent.
+    """Run a complete trajectory: rail → 6DoF ascent → descent.
+
+    For ballistic scenarios the 6DoF integrator continues past apogee to
+    ground impact.  For parachute scenarios, the 6DoF ends at apogee and
+    a simplified 3DoF descent (wind-drift + terminal velocity) follows.
 
     Parameters
     ----------
@@ -1546,6 +1539,7 @@ def run_trajectory(
     ], dtype=np.float64)
 
     # ---- Phase 2: 6DoF free flight ----
+    is_ballistic = scenario == SCENARIO_BALLISTIC
     (t_hist, state_hist, n_steps,
      max_mach, max_aoa_deg, min_sm_sub, min_sm_sup, peak_alt,
      stab_ok, viol_code) = integrate_sixdof(
@@ -1566,26 +1560,85 @@ def run_trajectory(
         p.sm_subsonic_min, p.sm_supersonic_min,
         p.aoa_max_rad, p.sm_aoa_threshold_rad,
         p.rtol, p.atol,
+        terminate_at_apogee=not is_ballistic,
     )
 
-    t_asc = t_hist[:n_steps].copy()
-    s_asc = state_hist[:n_steps].copy()
+    t_full = t_hist[:n_steps].copy()
+    s_full = state_hist[:n_steps].copy()
 
-    apogee_idx = n_steps - 1
-    apogee_state = s_asc[apogee_idx]
-    apogee_t = t_asc[apogee_idx]
+    # ---- Identify apogee ----
+    apogee_alt = peak_alt
+    if is_ballistic:
+        # Find apogee index (highest altitude in the 6DoF history)
+        altitudes = -s_full[:, 2]
+        apogee_idx = int(np.argmax(altitudes))
+    else:
+        # Last point is apogee (integrator stopped there)
+        apogee_idx = n_steps - 1
+
+    apogee_state = s_full[apogee_idx]
+    apogee_t = t_full[apogee_idx]
     apogee_pos = apogee_state[:3].copy()
-    apogee_alt = -apogee_state[2]
 
-    # ---- Geofence checks (between ascent and descent) ----
+    # Split into ascent and (for ballistic) 6DoF descent histories
+    t_asc = t_full[:apogee_idx + 1]
+    s_asc = s_full[:apogee_idx + 1]
+
+    # ---- Geofence checks ----
     _below_ceiling = apogee_alt <= buffered_ceiling
-    _in_buffer = True  # assume compliant until proven otherwise
+    _in_buffer = True
 
     if poly_e is not None and poly_n is not None:
         from geography import all_points_in_polygon
         _in_buffer = all_points_in_polygon(
-            s_asc[:, 0], s_asc[:, 1], poly_e, poly_n,
+            s_full[:, 0], s_full[:, 1], poly_e, poly_n,
         )
+
+    if is_ballistic:
+        # ---- Ballistic: 6DoF ran to ground impact — no 3DoF descent ----
+        landing_pos = s_full[n_steps - 1, :3].copy()
+        landing_t = t_full[n_steps - 1]
+
+        if not stab_ok:
+            if viol_code == 1:
+                viol_str = "AoA exceeded maximum"
+            elif viol_code == 2:
+                viol_str = "Static margin below minimum"
+            else:
+                viol_str = "Unknown stability violation"
+        elif not _in_buffer:
+            viol_str = "Trajectory exited buffered danger area"
+        elif not _below_ceiling:
+            viol_str = "Apogee above buffered ceiling"
+        else:
+            viol_str = ""
+
+        _compliant = stab_ok and _in_buffer and _below_ceiling
+
+        return TrajectoryResult(
+            apogee_altitude=apogee_alt,
+            apogee_time=apogee_t,
+            apogee_position=apogee_pos,
+            landing_position=landing_pos,
+            landing_time=landing_t,
+            flight_time=landing_t - t_exit,
+            max_mach=max_mach,
+            max_aoa_deg=max_aoa_deg,
+            min_sm_subsonic=min_sm_sub if min_sm_sub < 1.0e5 else float('nan'),
+            min_sm_supersonic=min_sm_sup if min_sm_sup < 1.0e5 else float('nan'),
+            rail_exit_velocity=V_exit,
+            peak_altitude_ft=peak_alt * 3.28084,
+            in_buffer=_in_buffer,
+            below_ceiling=_below_ceiling,
+            compliant=_compliant,
+            stability_compliant=stab_ok,
+            violation_reason=viol_str,
+            t_ascent=t_asc,
+            state_ascent=s_asc,
+            # No 3DoF descent — 6DoF ran to ground
+        )
+
+    # ---- Parachute scenarios: 3DoF descent from apogee ----
 
     if not _below_ceiling or not _in_buffer:
         # Skip descent — sample is already non-compliant.
@@ -1624,19 +1677,8 @@ def run_trajectory(
             # No descent (early termination)
         )
 
-    # ---- Phase 3 initial conditions ----
-    C_nb = quat_to_dcm_nb(
-        apogee_state[3], apogee_state[4],
-        apogee_state[5], apogee_state[6],
-    )
-    vb = apogee_state[7:10]
-    vN = C_nb[0, 0] * vb[0] + C_nb[0, 1] * vb[1] + C_nb[0, 2] * vb[2]
-    vE = C_nb[1, 0] * vb[0] + C_nb[1, 1] * vb[1] + C_nb[1, 2] * vb[2]
-    vD = C_nb[2, 0] * vb[0] + C_nb[2, 1] * vb[1] + C_nb[2, 2] * vb[2]
-
     descent_state0 = np.array([
         apogee_pos[0], apogee_pos[1], apogee_pos[2],
-        vN, vE, vD,
     ], dtype=np.float64)
 
     drogue_cda = p.drogue_cda if p.has_drogue else 0.0
@@ -1647,12 +1689,10 @@ def run_trajectory(
     if scenario == SCENARIO_NOMINAL and main_deploy_alt < 0.0:
         effective_scenario = SCENARIO_PREMATURE_MAIN
 
-    # ---- Phase 3: Descent ----
-    t_desc, y_desc, n_desc = integrate_descent(
+    # ---- Phase 3: 3DoF parachute descent ----
+    t_desc, y_desc, sm_desc, n_desc = integrate_descent(
         apogee_t, descent_state0,
         p.wind_alt, p.wind_east, p.wind_north,
-        p.mach_g, p.re_g, p.alpha_g, p.ca_tbl,
-        p.A_ref, p.length,
         p.m_dry, drogue_cda, main_cda, main_deploy_alt,
         effective_scenario,
         p.rtol, p.atol,
@@ -1706,5 +1746,6 @@ def run_trajectory(
         state_ascent=s_asc,
         t_descent=t_desc[:n_desc].copy(),
         state_descent=y_desc[:n_desc].copy(),
+        sm_descent=sm_desc[:n_desc].copy(),
         n_descent=n_desc,
     )

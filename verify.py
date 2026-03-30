@@ -43,6 +43,7 @@ from dynamics import (
     simulate_ascent_2dof,
     integrate_descent,
     SCENARIO_NOMINAL,
+    SCENARIO_BALLISTIC,
     mass_at,
     cg_at,
     thrust_corrected_at,
@@ -55,6 +56,15 @@ from montecarlo import build_sim_params
 # ---------------------------------------------------------------------------
 _DEG2RAD: float = math.pi / 180.0
 _G0: float = 9.80665
+
+
+def _nominal_scenario(vehicle: "Vehicle") -> int:
+    """Return the nominal descent scenario based on parachute configuration."""
+    rec = vehicle.recovery
+    if rec.drogue is None and rec.main is None:
+        return SCENARIO_BALLISTIC
+    return SCENARIO_NOMINAL
+
 
 # Absolute floors for fractional tolerance comparison (avoid false failures
 # near zero).  Physically motivated minimum-significance thresholds.
@@ -339,42 +349,17 @@ def _extract_trajectory_quantities_6dof(
 
         sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
-    # --- Descent (thrust is zero, mass is dry) ---
+    # --- Descent (thrust is zero, mass is dry, under parachute) ---
     if result.t_descent is not None and result.n_descent > 0:
         n_desc = result.n_descent
         t_desc = result.t_descent[:n_desc]
         state_desc = result.state_descent[:n_desc]
         alt_desc = -state_desc[:, 2]
 
-        mach_desc = np.empty(n_desc, dtype=np.float64)
+        mach_desc = np.zeros(n_desc, dtype=np.float64)
         thrust_desc = np.zeros(n_desc, dtype=np.float64)
         mass_desc = np.full(n_desc, m_dry, dtype=np.float64)
-        sm_desc = np.empty(n_desc, dtype=np.float64)
-
-        for i in range(n_desc):
-            h = max(float(alt_desc[i]), 0.0)
-            _, _, rho, a, mu = isa(h)
-
-            vN = float(state_desc[i, 3])
-            vE = float(state_desc[i, 4])
-            vD = float(state_desc[i, 5])
-            V = math.sqrt(vN * vN + vE * vE + vD * vD)
-
-            mach_desc[i] = V / a if a > 0.0 else 0.0
-
-            cg = cg_dry
-            M = mach_desc[i]
-            Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
-
-            _, _, _, _, _, cp_whole = aero_forces_moments(
-                am.mach_grid, am.re_grid, am.alpha_grid,
-                am.ca_table, am.cn_table, am.cp_table,
-                am.cn_comp, am.cp_comp, am.has_components,
-                M, Re, rho, V, geom.reference_area,
-                vN, 0.0, vD, 0.0, 0.0, cg,
-            )
-
-            sm_desc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+        sm_desc = result.sm_descent[:n_desc]
 
         # Stitch (skip first descent point to avoid overlap at apogee)
         t_full = np.concatenate([t_asc, t_desc[1:]])
@@ -427,6 +412,7 @@ def _extract_trajectory_quantities_2dof(
     vz_asc: np.ndarray,
     t_desc: np.ndarray,
     state_desc: np.ndarray,
+    sm_desc: np.ndarray,
     n_desc: int,
     propellant: PropellantModel,
     aero_model: AeroModel,
@@ -490,38 +476,15 @@ def _extract_trajectory_quantities_2dof(
         )
         sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
-    # --- Descent quantities (thrust is zero, mass is dry) ---
+    # --- Descent quantities (thrust is zero, mass is dry, under parachute) ---
     t_d = t_desc[:n_desc]
     state_d = state_desc[:n_desc]
     alt_desc = -state_d[:, 2]
 
-    mach_desc = np.empty(n_desc, dtype=np.float64)
+    mach_desc = np.zeros(n_desc, dtype=np.float64)
     thrust_desc = np.zeros(n_desc, dtype=np.float64)
     mass_desc = np.full(n_desc, m_dry, dtype=np.float64)
-    sm_desc = np.empty(n_desc, dtype=np.float64)
-
-    for i in range(n_desc):
-        h = max(float(alt_desc[i]), 0.0)
-        _, _, rho, a, mu = isa(h)
-
-        vN = float(state_d[i, 3])
-        vE = float(state_d[i, 4])
-        vD = float(state_d[i, 5])
-        V = math.sqrt(vN * vN + vE * vE + vD * vD)
-        mach_desc[i] = V / a if a > 0.0 else 0.0
-
-        cg = cg_dry
-        M = mach_desc[i]
-        Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
-
-        _, _, _, _, _, cp_whole = aero_forces_moments(
-            am.mach_grid, am.re_grid, am.alpha_grid,
-            am.ca_table, am.cn_table, am.cp_table,
-            am.cn_comp, am.cp_comp, am.has_components,
-            M, Re, rho, V, geom.reference_area,
-            vN, 0.0, vD, 0.0, 0.0, cg,
-        )
-        sm_desc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+    sm_desc = sm_desc[:n_desc]
 
     # Stitch (skip first descent point to avoid overlap at apogee)
     t_full = np.concatenate([t_asc, t_d[1:]])
@@ -787,7 +750,8 @@ def run_verification(
             impulse_factor=1.0,
             fin_cant_deg=0.0,
         )
-        traj = run_trajectory(params, SCENARIO_NOMINAL, None, None, float("inf"))
+        scenario = _nominal_scenario(vehicle)
+        traj = run_trajectory(params, scenario, None, None, float("inf"))
 
         sim_data = _extract_trajectory_quantities_6dof(
             traj, propellant, aero_model, vehicle,
@@ -843,21 +807,19 @@ def run_verification(
         zero_wind_e = np.zeros(2, dtype=np.float64)
         zero_wind_n = np.zeros(2, dtype=np.float64)
 
-        t_desc, y_desc, n_desc = integrate_descent(
+        scenario = _nominal_scenario(vehicle)
+        t_desc, y_desc, sm_desc_arr, n_desc = integrate_descent(
             t_apogee, descent_state0,
             zero_wind_alt, zero_wind_e, zero_wind_n,
-            aero_model.mach_grid, aero_model.re_grid,
-            aero_model.alpha_grid, aero_model.ca_table,
-            geom.reference_area, geom.length,
             m_dry,
             drogue_cda, main_cda, main_deploy_alt,
-            SCENARIO_NOMINAL,
+            scenario,
             1.0e-6, 1.0e-6,
         )
 
         sim_data = _extract_trajectory_quantities_2dof(
             t_asc, z_asc, vx_asc, vz_asc,
-            t_desc, y_desc, n_desc,
+            t_desc, y_desc, sm_desc_arr, n_desc,
             propellant, aero_model, vehicle,
             rail_t, rail_V, rail_alt,
         )

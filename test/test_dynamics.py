@@ -99,14 +99,6 @@ def _nonzero_rail_aero(ca_val: float):
 # Descent helpers
 # ---------------------------------------------------------------------------
 
-def _dummy_descent_aero():
-    """Minimal aero tables (C_A = 1.0) for descent tests."""
-    mach_g = np.array([0.0, 10.0], dtype=np.float64)
-    re_g = np.array([0.0, 1e8], dtype=np.float64)
-    alpha_g = np.array([0.0, 180.0], dtype=np.float64)
-    ca_tbl = np.ones((2, 2, 2), dtype=np.float64)
-    return mach_g, re_g, alpha_g, ca_tbl
-
 
 # ===========================================================================
 # FRAMES — quaternion / DCM / rail direction
@@ -662,12 +654,12 @@ def test_sixdof_deriv_gravity_direction():
 # Test: terminal velocity under constant drag
 # ---------------------------------------------------------------------------
 
-def test_terminal_velocity_drogue():
-    """Vehicle dropped from high altitude converges to terminal velocity.
+def test_descent_time_matches_terminal_velocity():
+    """Descent time should match h / V_terminal for constant-density drop.
 
-    V_terminal = sqrt(2 * m * g / (rho * CdA))
-
-    Use sea-level density for a short drop (altitude effect is small).
+    The simplified descent model uses quasi-steady terminal velocity at each
+    altitude.  For a short drop at low altitude (near-constant rho), the
+    total descent time should be h0 / V_terminal.
     """
     m = 10.0         # kg
     g = 9.80665      # m/s²
@@ -676,71 +668,22 @@ def test_terminal_velocity_drogue():
     rho_sl = density(0.0)
 
     V_terminal = math.sqrt(2.0 * m * g / (rho_sl * cda))
+    expected_time = h0 / V_terminal
 
-    # Start from rest at h0
-    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, 0.0], dtype=np.float64)
+    state0 = np.array([0.0, 0.0, -h0], dtype=np.float64)
     w_alt, w_east, w_north = _zero_wind()
-    mach_g, re_g, alpha_g, ca_tbl = _dummy_descent_aero()
 
-    t_out, y_out, n = integrate_descent(
+    t_out, y_out, _, n = integrate_descent(
         0.0, state0,
         w_alt, w_east, w_north,
-        mach_g, re_g, alpha_g, ca_tbl,
-        A_ref=0.01, ref_length=1.0,
         m=m,
         drogue_cda=cda, main_cda=0.0, main_deploy_alt=0.0,
         scenario=SCENARIO_DROGUE_ONLY,
         rtol=1e-8, atol=1e-8,
     )
 
-    # Final downward velocity (NED: vD > 0 means descending)
-    vD_final = y_out[n - 1, 5]
-
-    # Should be close to terminal velocity (within 2% — density varies slightly
-    # over the 500 m drop)
-    assert vD_final == pytest.approx(V_terminal, rel=0.02)
-
-
-# ---------------------------------------------------------------------------
-# Test: free fall (no drag)
-# ---------------------------------------------------------------------------
-
-def test_free_fall_no_drag():
-    """With zero CdA, vehicle should free-fall: vD = g*t, rD = rD0 + 0.5*g*t².
-
-    We use ballistic scenario with C_A = 0 everywhere.
-    """
-    m = 10.0
-    g = 9.80665
-    h0 = 200.0
-
-    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, 0.0], dtype=np.float64)
-    w_alt, w_east, w_north = _zero_wind()
-
-    # Zero C_A aero tables
-    mach_g = np.array([0.0, 10.0], dtype=np.float64)
-    re_g = np.array([0.0, 1e8], dtype=np.float64)
-    alpha_g = np.array([0.0, 180.0], dtype=np.float64)
-    ca_tbl = np.zeros((2, 2, 2), dtype=np.float64)
-
-    t_out, y_out, n = integrate_descent(
-        0.0, state0,
-        w_alt, w_east, w_north,
-        mach_g, re_g, alpha_g, ca_tbl,
-        A_ref=0.01, ref_length=1.0,
-        m=m,
-        drogue_cda=0.0, main_cda=0.0, main_deploy_alt=0.0,
-        scenario=SCENARIO_BALLISTIC,
-        rtol=1e-9, atol=1e-9,
-    )
-
-    # Check a few interior points
-    for i in range(1, min(n, 10)):
-        t = t_out[i]
-        rD_expected = -h0 + 0.5 * g * t * t
-        vD_expected = g * t
-        assert y_out[i, 2] == pytest.approx(rD_expected, rel=1e-4)
-        assert y_out[i, 5] == pytest.approx(vD_expected, rel=1e-4)
+    # Within 2% — density varies slightly over the 500 m drop
+    assert t_out[n - 1] == pytest.approx(expected_time, rel=0.02)
 
 
 # ---------------------------------------------------------------------------
@@ -753,15 +696,12 @@ def test_descent_lands_at_ground():
     h0 = 300.0
     cda = 0.3
 
-    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, 0.0], dtype=np.float64)
+    state0 = np.array([0.0, 0.0, -h0], dtype=np.float64)
     w_alt, w_east, w_north = _zero_wind()
-    mach_g, re_g, alpha_g, ca_tbl = _dummy_descent_aero()
 
-    t_out, y_out, n = integrate_descent(
+    t_out, y_out, _, n = integrate_descent(
         0.0, state0,
         w_alt, w_east, w_north,
-        mach_g, re_g, alpha_g, ca_tbl,
-        A_ref=0.01, ref_length=1.0,
         m=m,
         drogue_cda=cda, main_cda=0.0, main_deploy_alt=0.0,
         scenario=SCENARIO_DROGUE_ONLY,
@@ -776,40 +716,34 @@ def test_descent_lands_at_ground():
 # ---------------------------------------------------------------------------
 
 def test_descent_wind_displacement():
-    """Constant east wind should displace the landing point eastward."""
+    """Constant east wind should displace the landing point eastward.
+
+    With the simplified descent model the vehicle drifts at exactly the
+    wind speed, so the east displacement should be wind_speed * descent_time.
+    """
     m = 10.0
     h0 = 300.0
     cda = 0.5
     wind_speed = 10.0  # m/s eastward
 
-    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, 0.0], dtype=np.float64)
+    state0 = np.array([0.0, 0.0, -h0], dtype=np.float64)
 
     # Constant east wind
     w_alt = np.array([0.0, 50000.0], dtype=np.float64)
     w_east = np.array([wind_speed, wind_speed], dtype=np.float64)
     w_north = np.zeros(2, dtype=np.float64)
-    mach_g, re_g, alpha_g, ca_tbl = _dummy_descent_aero()
 
     # With wind
-    _, y_wind, n_wind = integrate_descent(
+    t_out, y_wind, _, n_wind = integrate_descent(
         0.0, state0.copy(),
         w_alt, w_east, w_north,
-        mach_g, re_g, alpha_g, ca_tbl,
-        0.01, 1.0, m, cda, 0.0, 0.0,
+        m, cda, 0.0, 0.0,
         SCENARIO_DROGUE_ONLY, 1e-6, 1e-6,
     )
 
-    # Without wind
-    w_east_zero = np.zeros(2, dtype=np.float64)
-    _, y_nowind, n_nowind = integrate_descent(
-        0.0, state0.copy(),
-        w_alt, w_east_zero, w_north,
-        mach_g, re_g, alpha_g, ca_tbl,
-        0.01, 1.0, m, cda, 0.0, 0.0,
-        SCENARIO_DROGUE_ONLY, 1e-6, 1e-6,
-    )
+    descent_time = t_out[n_wind - 1]
+    east_landing = y_wind[n_wind - 1, 1]
+    expected_east = wind_speed * descent_time
 
-    # With east wind, landing East position (index 1) should be larger
-    east_with = y_wind[n_wind - 1, 1]
-    east_without = y_nowind[n_nowind - 1, 1]
-    assert east_with > east_without + 1.0  # at least 1 m displacement
+    # Vehicle drifts at exactly wind speed — should match closely
+    assert east_landing == pytest.approx(expected_east, rel=0.02)

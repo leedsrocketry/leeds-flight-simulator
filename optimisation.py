@@ -296,35 +296,13 @@ def select_inclination(
         apogee_positions[inc] = (apN, 0.0, apD)
         apogee_times[inc] = t_ap
 
-        # Ballistic descent from apogee — run integrate_descent to get
-        # actual landing point (accounts for gravity during fall).
-        descent_state0 = np.array([
-            apN, 0.0, apD, 0.0, 0.0, 0.0,
-        ], dtype=np.float64)
-        # No wind for Phase 1 — zero arrays
-        zero_wind_alt = np.array([0.0, 50000.0], dtype=np.float64)
-        zero_wind_e = np.zeros(2, dtype=np.float64)
-        zero_wind_n = np.zeros(2, dtype=np.float64)
-
-        t_desc, y_desc, n_desc = integrate_descent(
-            t_ap, descent_state0,
-            zero_wind_alt, zero_wind_e, zero_wind_n,
-            aero_model.mach_grid, aero_model.re_grid,
-            aero_model.alpha_grid, aero_model.ca_table,
-            geom.reference_area, geom.length,
-            m_dry,
-            0.0, 0.0, -1.0,  # no parachutes, sentinel deploy alt
-            SCENARIO_BALLISTIC,
-            1.0e-6, 1.0e-6,
-        )
-
-        land_N = float(y_desc[n_desc - 1, 0])
-        land_E = float(y_desc[n_desc - 1, 1])
-        ballistic_landings[inc] = (land_N, land_E)
+        # Ballistic descent from apogee with no wind — landing point is
+        # directly below the apogee (2DoF ascent is in the N–D plane).
+        ballistic_landings[inc] = (apN, 0.0)
 
         # Check exclusion radius and containment
-        dist = math.hypot(land_N, land_E)
-        inside = _point_in_polygon(land_E, land_N, poly_e, poly_n)
+        dist = math.hypot(apN, 0.0)
+        inside = _point_in_polygon(0.0, apN, poly_e, poly_n)
 
         if dist >= exclusion_r and inside:
             valid.append(inc)
@@ -419,23 +397,18 @@ def narrow_azimuth_bounds(
 def _run_descent_single(
     apogee_N: float, apogee_E: float, apogee_D: float, t_apogee: float,
     wind_alt: np.ndarray, wind_east: np.ndarray, wind_north: np.ndarray,
-    mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
-    ca_tbl: np.ndarray,
-    A_ref: float, ref_length: float,
     m_dry: float,
     drogue_cda: float, main_cda: float, main_deploy_alt: float,
     scenario: int,
 ) -> tuple[float, float]:
-    """Run a single descent from known apogee and return (landing_N, landing_E)."""
+    """Run a single parachute descent from apogee and return (landing_N, landing_E)."""
     state0 = np.array([
-        apogee_N, apogee_E, apogee_D, 0.0, 0.0, 0.0,
+        apogee_N, apogee_E, apogee_D,
     ], dtype=np.float64)
 
-    t_desc, y_desc, n_desc = integrate_descent(
+    t_desc, y_desc, _, n_desc = integrate_descent(
         t_apogee, state0,
         wind_alt, wind_east, wind_north,
-        mach_g, re_g, alpha_g, ca_tbl,
-        A_ref, ref_length,
         m_dry,
         drogue_cda, main_cda, main_deploy_alt,
         scenario,
@@ -452,14 +425,12 @@ def _descent_worker(args: tuple) -> tuple[float, float]:
 def _run_descent_batch(
     apogee_N: float, apogee_E: float, apogee_D: float, t_apogee: float,
     wind_ensemble: WindEnsemble,
-    aero_model: AeroModel,
     vehicle: Vehicle,
-    propellant: PropellantModel,
     scenario_int: int,
     n_sims: int,
     pool: mp.pool.Pool | None = None,
 ) -> np.ndarray:
-    """Run *n_sims* descent sims from a known apogee, varying wind profile.
+    """Run *n_sims* parachute descent sims from a known apogee, varying wind.
 
     Returns (n_sims, 2) array of [landing_N, landing_E].
     """
@@ -483,9 +454,6 @@ def _run_descent_batch(
             wind_ensemble.altitude_m,
             wind_ensemble.wind_east_ms[idx],
             wind_ensemble.wind_north_ms[idx],
-            aero_model.mach_grid, aero_model.re_grid,
-            aero_model.alpha_grid, aero_model.ca_table,
-            vehicle.geometry.reference_area, vehicle.geometry.length,
             m_dry,
             drogue_cda, main_cda, main_deploy_alt,
             scenario_int,
@@ -503,9 +471,7 @@ def _evaluate_azimuth(
     azimuth_deg: int,
     apogee_N0: float, apogee_E0: float, apogee_D: float, t_apogee: float,
     wind_ensemble: WindEnsemble,
-    aero_model: AeroModel,
     vehicle: Vehicle,
-    propellant: PropellantModel,
     poly_e: np.ndarray,
     poly_n: np.ndarray,
     scenario_int: int,
@@ -517,7 +483,7 @@ def _evaluate_azimuth(
 
     landings = _run_descent_batch(
         rot_N, rot_E, apogee_D, t_apogee,
-        wind_ensemble, aero_model, vehicle, propellant,
+        wind_ensemble, vehicle,
         scenario_int, n_sims, pool,
     )
 
@@ -565,7 +531,7 @@ def optimise_azimuth(
             for i, az in enumerate(feasible_azimuths):
                 p = _evaluate_azimuth(
                     az, apN0, apE0, apD0, t_apogee,
-                    wind_ensemble, aero_model, vehicle, propellant,
+                    wind_ensemble, vehicle,
                     poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
                 )
                 observations.append((az, p))
