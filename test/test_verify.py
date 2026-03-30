@@ -238,14 +238,13 @@ class TestPlotGeneration:
         )
 
     def test_figure_has_correct_axes(self) -> None:
-        """The 3×2 grid should have 6 axes, with 5 visible."""
+        """Without CD data, the figure should have 5 time-series axes."""
         comparisons = {
             qty: self._make_comparison(qty, True)
             for qty in _COMPARED_QUANTITIES
         }
         fig = _build_comparison_figure(comparisons)
 
-        assert len(fig.axes) == 6  # 3×2 grid
         visible = [ax for ax in fig.axes if ax.get_visible()]
         assert len(visible) == len(_COMPARED_QUANTITIES)
         plt.close(fig)

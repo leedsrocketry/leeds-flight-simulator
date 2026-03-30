@@ -659,47 +659,6 @@ def verify(config_path: Path, azimuth: float | None,
     display.update_status("Done.")
     display.stop()
 
-    # --- Print per-quantity summary table ---
-    from rich.table import Table
-    table = Table(title="Verification Summary", show_lines=False)
-    table.add_column("Quantity", style="bold")
-    table.add_column("Result", justify="centre")
-    table.add_column("Max |err|")
-    table.add_column("RMS err")
-    table.add_column("Mean bias")
-
-    import numpy as np
-    for qty_name, cmp in ver_result.comparisons.items():
-        err = cmp.sim_values - cmp.ref_values
-        max_abs = float(np.max(np.abs(err)))
-        rms = float(np.sqrt(np.mean(err ** 2)))
-        mean_bias = float(np.mean(err))
-
-        n_fail = int(np.sum(~cmp.within_tolerance))
-        n_total = len(cmp.within_tolerance)
-        if cmp.passed:
-            if n_fail == 0:
-                result_str = "[bold green]PASS[/bold green]"
-            else:
-                pct = 100.0 * n_fail / n_total
-                result_str = f"[bold green]PASS[/bold green] ({pct:.2f}%)"
-        else:
-            result_str = f"[bold red]FAIL[/bold red] ({n_fail} pts)"
-
-        table.add_row(
-            cmp.name.title(),
-            result_str,
-            f"{max_abs:.4g}",
-            f"{rms:.4g}",
-            f"{mean_bias:+.4g}",
-        )
-
-    console.print()
-    console.print(table)
-
-    overall = "[bold green]PASS[/bold green]" if ver_result.passed else "[bold red]FAIL[/bold red]"
-    console.print(f"\nOverall: {overall}")
-
     # --- Dump comparison data to CSV ---
     if dump_csv is not None:
         import csv
@@ -727,9 +686,10 @@ def verify(config_path: Path, azimuth: float | None,
         console.print(f"\nComparison data written to: {dump_path}")
 
     if ver_result.figure is not None:
-        fig_path = config_path.parent / "results" / "verification_plot.png"
-        fig_path.parent.mkdir(parents=True, exist_ok=True)
-        ver_result.figure.savefig(fig_path, dpi=150, bbox_inches="tight")
-        console.print(f"\nFigure saved to: {fig_path}")
-        if not no_popup:
+        if no_popup:
+            fig_path = config_path.parent / "results" / "verification_plot.png"
+            fig_path.parent.mkdir(parents=True, exist_ok=True)
+            ver_result.figure.savefig(fig_path, dpi=150, bbox_inches="tight")
+            console.print(f"\nFigure saved to: {fig_path}")
+        else:
             plt.show()

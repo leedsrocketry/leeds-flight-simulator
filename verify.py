@@ -25,12 +25,13 @@ from typing import Literal
 
 import numpy as np
 import matplotlib
+import matplotlib.axes
 import matplotlib.pyplot as plt
 import matplotlib.figure
 
 from config import SimulationConfig, Vehicle, VerificationConfig
 from motor import PropellantModel
-from aerodynamics import AeroModel, aero_forces_moments
+from aerodynamics import AeroModel, aero_forces_moments, ca_at
 from atmosphere import isa
 from wind import WindEnsemble
 from dynamics import (
@@ -69,6 +70,7 @@ _TOLERANCE_FLOORS: dict[str, float] = {
     "sm": 0.1,          # calibres
     "mass": 0.1,        # kg
     "thrust": 10.0,     # newtons
+    "cd": 0.01,         # dimensionless
 }
 
 # Column alias map: quantity → list of substrings to match (case-insensitive).
@@ -80,6 +82,7 @@ _COLUMN_ALIASES: dict[str, list[str]] = {
     "mass": ["mass", "weight"],
     "sm": ["stability margin", "stability", "sm"],
     "thrust": ["thrust", "force"],
+    "cd": ["cd", "drag coeff"],
 }
 
 # Plot labels for each quantity
@@ -112,10 +115,22 @@ class QuantityComparison:
 
 
 @dataclass
+class CdComparison:
+    """Drag coefficient comparison (CD vs Mach, not vs time)."""
+    ref_mach: np.ndarray
+    ref_cd: np.ndarray
+    sim_mach: np.ndarray
+    sim_cd: np.ndarray
+    tolerance: float
+    passed: bool
+
+
+@dataclass
 class VerificationResult:
     """Aggregate result of the trajectory comparison."""
     passed: bool
     comparisons: dict[str, QuantityComparison]
+    cd_comparison: CdComparison | None
     figure: matplotlib.figure.Figure | None
 
 
@@ -204,17 +219,17 @@ def _quantities_from_rail_hist(
     geometry: "VehicleGeometry",
     m_dry: float,
     cg_dry: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute comparison quantities from the actual simulate_rail() history.
 
     The time, velocity, and altitude arrays come directly from the RK45
     integrator in ``simulate_rail()``, so they reflect the same code path
-    used by the Monte Carlo simulation.  Thrust, mass, Mach, and SM are
-    derived from the motor and aero models at each recorded time step.
+    used by the Monte Carlo simulation.  Thrust, mass, Mach, SM, and CD
+    are derived from the motor and aero models at each recorded time step.
 
     Returns
     -------
-    (t, alt, mach, thrust, mass, sm)
+    (t, alt, mach, thrust, mass, sm, cd)
     """
     mm = propellant
     am = aero_model
@@ -225,6 +240,7 @@ def _quantities_from_rail_hist(
     thrust_arr = np.empty(N, dtype=np.float64)
     mass_arr = np.empty(N, dtype=np.float64)
     sm_arr = np.empty(N, dtype=np.float64)
+    cd_arr = np.empty(N, dtype=np.float64)
 
     for i in range(N):
         ti = float(t_hist[i])
@@ -232,7 +248,8 @@ def _quantities_from_rail_hist(
         Vi = float(V_hist[i])
 
         _, _, rho, a_sound, mu = isa(hi)
-        mach_arr[i] = Vi / a_sound if a_sound > 0.0 else 0.0
+        M = Vi / a_sound if a_sound > 0.0 else 0.0
+        mach_arr[i] = M
 
         thrust_arr[i] = thrust_corrected_at(
             mm.times, mm.thrusts, mm.nozzle_area, hi, ti,
@@ -246,7 +263,6 @@ def _quantities_from_rail_hist(
             mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
             m_dry, cg_dry, mm.motor_cg_loaded, ti,
         )
-        M = mach_arr[i]
         Re = rho * Vi * geometry.length / mu if Vi > 1.0e-6 and mu > 0.0 else 0.0
 
         _, _, _, _, _, cp_whole = aero_forces_moments(
@@ -258,7 +274,12 @@ def _quantities_from_rail_hist(
         )
         sm_arr[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
-    return t_hist.copy(), alt_hist.copy(), mach_arr, thrust_arr, mass_arr, sm_arr
+        cd_arr[i] = ca_at(
+            am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
+            M, Re, 0.0,
+        )
+
+    return t_hist.copy(), alt_hist.copy(), mach_arr, thrust_arr, mass_arr, sm_arr, cd_arr
 
 
 # ---------------------------------------------------------------------------
@@ -274,13 +295,13 @@ def _extract_trajectory_quantities_6dof(
     rail_V_hist: np.ndarray | None = None,
     rail_alt_hist: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
-    """Extract altitude, Mach, SM, thrust, and mass from a 6DoF trajectory.
+    """Extract altitude, Mach, SM, thrust, mass, and CD from a 6DoF trajectory.
 
     Includes both the ascent and descent phases.
 
     Returns
     -------
-    dict with keys "time", "altitude", "mach", "sm", "thrust", "mass"
+    dict with keys "time", "altitude", "mach", "sm", "thrust", "mass", "cd"
     → 1-D arrays.
     """
     # --- Ascent ---
@@ -294,6 +315,7 @@ def _extract_trajectory_quantities_6dof(
     thrust_asc = np.empty(n_asc, dtype=np.float64)
     mass_asc = np.empty(n_asc, dtype=np.float64)
     sm_asc = np.empty(n_asc, dtype=np.float64)
+    cd_asc = np.empty(n_asc, dtype=np.float64)
 
     mm = propellant
     am = aero_model
@@ -313,7 +335,8 @@ def _extract_trajectory_quantities_6dof(
         w = float(state_asc[i, 9])
         V = math.sqrt(u * u + v * v + w * w)
 
-        mach_asc[i] = V / a if a > 0.0 else 0.0
+        M = V / a if a > 0.0 else 0.0
+        mach_asc[i] = M
 
         thrust_asc[i] = thrust_corrected_at(
             mm.times, mm.thrusts, mm.nozzle_area, h, ti,
@@ -329,7 +352,6 @@ def _extract_trajectory_quantities_6dof(
             m_dry, cg_dry, mm.motor_cg_loaded, ti,
         )
 
-        M = mach_asc[i]
         Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
         q_rate = float(state_asc[i, 11])
         r_rate = float(state_asc[i, 12])
@@ -344,6 +366,13 @@ def _extract_trajectory_quantities_6dof(
 
         sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
+        # Drag coefficient (C_A at the actual AoA ≈ CD for small α)
+        alpha_rad = math.atan2(math.sqrt(v * v + w * w), u) if V > 1.0e-6 else 0.0
+        cd_asc[i] = ca_at(
+            am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
+            M, Re, alpha_rad,
+        )
+
     # --- Descent (thrust is zero, mass is dry, under parachute) ---
     if result.t_descent is not None and result.n_descent > 0:
         n_desc = result.n_descent
@@ -355,6 +384,7 @@ def _extract_trajectory_quantities_6dof(
         thrust_desc = np.zeros(n_desc, dtype=np.float64)
         mass_desc = np.full(n_desc, m_dry, dtype=np.float64)
         sm_desc = result.sm_descent[:n_desc]
+        cd_desc = np.zeros(n_desc, dtype=np.float64)
 
         # Stitch (skip first descent point to avoid overlap at apogee)
         t_full = np.concatenate([t_asc, t_desc[1:]])
@@ -363,6 +393,7 @@ def _extract_trajectory_quantities_6dof(
         sm_full = np.concatenate([sm_asc, sm_desc[1:]])
         thrust_full = np.concatenate([thrust_asc, thrust_desc[1:]])
         mass_full = np.concatenate([mass_asc, mass_desc[1:]])
+        cd_full = np.concatenate([cd_asc, cd_desc[1:]])
     else:
         t_full = t_asc
         alt_full = alt_asc
@@ -370,12 +401,13 @@ def _extract_trajectory_quantities_6dof(
         sm_full = sm_asc
         thrust_full = thrust_asc
         mass_full = mass_asc
+        cd_full = cd_asc
 
     # --- Prepend launch rail phase (t=0 to t_asc[0]) ---
     # Uses the actual trajectory recorded by simulate_rail() so the
     # comparison exercises the same code path as the Monte Carlo simulation.
     if rail_t_hist is not None and len(rail_t_hist) > 0:
-        t_r, alt_r, mach_r, thrust_r, mass_r, sm_r = _quantities_from_rail_hist(
+        t_r, alt_r, mach_r, thrust_r, mass_r, sm_r, cd_r = _quantities_from_rail_hist(
             rail_t_hist, rail_V_hist, rail_alt_hist, mm, am, geom,
             m_dry, cg_dry,
         )
@@ -385,6 +417,7 @@ def _extract_trajectory_quantities_6dof(
         sm_full     = np.concatenate([sm_r,     sm_full])
         thrust_full = np.concatenate([thrust_r, thrust_full])
         mass_full   = np.concatenate([mass_r,   mass_full])
+        cd_full     = np.concatenate([cd_r,     cd_full])
 
     return {
         "time": t_full,
@@ -393,6 +426,7 @@ def _extract_trajectory_quantities_6dof(
         "sm": sm_full,
         "thrust": thrust_full,
         "mass": mass_full,
+        "cd": cd_full,
     }
 
 
@@ -450,24 +484,39 @@ def _compare_quantity(
 
 def _build_comparison_figure(
     comparisons: dict[str, QuantityComparison],
+    cd_comparison: "CdComparison | None" = None,
 ) -> matplotlib.figure.Figure:
     """Build a 3×2 comparison figure.
 
-    Five quantities fill positions (0,0), (0,1), (1,0), (1,1), (2,0);
-    position (2,1) is left empty.  Reference in grey with tolerance band;
-    simulator overlay in green (pass) or red (fail).
+    Five time-series quantities fill positions (0,0)–(2,0); the bottom-
+    right position (2,1) shows drag coefficient vs Mach number.
+    Reference in grey with tolerance band; simulator overlay in green
+    (pass) or red (fail).
     """
-    fig, axes = plt.subplots(3, 2, figsize=(12, 9))
+    fig = plt.figure(figsize=(12, 9))
     fig.subplots_adjust(hspace=0.30, wspace=0.25, left=0.08, right=0.96,
                         top=0.95, bottom=0.07)
 
-    # Flatten to iterate in row-major order
-    ax_flat = axes.ravel()
+    # Time-series axes share the x-axis (positions 0–4 in the 3×2 grid).
+    # The CD-vs-Mach axis (position 5) has its own x-axis.
+    gs = fig.add_gridspec(3, 2)
+    time_axes: list[matplotlib.axes.Axes] = []
+    first_ax: matplotlib.axes.Axes | None = None
+    for row in range(3):
+        for col in range(2):
+            if row == 2 and col == 1:
+                continue  # reserve for CD vs Mach
+            ax = fig.add_subplot(gs[row, col], sharex=first_ax)
+            time_axes.append(ax)
+            if first_ax is None:
+                first_ax = ax
 
     plotted_quantities = [q for q in _COMPARED_QUANTITIES if q in comparisons]
 
     for idx, qty_name in enumerate(plotted_quantities):
-        ax = ax_flat[idx]
+        if idx >= len(time_axes):
+            break
+        ax = time_axes[idx]
         cmp = comparisons[qty_name]
 
         # Reference: grey line + tolerance band
@@ -486,13 +535,45 @@ def _build_comparison_figure(
                 color=sim_colour, linewidth=1.2, label="LFS")
 
         ax.set_ylabel(_PLOT_LABELS[qty_name])
-        ax.set_xlabel("Time (s)")
         ax.legend(fontsize=8)
         ax.spines[["right", "top"]].set_visible(False)
 
-    # Hide any unused axes
-    for idx in range(len(plotted_quantities), len(ax_flat)):
-        ax_flat[idx].set_visible(False)
+    # Hide unused time axes
+    for idx in range(len(plotted_quantities), len(time_axes)):
+        time_axes[idx].set_visible(False)
+
+    # X-label only on the visible bottom-row time axis
+    bottom_time_ax = time_axes[4] if len(time_axes) > 4 else time_axes[-1]
+    if bottom_time_ax.get_visible():
+        bottom_time_ax.set_xlabel("Time (s)")
+
+    # --- CD vs Mach (bottom-right) ---
+    if cd_comparison is not None:
+        ax_cd = fig.add_subplot(gs[2, 1])
+        ref_m = cd_comparison.ref_mach
+        ref_cd = cd_comparison.ref_cd
+        sim_m = cd_comparison.sim_mach
+        sim_cd = cd_comparison.sim_cd
+        tol = cd_comparison.tolerance
+
+        ax_cd.plot(ref_m, ref_cd,
+                   color="grey", linewidth=1.5, label="Reference")
+        ax_cd.fill_between(
+            ref_m,
+            ref_cd * (1.0 - tol),
+            ref_cd * (1.0 + tol),
+            color="grey", alpha=0.2,
+        )
+
+        sim_colour = "#2d7a2d" if cd_comparison.passed else "red"
+        ax_cd.plot(sim_m, sim_cd,
+                   color=sim_colour, linewidth=1.2, label="LFS")
+
+        ax_cd.set_xlabel("Mach")
+        ax_cd.set_ylabel("CD")
+        ax_cd.set_xlim(float(np.min(ref_m)), float(np.max(ref_m)))
+        ax_cd.legend(fontsize=8)
+        ax_cd.spines[["right", "top"]].set_visible(False)
 
     return fig
 
@@ -659,11 +740,51 @@ def run_verification(
 
     all_passed = all(c.passed for c in comparisons.values())
 
+    # --- CD vs Mach comparison ---
+    cd_comparison: CdComparison | None = None
+    if "cd" in ref_data and "cd" in sim_data:
+        # Sort both by Mach for a clean plot
+        ref_order = np.argsort(ref_data["mach"])
+        ref_mach = ref_data["mach"][ref_order]
+        ref_cd = ref_data["cd"][ref_order]
+
+        sim_order = np.argsort(sim_data["mach"])
+        sim_mach = sim_data["mach"][sim_order]
+        sim_cd = sim_data["cd"][sim_order]
+
+        # Clip simulator to reference Mach range
+        m_min, m_max = float(ref_mach[0]), float(ref_mach[-1])
+        sim_mask = (sim_mach >= m_min) & (sim_mach <= m_max)
+        sim_mach = sim_mach[sim_mask]
+        sim_cd = sim_cd[sim_mask]
+
+        # Interpolate simulator CD onto reference Mach points for pass/fail
+        sim_cd_interp = np.interp(ref_mach, sim_mach, sim_cd)
+        floor = _TOLERANCE_FLOORS.get("cd", 0.01)
+        scale = np.maximum(np.abs(ref_cd), floor)
+        within = np.abs(sim_cd_interp - ref_cd) <= ver_cfg.cd_tolerance * scale
+        n_outside = int(np.sum(~within))
+        n_total = len(within)
+        cd_passed = (n_outside / n_total) <= ver_cfg.exceedance_fraction if n_total > 0 else True
+
+        cd_comparison = CdComparison(
+            ref_mach=ref_mach,
+            ref_cd=ref_cd,
+            sim_mach=sim_mach,
+            sim_cd=sim_cd,
+            tolerance=ver_cfg.cd_tolerance,
+            passed=cd_passed,
+        )
+
+        if not cd_passed:
+            all_passed = False
+
     # --- Build comparison figure ---
-    fig = _build_comparison_figure(comparisons)
+    fig = _build_comparison_figure(comparisons, cd_comparison)
 
     return VerificationResult(
         passed=all_passed,
         comparisons=comparisons,
+        cd_comparison=cd_comparison,
         figure=fig,
     )
