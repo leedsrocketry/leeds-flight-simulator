@@ -25,7 +25,7 @@ from typing import Callable
 import numpy as np
 from shapely.geometry import Point, Polygon
 
-from atmosphere import isa, density
+from atmosphere import isa
 from config import SimulationConfig, Vehicle
 from motor import PropellantModel
 from aerodynamics import AeroModel
@@ -577,7 +577,7 @@ def optimise_azimuth(
 
     # --- Bayesian optimisation ---
     from sklearn.gaussian_process import GaussianProcessRegressor
-    from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+    from sklearn.gaussian_process.kernels import RBF
     from scipy.stats import norm
     from scipy.stats.qmc import Sobol
 

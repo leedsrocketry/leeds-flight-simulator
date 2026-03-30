@@ -53,7 +53,6 @@ from aerodynamics import (
     aero_forces_moments,
     ca_at,
     cn_alpha_fins_at,
-    cn_cp_at,
     _interp3,
 )
 from motor import (

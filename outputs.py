@@ -30,7 +30,7 @@ from matplotlib.patches import Ellipse, PathPatch
 import contextily as cx
 import numpy as np
 from pyproj import Transformer
-from scipy.stats import chi2
+
 from shapely.geometry import Polygon as ShapelyPolygon
 import yaml
 
