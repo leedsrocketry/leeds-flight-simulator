@@ -121,7 +121,7 @@ Rather than simulating a single trajectory, the simulator runs many trajectories
 
 ### Descent Scenarios
 
-Every sample shares the same ascent. At apogee, the sample follows one of up to four descent branches:
+Every sample is simulated with the full 6DoF model from rail exit. For parachute scenarios, the 6DoF integrator runs to apogee, then a 3DoF point-mass descent model takes over — the vehicle is treated as a point mass descending at terminal velocity under its parachute drag, adopting the local wind vector at each altitude. For the ballistic scenario, the 6DoF integrator continues all the way to ground impact — no model switch occurs. At apogee, the sample follows one of up to four descent branches:
 
 | Scenario | Description | Significance |
 |----------|-------------|--------------|
@@ -278,7 +278,7 @@ A run passes if ≥ `compliance_threshold` fraction of samples are compliant. Al
 
 When `azimuth` and/or `inclination` are set to `"auto"`, a four-phase optimisation routine runs before the main Monte Carlo analysis:
 
-1. **Inclination Selection.** Deterministic 3-DoF simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (maximising apogee) whose ballistic landing is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
+1. **Inclination Selection.** Deterministic 6DoF simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (maximising apogee) whose ballistic landing is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
 
 2. **Azimuth Narrowing.** Analytically filters integer azimuths in `azimuth_range` using mean wind drift, discarding any whose estimated premature-main landing centroid falls outside the buffered danger area.
 
@@ -303,7 +303,7 @@ Results are saved to `results/`, relative to the directory containing `simulatio
 | `samples.csv` | One row per sample — stochastic inputs, flight time, per-check compliance flags, aerodynamic extremes, and landing/apogee coordinates |
 | `dispersion_plot.png` | Landing dispersion map (see below) |
 | `altitude_plot.png` | Mean altitude profile for each scenario (see below) |
-| `verification_plot.png` | Reference trajectory comparison (only if verification is configured) |
+| `verification_plot.png` | Reference trajectory comparison (only when `verify -q` is used) |
 
 ### Dispersion Plot
 
@@ -343,7 +343,7 @@ Checks ISA against published tables, quaternion maths, launch rail exit velocity
 
 ### Trajectory Comparison Tool
 
-An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, thrust, mass. Column names are matched case-insensitively; missing columns are skipped.
+An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, thrust, mass, CD. Column names are matched case-insensitively; missing columns are skipped.
 
 > **Note:** The reference CSV is assumed to use SI units (metres, seconds, calibres). There is no unit sanitisation and no check that both simulators used the same input parameters — ensure your reference data is in SI and that vehicle, motor, and atmospheric inputs match before running verification.
 
@@ -355,10 +355,9 @@ python . verify <simulation.yaml>
 
 | Flag | Effect |
 |------|--------|
-| `-d`, `--dof` `2`\|`6` | Ascent model: `6` (full 6DoF, default) or `2` (point-mass) |
 | `-a`, `--azimuth` `FLOAT` | Launch rail azimuth (degrees); overrides config value |
 | `-i`, `--inclination` `FLOAT` | Launch rail inclination (degrees); overrides config value |
-| `-q`, `--no-popup` | Do not open figures after execution |
+| `-q`, `--no-popup` | Save figure to `results/verification_plot.png` instead of displaying interactively |
 | `--dump-csv PATH` | Write per-timestep comparison data (reference, simulator, and error for each quantity) to a CSV file |
 
 The verification azimuth and inclination can be set at three levels, with later entries taking precedence:
@@ -370,16 +369,15 @@ The verification azimuth and inclination can be set at three levels, with later 
 Example:
 
 ```
-python . verify simulations/g2b2-safety-case/cape-wrath.yaml --dof 2 -q
-python . verify simulations/g2b2-safety-case/cape-wrath.yaml -i 85 -a 0 -q
+python . verify simulations/g2b2-safety-case/cape-wrath.yaml -i 85 -a 0
 python . verify simulations/g2b2-safety-case/cape-wrath.yaml --dump-csv debug/verify_comparison.csv -q
 ```
 
-A summary table is printed to the console showing pass/fail, maximum absolute error, RMS error, and mean bias for each compared quantity. The comparison figure is saved and (unless `-q` is passed) opened automatically.
+By default, the comparison figure is displayed interactively with linked zoom/pan across the time-series subplots. Pass `-q` to save to file instead.
 
 ![Verification plot](simulations/g2b2-safety-case/results/verification_plot.png)
 
-Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail). Pass/fail is printed to the console and recorded in `summary.yaml`. On failure, the figure opens for inspection.
+Five time-series subplots (altitude, Mach, stability margin, thrust, mass) share a linked time axis. The bottom-right subplot shows drag coefficient vs Mach number over the reference simulation's Mach range. Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail).
 
 
 ## Operational Workflow
