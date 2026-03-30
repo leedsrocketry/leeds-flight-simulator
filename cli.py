@@ -607,8 +607,6 @@ def replay(
 
 @main.command()
 @click.argument("config_path", type=click.Path(exists=True, path_type=Path))
-@click.option("-d", "--dof", type=click.Choice(["2", "6"]), default="6",
-              help="Ascent model: 6 (full 6DoF) or 2 (point-mass).")
 @click.option("-a", "--azimuth", type=float, default=None,
               help="Launch rail azimuth (degrees). Overrides config value.")
 @click.option("-i", "--inclination", type=float, default=None,
@@ -617,7 +615,7 @@ def replay(
               help="Write comparison data to a CSV file.")
 @click.option("-q", "--no-popup", is_flag=True,
               help="Do not open figures after execution.")
-def verify(config_path: Path, dof: str, azimuth: float | None,
+def verify(config_path: Path, azimuth: float | None,
            inclination: float | None, dump_csv: Path | None,
            no_popup: bool) -> None:
     """Compare a single trajectory against a reference CSV."""
@@ -649,19 +647,12 @@ def verify(config_path: Path, dof: str, azimuth: float | None,
 
     display.start()
 
-    if dof == "2":
-        display.add_warning(
-            "2DoF verification uses a simplified point-mass model, not the "
-            "6DoF code path used by Monte Carlo. Use --dof 6 to verify the "
-            "production simulation."
-        )
-
     display.update_status("Loading configuration and models...")
     vehicle, propellant, aero_model, _ = load_all_models(sim_cfg)
 
-    display.update_status(f"Running {dof}DoF verification trajectory...")
+    display.update_status("Running 6DoF verification trajectory...")
     ver_result = run_verification(
-        sim_cfg, vehicle, propellant, aero_model, dof=int(dof),
+        sim_cfg, vehicle, propellant, aero_model,
         azimuth_override=azimuth, inclination_override=inclination,
     )
 

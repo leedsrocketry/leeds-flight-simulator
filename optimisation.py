@@ -4,7 +4,7 @@ Four-phase routine (specification §13) to select optimal integer launch
 azimuth and inclination, maximising the probability that all active descent
 scenarios remain within the buffered danger area.
 
-Phase 1 — Inclination selection (deterministic 2DoF point-mass sweeps)
+Phase 1 — Inclination selection (deterministic 6DoF sweeps, zero wind)
 Phase 2 — Azimuth bound narrowing (analytical wind-drift filter)
 Phase 3 — Azimuth optimisation (1-D Bayesian optimisation, GP + UCB)
 Phase 4 — Candidate validation (full-uncertainty MC)
@@ -32,7 +32,7 @@ from aerodynamics import AeroModel
 from wind import WindEnsemble, interpolate_wind
 from dynamics import (
     SimParams,
-    simulate_ascent_2dof,
+    run_trajectory,
     integrate_descent,
     SCENARIO_MAP,
     SCENARIO_BALLISTIC,
@@ -40,6 +40,7 @@ from dynamics import (
     SCENARIO_PREMATURE_MAIN,
     SCENARIO_DROGUE_ONLY,
 )
+from montecarlo import build_sim_params
 from geography import (
     load_polygon_ned,
     buffer_danger_area,
@@ -54,6 +55,44 @@ from geography import (
 _G0: float = 9.80665
 _DEG2RAD: float = math.pi / 180.0
 _RAD2DEG: float = 180.0 / math.pi
+
+
+def _zero_wind_ensemble() -> WindEnsemble:
+    """Construct a single-profile WindEnsemble with zero wind everywhere."""
+    alt = np.array([0.0, 50000.0], dtype=np.float64)
+    zeros = np.zeros(2, dtype=np.float64)
+    return WindEnsemble(
+        altitude_m=alt,
+        wind_east_ms=zeros.reshape(1, 2),
+        wind_north_ms=zeros.reshape(1, 2),
+        mean_east_ms=zeros,
+        mean_north_ms=zeros,
+    )
+
+
+def _run_6dof_apogee(
+    inclination_deg: float,
+    sim_cfg: "SimulationConfig",
+    vehicle: "Vehicle",
+    propellant: "PropellantModel",
+    aero_model: "AeroModel",
+) -> tuple[float, float, float, float]:
+    """Run a deterministic 6DoF trajectory and return apogee (N, E, D, t).
+
+    Uses azimuth=0, zero wind, impulse_factor=1, no fin cant.
+    """
+    zero_wind = _zero_wind_ensemble()
+    params = build_sim_params(
+        sim_cfg, vehicle, propellant, aero_model, zero_wind,
+        wind_profile_index=0,
+        azimuth_deg=0.0,
+        inclination_deg=inclination_deg,
+        impulse_factor=1.0,
+        fin_cant_deg=0.0,
+    )
+    traj = run_trajectory(params, SCENARIO_BALLISTIC, None, None, float("inf"))
+    ap = traj.apogee_position
+    return float(ap[0]), float(ap[1]), float(ap[2]), traj.apogee_time
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +186,8 @@ def _rotate_apogee(
 ) -> tuple[float, float]:
     """Rotate an apogee NE position from *base_azimuth* to *azimuth*.
 
-    The 2DoF ascent is run at ``base_azimuth`` (typically 0°).  For a
-    different azimuth, the horizontal displacement rotates by the
+    The deterministic ascent is run at ``base_azimuth`` (typically 0°).
+    For a different azimuth, the horizontal displacement rotates by the
     difference angle.
     """
     delta = azimuth_rad - base_azimuth_rad
@@ -259,8 +298,6 @@ def select_inclination(
     assert inc_range is not None
     candidates = list(range(int(inc_range[0]), int(inc_range[1]) + 1))
 
-    geom = vehicle.geometry
-    m_dry = vehicle.m_dry
     exclusion_r = sim_cfg.site.ballistic_exclusion_radius
 
     apogee_positions: dict[int, tuple[float, float, float]] = {}
@@ -269,40 +306,20 @@ def select_inclination(
     valid: list[int] = []
 
     for idx, inc in enumerate(candidates):
-        # 2DoF point-mass ascent, no wind, no uncertainty
-        t_hist, x_hist, z_hist, _, _ = simulate_ascent_2dof(
-            rail_inclination_rad=inc * _DEG2RAD,
-            rail_length=rail_cfg.length,
-            motor_times=propellant.times,
-            motor_thrusts=propellant.thrusts,
-            nozzle_area=propellant.nozzle_area,
-            impulse_factor=1.0,
-            m_prop_0=propellant.m_prop_0,
-            total_impulse=propellant.total_impulse,
-            m_dry=m_dry,
-            mach_g=aero_model.mach_grid,
-            re_g=aero_model.re_grid,
-            alpha_g=aero_model.alpha_grid,
-            ca_tbl=aero_model.ca_table,
-            A_ref=geom.reference_area,
-            ref_length=geom.length,
-            rtol=1.0e-6,
-            atol=1.0e-6,
+        # 6DoF ascent, no wind, no uncertainty
+        apN, apE, apD, t_ap = _run_6dof_apogee(
+            float(inc), sim_cfg, vehicle, propellant, aero_model,
         )
-        # Store as NED at azimuth=0: downrange is North, East=0
-        apN = float(x_hist[-1])
-        apD = -float(z_hist[-1])
-        t_ap = float(t_hist[-1])
-        apogee_positions[inc] = (apN, 0.0, apD)
+        apogee_positions[inc] = (apN, apE, apD)
         apogee_times[inc] = t_ap
 
         # Ballistic descent from apogee with no wind — landing point is
-        # directly below the apogee (2DoF ascent is in the N–D plane).
-        ballistic_landings[inc] = (apN, 0.0)
+        # approximately below the apogee.
+        ballistic_landings[inc] = (apN, apE)
 
         # Check exclusion radius and containment
-        dist = math.hypot(apN, 0.0)
-        inside = _point_in_polygon(0.0, apN, poly_e, poly_n)
+        dist = math.hypot(apN, apE)
+        inside = _point_in_polygon(apE, apN, poly_e, poly_n)
 
         if dist >= exclusion_r and inside:
             valid.append(inc)
@@ -805,8 +822,6 @@ def run_optimisation(
     poly_e, poly_n = polygon_to_arrays(buffered_poly)
 
     # --- Phase 1: Inclination ---
-    m_dry = vehicle.m_dry
-
     if inc_is_auto:
         selected_inc, apogee_positions, ballistic_landings, apogee_times = (
             select_inclination(
@@ -816,29 +831,12 @@ def run_optimisation(
         )
     else:
         selected_inc = int(rail.inclination)
-        # Still need a 2DoF ascent at this inclination for Phases 2-4
-        geom = vehicle.geometry
-        t_hist, x_hist, z_hist, _, _ = simulate_ascent_2dof(
-            rail_inclination_rad=selected_inc * _DEG2RAD,
-            rail_length=rail.length,
-            motor_times=propellant.times,
-            motor_thrusts=propellant.thrusts,
-            nozzle_area=propellant.nozzle_area,
-            impulse_factor=1.0,
-            m_prop_0=propellant.m_prop_0,
-            total_impulse=propellant.total_impulse,
-            m_dry=m_dry,
-            mach_g=aero_model.mach_grid,
-            re_g=aero_model.re_grid,
-            alpha_g=aero_model.alpha_grid,
-            ca_tbl=aero_model.ca_table,
-            A_ref=geom.reference_area,
-            ref_length=geom.length,
-            rtol=1.0e-6,
-            atol=1.0e-6,
+        # Still need a 6DoF ascent at this inclination for Phases 2-4
+        apN, apE, apD, t_ap = _run_6dof_apogee(
+            float(selected_inc), sim_cfg, vehicle, propellant, aero_model,
         )
-        apogee_positions = {selected_inc: (float(x_hist[-1]), 0.0, -float(z_hist[-1]))}
-        apogee_times = {selected_inc: float(t_hist[-1])}
+        apogee_positions = {selected_inc: (apN, apE, apD)}
+        apogee_times = {selected_inc: t_ap}
         ballistic_landings = {}
 
     t_apogee = apogee_times[selected_inc]

@@ -1,15 +1,12 @@
 """Trajectory comparison tool — §18.1 of the specification.
 
-Runs a single nominal trajectory with mean inputs and zero wind, then
-compares altitude, Mach, stability margin, and mass against a reference
-CSV from an external flight simulator.
-
-Supports both the full 6DoF model and the simplified 2DoF point-mass
-model (rail → 2DoF ascent → 3DoF descent).
+Runs a single nominal 6DoF trajectory with mean inputs and zero wind,
+then compares altitude, Mach, stability margin, and mass against a
+reference CSV from an external flight simulator.
 
 Public API
 ----------
-run_verification(sim_cfg, vehicle, propellant, aero_model, dof=6)
+run_verification(sim_cfg, vehicle, propellant, aero_model)
     → VerificationResult
 
 Supporting dataclasses:
@@ -40,8 +37,6 @@ from dynamics import (
     TrajectoryResult,
     run_trajectory,
     simulate_rail,
-    simulate_ascent_2dof,
-    integrate_descent,
     SCENARIO_NOMINAL,
     SCENARIO_BALLISTIC,
     mass_at,
@@ -402,122 +397,6 @@ def _extract_trajectory_quantities_6dof(
 
 
 # ---------------------------------------------------------------------------
-# Trajectory quantity extraction — 2DoF
-# ---------------------------------------------------------------------------
-
-def _extract_trajectory_quantities_2dof(
-    t_asc: np.ndarray,
-    z_asc: np.ndarray,
-    vx_asc: np.ndarray,
-    vz_asc: np.ndarray,
-    t_desc: np.ndarray,
-    state_desc: np.ndarray,
-    sm_desc: np.ndarray,
-    n_desc: int,
-    propellant: PropellantModel,
-    aero_model: AeroModel,
-    vehicle: Vehicle,
-    rail_t_hist: np.ndarray | None = None,
-    rail_V_hist: np.ndarray | None = None,
-    rail_alt_hist: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
-    """Extract altitude, Mach, SM, thrust, and mass from a 2DoF ascent + 3DoF descent.
-
-    Returns
-    -------
-    dict with keys "time", "altitude", "mach", "sm", "thrust", "mass"
-    → 1-D arrays.
-    """
-    mm = propellant
-    am = aero_model
-    geom = vehicle.geometry
-    diameter = geom.diameter
-    m_dry = vehicle.m_dry
-    cg_dry = vehicle.cg_dry
-    n_asc = len(t_asc)
-
-    # --- Ascent quantities ---
-    mach_asc = np.empty(n_asc, dtype=np.float64)
-    thrust_asc = np.empty(n_asc, dtype=np.float64)
-    mass_asc = np.empty(n_asc, dtype=np.float64)
-    sm_asc = np.empty(n_asc, dtype=np.float64)
-
-    for i in range(n_asc):
-        ti = float(t_asc[i])
-        h = max(float(z_asc[i]), 0.0)
-        _, _, rho, a, mu = isa(h)
-
-        V = math.sqrt(float(vx_asc[i])**2 + float(vz_asc[i])**2)
-        mach_asc[i] = V / a if a > 0.0 else 0.0
-
-        thrust_asc[i] = thrust_corrected_at(
-            mm.times, mm.thrusts, mm.nozzle_area, h, ti,
-        )
-
-        mass_asc[i] = mass_at(
-            mm.times, mm.thrusts, mm.m_prop_0,
-            mm.total_impulse, m_dry, ti,
-        )
-
-        # SM at α=0
-        cg = cg_at(
-            mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
-            m_dry, cg_dry, mm.motor_cg_loaded, ti,
-        )
-        M = mach_asc[i]
-        Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
-
-        _, _, _, _, _, cp_whole = aero_forces_moments(
-            am.mach_grid, am.re_grid, am.alpha_grid,
-            am.ca_table, am.cn_table, am.cp_table,
-            am.cn_comp, am.cp_comp, am.has_components,
-            M, Re, rho, V, geom.reference_area,
-            V, 0.0, 0.0, 0.0, 0.0, cg,
-        )
-        sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
-
-    # --- Descent quantities (thrust is zero, mass is dry, under parachute) ---
-    t_d = t_desc[:n_desc]
-    state_d = state_desc[:n_desc]
-    alt_desc = -state_d[:, 2]
-
-    mach_desc = np.zeros(n_desc, dtype=np.float64)
-    thrust_desc = np.zeros(n_desc, dtype=np.float64)
-    mass_desc = np.full(n_desc, m_dry, dtype=np.float64)
-    sm_desc = sm_desc[:n_desc]
-
-    # Stitch (skip first descent point to avoid overlap at apogee)
-    t_full = np.concatenate([t_asc, t_d[1:]])
-    alt_full = np.concatenate([z_asc, alt_desc[1:]])
-    mach_full = np.concatenate([mach_asc, mach_desc[1:]])
-    sm_full = np.concatenate([sm_asc, sm_desc[1:]])
-    thrust_full = np.concatenate([thrust_asc, thrust_desc[1:]])
-    mass_full = np.concatenate([mass_asc, mass_desc[1:]])
-
-    # --- Prepend launch rail phase (t=0 to t_asc[0]) ---
-    if rail_t_hist is not None and len(rail_t_hist) > 0:
-        t_r, alt_r, mach_r, thrust_r, mass_r, sm_r = _quantities_from_rail_hist(
-            rail_t_hist, rail_V_hist, rail_alt_hist, mm, am, geom,
-            m_dry, cg_dry,
-        )
-        t_full      = np.concatenate([t_r,      t_full])
-        alt_full    = np.concatenate([alt_r,    alt_full])
-        mach_full   = np.concatenate([mach_r,   mach_full])
-        sm_full     = np.concatenate([sm_r,     sm_full])
-        thrust_full = np.concatenate([thrust_r, thrust_full])
-        mass_full   = np.concatenate([mass_r,   mass_full])
-
-    return {
-        "time": t_full,
-        "altitude": alt_full,
-        "mach": mach_full,
-        "sm": sm_full,
-        "thrust": thrust_full,
-        "mass": mass_full,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Comparison logic
 # ---------------------------------------------------------------------------
 
@@ -662,11 +541,10 @@ def run_verification(
     vehicle: Vehicle,
     propellant: PropellantModel,
     aero_model: AeroModel,
-    dof: int = 6,
     azimuth_override: float | None = None,
     inclination_override: float | None = None,
 ) -> VerificationResult:
-    """Run a nominal trajectory and compare against the reference CSV.
+    """Run a nominal 6DoF trajectory and compare against the reference CSV.
 
     Uses mean input values and zero wind, as specified in §18.1.  When
     rail angles are set to ``"auto"``, the midpoint of the configured
@@ -682,9 +560,6 @@ def run_verification(
         Simulation configuration (must have ``verification`` set).
     vehicle, propellant, aero_model
         Pre-loaded vehicle/propellant/aero models.
-    dof : int
-        Degrees of freedom for the ascent model: 6 (full 6DoF) or 2
-        (point-mass in a vertical plane).
 
     Returns
     -------
@@ -724,9 +599,8 @@ def run_verification(
     m_dry = vehicle.m_dry
 
     # Run the rail phase once to capture the trajectory history.
-    # This uses the same simulate_rail() called inside run_trajectory()
-    # and simulate_ascent_2dof(), so the comparison exercises the real
-    # rail-phase code path.
+    # This uses the same simulate_rail() called inside run_trajectory(),
+    # so the comparison exercises the real rail-phase code path.
     _, _, _, _, _, rt_hist, rV_hist, ralt_hist, rn = simulate_rail(
         azimuth * _DEG2RAD, inclination * _DEG2RAD, rail.length,
         mm.times, mm.thrusts, mm.nozzle_area, 1.0,
@@ -740,91 +614,22 @@ def run_verification(
     rail_V = rV_hist[:rn]
     rail_alt = ralt_hist[:rn]
 
-    if dof == 6:
-        # --- Full 6DoF trajectory ---
-        params = build_sim_params(
-            sim_cfg, vehicle, propellant, aero_model, zero_wind,
-            wind_profile_index=0,
-            azimuth_deg=azimuth,
-            inclination_deg=inclination,
-            impulse_factor=1.0,
-            fin_cant_deg=0.0,
-        )
-        scenario = _nominal_scenario(vehicle)
-        traj = run_trajectory(params, scenario, None, None, float("inf"))
+    # --- Full 6DoF trajectory ---
+    params = build_sim_params(
+        sim_cfg, vehicle, propellant, aero_model, zero_wind,
+        wind_profile_index=0,
+        azimuth_deg=azimuth,
+        inclination_deg=inclination,
+        impulse_factor=1.0,
+        fin_cant_deg=0.0,
+    )
+    scenario = _nominal_scenario(vehicle)
+    traj = run_trajectory(params, scenario, None, None, float("inf"))
 
-        sim_data = _extract_trajectory_quantities_6dof(
-            traj, propellant, aero_model, vehicle,
-            rail_t, rail_V, rail_alt,
-        )
-    elif dof == 2:
-        # --- 2DoF ascent + 3DoF nominal descent ---
-        t_asc, x_asc, z_asc, vx_asc, vz_asc = simulate_ascent_2dof(
-            rail_inclination_rad=inclination * _DEG2RAD,
-            rail_length=rail.length,
-            motor_times=mm.times,
-            motor_thrusts=mm.thrusts,
-            nozzle_area=mm.nozzle_area,
-            impulse_factor=1.0,
-            m_prop_0=mm.m_prop_0,
-            total_impulse=mm.total_impulse,
-            m_dry=m_dry,
-            mach_g=aero_model.mach_grid,
-            re_g=aero_model.re_grid,
-            alpha_g=aero_model.alpha_grid,
-            ca_tbl=aero_model.ca_table,
-            A_ref=geom.reference_area,
-            ref_length=geom.length,
-            rtol=1.0e-6,
-            atol=1.0e-6,
-        )
-
-        # Set up descent from apogee in NED (azimuth=0: x=North)
-        apN = float(x_asc[-1])
-        apD = -float(z_asc[-1])
-        t_apogee = float(t_asc[-1])
-
-        # Rotate apogee to the configured azimuth
-        az_rad = azimuth * _DEG2RAD
-        cos_az = math.cos(az_rad)
-        sin_az = math.sin(az_rad)
-        apN_rot = apN * cos_az
-        apE_rot = apN * sin_az
-
-        descent_state0 = np.array([
-            apN_rot, apE_rot, apD, 0.0, 0.0, 0.0,
-        ], dtype=np.float64)
-
-        # Recovery CdA
-        rec = vehicle.recovery
-        has_drogue = rec.drogue is not None
-        has_main = rec.main is not None
-        drogue_cda = rec.drogue.cd * rec.drogue.area if has_drogue else 0.0
-        main_cda = rec.main.cd * rec.main.area if has_main else 0.0
-        main_deploy_alt = float(rec.main.threshold) if has_main and rec.main.threshold != "apogee" else -1.0
-
-        zero_wind_alt = np.array([0.0, 50000.0], dtype=np.float64)
-        zero_wind_e = np.zeros(2, dtype=np.float64)
-        zero_wind_n = np.zeros(2, dtype=np.float64)
-
-        scenario = _nominal_scenario(vehicle)
-        t_desc, y_desc, sm_desc_arr, n_desc = integrate_descent(
-            t_apogee, descent_state0,
-            zero_wind_alt, zero_wind_e, zero_wind_n,
-            m_dry,
-            drogue_cda, main_cda, main_deploy_alt,
-            scenario,
-            1.0e-6, 1.0e-6,
-        )
-
-        sim_data = _extract_trajectory_quantities_2dof(
-            t_asc, z_asc, vx_asc, vz_asc,
-            t_desc, y_desc, sm_desc_arr, n_desc,
-            propellant, aero_model, vehicle,
-            rail_t, rail_V, rail_alt,
-        )
-    else:
-        raise ValueError(f"dof must be 2 or 6, got {dof}")
+    sim_data = _extract_trajectory_quantities_6dof(
+        traj, propellant, aero_model, vehicle,
+        rail_t, rail_V, rail_alt,
+    )
 
     # --- Load reference CSV ---
     ref_data = _load_reference_csv(ver_cfg.reference_trajectory)
