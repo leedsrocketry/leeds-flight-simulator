@@ -315,6 +315,7 @@ class TrajectoryResult:
     t_descent: np.ndarray | None = None
     state_descent: np.ndarray | None = None   # (M, 3) NED position
     sm_descent: np.ndarray | None = None      # (M,) stability margin [cal]
+    mach_descent: np.ndarray | None = None    # (M,) Mach from terminal velocity
     n_descent: int = 0
 
 
@@ -1351,6 +1352,29 @@ def integrate_descent(
     return t_out, y_out, sm_out, n
 
 
+def _descent_mach(
+    y_desc: np.ndarray,
+    n_desc: int,
+    m_dry: float,
+    drogue_cda: float,
+    main_cda: float,
+    main_deploy_alt: float,
+    scenario: int,
+) -> np.ndarray:
+    """Compute Mach at each descent step from terminal velocity."""
+    mach = np.empty(n_desc, dtype=np.float64)
+    for i in range(n_desc):
+        h = max(-float(y_desc[i, 2]), 0.0)
+        _, _, rho, a, _ = isa(h)
+        cda = _parachute_cda(h, drogue_cda, main_cda, main_deploy_alt, scenario)
+        if cda > 1.0e-12 and rho > 0.0:
+            vD = math.sqrt(2.0 * m_dry * _G0 / (rho * cda))
+        else:
+            vD = _G0
+        mach[i] = vD / a if a > 0.0 else 0.0
+    return mach
+
+
 # ---------------------------------------------------------------------------
 # Top-level trajectory runner (plain Python)
 # ---------------------------------------------------------------------------
@@ -1573,6 +1597,12 @@ def run_trajectory(
         p.rtol, p.atol,
     )
 
+    # Mach from quasi-steady terminal velocity at each descent step
+    mach_desc = _descent_mach(
+        y_desc, n_desc, p.m_dry,
+        drogue_cda, main_cda, main_deploy_alt, effective_scenario,
+    )
+
     land_idx = n_desc - 1
     landing_pos = y_desc[land_idx, :3].copy()
     landing_t = t_desc[land_idx]
@@ -1622,5 +1652,6 @@ def run_trajectory(
         t_descent=t_desc[:n_desc].copy(),
         state_descent=y_desc[:n_desc].copy(),
         sm_descent=sm_desc[:n_desc].copy(),
+        mach_descent=mach_desc,
         n_descent=n_desc,
     )

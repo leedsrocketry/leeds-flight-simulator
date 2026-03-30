@@ -381,7 +381,7 @@ def _extract_trajectory_quantities_6dof(
         state_desc = result.state_descent[:n_desc]
         alt_desc = -state_desc[:, 2]
 
-        mach_desc = np.zeros(n_desc, dtype=np.float64)
+        mach_desc = result.mach_descent[:n_desc]
         thrust_desc = np.zeros(n_desc, dtype=np.float64)
         mass_desc = np.full(n_desc, m_dry, dtype=np.float64)
         sm_desc = result.sm_descent[:n_desc]
