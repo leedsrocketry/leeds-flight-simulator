@@ -657,9 +657,8 @@ def test_sixdof_deriv_gravity_direction():
 def test_descent_time_matches_terminal_velocity():
     """Descent time should match h / V_terminal for constant-density drop.
 
-    The simplified descent model uses quasi-steady terminal velocity at each
-    altitude.  For a short drop at low altitude (near-constant rho), the
-    total descent time should be h0 / V_terminal.
+    The dynamic descent model integrates vD, so when initialised at terminal
+    velocity the descent time should still be h0 / V_terminal (within 2%).
     """
     m = 10.0         # kg
     g = 9.80665      # m/s²
@@ -670,7 +669,8 @@ def test_descent_time_matches_terminal_velocity():
     V_terminal = math.sqrt(2.0 * m * g / (rho_sl * cda))
     expected_time = h0 / V_terminal
 
-    state0 = np.array([0.0, 0.0, -h0], dtype=np.float64)
+    # 4-component state: [rN, rE, rD, vD] — initialise at terminal velocity
+    state0 = np.array([0.0, 0.0, -h0, V_terminal], dtype=np.float64)
     w_alt, w_east, w_north = _zero_wind()
 
     t_out, y_out, _, n = integrate_descent(
@@ -696,7 +696,10 @@ def test_descent_lands_at_ground():
     h0 = 300.0
     cda = 0.3
 
-    state0 = np.array([0.0, 0.0, -h0], dtype=np.float64)
+    rho_sl = density(0.0)
+    V_terminal = math.sqrt(2.0 * 10.0 * 9.80665 / (rho_sl * cda))
+    # 4-component state: [rN, rE, rD, vD]
+    state0 = np.array([0.0, 0.0, -h0, V_terminal], dtype=np.float64)
     w_alt, w_east, w_north = _zero_wind()
 
     t_out, y_out, _, n = integrate_descent(
@@ -726,7 +729,10 @@ def test_descent_wind_displacement():
     cda = 0.5
     wind_speed = 10.0  # m/s eastward
 
-    state0 = np.array([0.0, 0.0, -h0], dtype=np.float64)
+    rho_sl = density(0.0)
+    V_terminal = math.sqrt(2.0 * m * 9.80665 / (rho_sl * cda))
+    # 4-component state: [rN, rE, rD, vD]
+    state0 = np.array([0.0, 0.0, -h0, V_terminal], dtype=np.float64)
 
     # Constant east wind
     w_alt = np.array([0.0, 50000.0], dtype=np.float64)

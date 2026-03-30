@@ -313,7 +313,7 @@ class TrajectoryResult:
     state_ascent: np.ndarray      # (N, 13) 6DoF state history
     # Time history (descent, for altitude plot / replay)
     t_descent: np.ndarray | None = None
-    state_descent: np.ndarray | None = None   # (M, 3) NED position
+    state_descent: np.ndarray | None = None   # (M, 4) [rN, rE, rD, vD]
     sm_descent: np.ndarray | None = None      # (M,) stability margin [cal]
     mach_descent: np.ndarray | None = None    # (M,) Mach from terminal velocity
     n_descent: int = 0
@@ -1175,10 +1175,13 @@ def _descent_deriv(
     # Scenario
     scenario: int,
 ) -> None:
-    """3-component derivative for parachute descent: [rN, rE, rD].
+    """4-component derivative for parachute descent: [rN, rE, rD, vD].
 
-    The vehicle drifts horizontally at the local wind speed and descends
-    vertically at the quasi-steady terminal velocity under parachute.
+    The vehicle drifts horizontally at the local wind speed.  Vertical
+    velocity is integrated dynamically so that parachute deployment
+    transients (deceleration under inertia) are captured.
+
+        dvD/dt = g − (ρ · CdA · vD²) / (2m)
     """
     h = -state[2]
     if h < 0.0:
@@ -1186,17 +1189,19 @@ def _descent_deriv(
 
     vN_wind, vE_wind = interpolate_wind(wind_alt, wind_east, wind_north, h)
 
+    vD = state[3]
     cda = _parachute_cda(h, drogue_cda, main_cda, main_deploy_alt, scenario)
 
     _, _, rho, _, _ = isa(h)
     if cda > 1.0e-12 and rho > 0.0:
-        vD = (2.0 * m * _G0 / (rho * cda)) ** 0.5
+        drag_accel = rho * cda * vD * vD / (2.0 * m)
     else:
-        vD = _G0  # free-fall fallback (1 step)
+        drag_accel = 0.0
 
     dy[0] = vN_wind
     dy[1] = vE_wind
     dy[2] = vD
+    dy[3] = _G0 - drag_accel
 
 
 @nb.njit(cache=True, fastmath=True)
@@ -1212,18 +1217,20 @@ def integrate_descent(
     scenario: int,
     # Tolerances
     rtol: float, atol: float,
+    # Optional early stop altitude (m AGL); 0.0 = ground
+    stop_alt: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-    """Integrate parachute descent until ground impact (rD >= 0).
+    """Integrate parachute descent until altitude reaches *stop_alt* (rD >= -stop_alt).
 
-    The vehicle is a point mass drifting at the local wind speed and
-    descending at the quasi-steady terminal velocity under parachute.
-    State is position only: [rN, rE, rD].
+    The vehicle drifts horizontally at the local wind speed and
+    descends with dynamically integrated vertical velocity under
+    parachute drag.  State is [rN, rE, rD, vD].
 
     Returns (t_out, y_out, sm_out, n_steps).  SM is zero throughout
     (no aerodynamic stability under parachute).
     """
     MAX_STEPS = 20000
-    NS = 3
+    NS = 4
     t_out = np.empty(MAX_STEPS)
     y_out = np.empty((MAX_STEPS, NS))
     sm_out = np.zeros(MAX_STEPS, dtype=np.float64)
@@ -1343,7 +1350,7 @@ def integrate_descent(
                     y_out[n, j] = y[j]
                 n += 1
 
-            if y[2] >= 0.0:
+            if y[2] >= -stop_alt:
                 break
 
         factor = optimal_step_factor(err)
@@ -1355,22 +1362,13 @@ def integrate_descent(
 def _descent_mach(
     y_desc: np.ndarray,
     n_desc: int,
-    m_dry: float,
-    drogue_cda: float,
-    main_cda: float,
-    main_deploy_alt: float,
-    scenario: int,
 ) -> np.ndarray:
-    """Compute Mach at each descent step from terminal velocity."""
+    """Compute Mach at each descent step from the integrated vD."""
     mach = np.empty(n_desc, dtype=np.float64)
     for i in range(n_desc):
         h = max(-float(y_desc[i, 2]), 0.0)
-        _, _, rho, a, _ = isa(h)
-        cda = _parachute_cda(h, drogue_cda, main_cda, main_deploy_alt, scenario)
-        if cda > 1.0e-12 and rho > 0.0:
-            vD = math.sqrt(2.0 * m_dry * _G0 / (rho * cda))
-        else:
-            vD = _G0
+        _, _, _, a, _ = isa(h)
+        vD = y_desc[i, 3]
         mach[i] = vD / a if a > 0.0 else 0.0
     return mach
 
@@ -1576,10 +1574,6 @@ def run_trajectory(
             # No descent (early termination)
         )
 
-    descent_state0 = np.array([
-        apogee_pos[0], apogee_pos[1], apogee_pos[2],
-    ], dtype=np.float64)
-
     drogue_cda = p.drogue_cda if p.has_drogue else 0.0
     main_cda = p.main_cda if p.has_main else 0.0
     main_deploy_alt = p.main_deploy_alt
@@ -1588,20 +1582,54 @@ def run_trajectory(
     if scenario == SCENARIO_NOMINAL and main_deploy_alt < 0.0:
         effective_scenario = SCENARIO_PREMATURE_MAIN
 
-    # ---- Phase 3: 3DoF parachute descent ----
-    t_desc, y_desc, sm_desc, n_desc = integrate_descent(
-        apogee_t, descent_state0,
-        p.wind_alt, p.wind_east, p.wind_north,
-        p.m_dry, drogue_cda, main_cda, main_deploy_alt,
-        effective_scenario,
-        p.rtol, p.atol,
-    )
+    # vD starts at zero — the rocket is momentarily stationary at apogee.
+    # The integrator accelerates it under gravity until drogue drag balances.
+    descent_state0 = np.array([
+        apogee_pos[0], apogee_pos[1], apogee_pos[2], 0.0,
+    ], dtype=np.float64)
 
-    # Mach from quasi-steady terminal velocity at each descent step
-    mach_desc = _descent_mach(
-        y_desc, n_desc, p.m_dry,
-        drogue_cda, main_cda, main_deploy_alt, effective_scenario,
-    )
+    # ---- Phase 3: parachute descent (dynamic vD) ----
+    # For nominal dual-deploy, split into two smooth legs to avoid the
+    # CdA step discontinuity at main_deploy_alt.  Leg 1 uses drogue only;
+    # leg 2 uses drogue + main from the deploy altitude to ground.
+    if (effective_scenario == SCENARIO_NOMINAL
+            and main_deploy_alt > 0.0
+            and p.has_main and p.has_drogue):
+        # Leg 1: apogee → main deploy altitude (drogue only)
+        t1, y1, sm1, n1 = integrate_descent(
+            apogee_t, descent_state0,
+            p.wind_alt, p.wind_east, p.wind_north,
+            p.m_dry, drogue_cda, 0.0, 0.0,
+            SCENARIO_DROGUE_ONLY,
+            p.rtol, p.atol,
+            stop_alt=main_deploy_alt,
+        )
+        # Leg 2: main deploy → ground (drogue + main)
+        leg2_state = y1[n1 - 1].copy()
+        leg2_t0 = t1[n1 - 1]
+        t2, y2, sm2, n2 = integrate_descent(
+            leg2_t0, leg2_state,
+            p.wind_alt, p.wind_east, p.wind_north,
+            p.m_dry, drogue_cda, main_cda, main_deploy_alt,
+            SCENARIO_PREMATURE_MAIN,
+            p.rtol, p.atol,
+        )
+        # Stitch (skip duplicate point at join)
+        t_desc = np.concatenate((t1[:n1], t2[1:n2]))
+        y_desc = np.concatenate((y1[:n1], y2[1:n2]))
+        sm_desc = np.concatenate((sm1[:n1], sm2[1:n2]))
+        n_desc = n1 + n2 - 1
+    else:
+        t_desc, y_desc, sm_desc, n_desc = integrate_descent(
+            apogee_t, descent_state0,
+            p.wind_alt, p.wind_east, p.wind_north,
+            p.m_dry, drogue_cda, main_cda, main_deploy_alt,
+            effective_scenario,
+            p.rtol, p.atol,
+        )
+
+    # Mach from the integrated descent velocity
+    mach_desc = _descent_mach(y_desc, n_desc)
 
     land_idx = n_desc - 1
     landing_pos = y_desc[land_idx, :3].copy()
