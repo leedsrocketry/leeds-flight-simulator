@@ -1451,9 +1451,13 @@ def run_trajectory(
     apogee_t = t_full[apogee_idx]
     apogee_pos = apogee_state[:3].copy()
 
-    # Split into ascent and (for ballistic) 6DoF descent histories
-    t_asc = t_full[:apogee_idx + 1]
-    s_asc = s_full[:apogee_idx + 1]
+    # Split at apogee for parachute scenarios; keep full history for ballistic
+    if is_ballistic:
+        t_asc = t_full
+        s_asc = s_full
+    else:
+        t_asc = t_full[:apogee_idx + 1]
+        s_asc = s_full[:apogee_idx + 1]
 
     # ---- Geofence checks ----
     _below_ceiling = apogee_alt <= buffered_ceiling
