@@ -31,7 +31,7 @@ import matplotlib.figure
 
 from config import SimulationConfig, Vehicle, VerificationConfig
 from motor import PropellantModel
-from aerodynamics import AeroModel, aero_forces_moments, ca_at
+from aerodynamics import AeroModel, aero_forces_moments, ca_at, cn_cp_at
 from atmosphere import isa
 from wind import WindEnsemble
 from dynamics import (
@@ -92,10 +92,11 @@ _PLOT_LABELS: dict[str, str] = {
     "sm": "Stability Margin (cal)",
     "thrust": "Thrust (N)",
     "mass": "Mass (kg)",
+    "cd": "CD",
 }
 
-# Quantities to compare — 3×2 grid (last cell empty)
-_COMPARED_QUANTITIES: list[str] = ["altitude", "mach", "sm", "thrust", "mass"]
+# Quantities to compare — 3×2 grid
+_COMPARED_QUANTITIES: list[str] = ["altitude", "mach", "sm", "thrust", "mass", "cd"]
 
 
 # ---------------------------------------------------------------------------
@@ -115,22 +116,10 @@ class QuantityComparison:
 
 
 @dataclass
-class CdComparison:
-    """Drag coefficient comparison (CD vs Mach, not vs time)."""
-    ref_mach: np.ndarray
-    ref_cd: np.ndarray
-    sim_mach: np.ndarray
-    sim_cd: np.ndarray
-    tolerance: float
-    passed: bool
-
-
-@dataclass
 class VerificationResult:
     """Aggregate result of the trajectory comparison."""
     passed: bool
     comparisons: dict[str, QuantityComparison]
-    cd_comparison: CdComparison | None
     figure: matplotlib.figure.Figure | None
 
 
@@ -366,12 +355,17 @@ def _extract_trajectory_quantities_6dof(
 
         sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
-        # Drag coefficient (C_A at the actual AoA ≈ CD for small α)
+        # True drag coefficient: CD = CA·cos(α) + CN·sin(α)
         alpha_rad = math.atan2(math.sqrt(v * v + w * w), u) if V > 1.0e-6 else 0.0
-        cd_asc[i] = ca_at(
+        ca = ca_at(
             am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
             M, Re, alpha_rad,
         )
+        cn, _ = cn_cp_at(
+            am.mach_grid, am.re_grid, am.alpha_grid,
+            am.cn_table, am.cp_table, M, Re, alpha_rad,
+        )
+        cd_asc[i] = ca * math.cos(alpha_rad) + cn * math.sin(alpha_rad)
 
     # --- Descent (thrust is zero, mass is dry, under parachute) ---
     if result.t_descent is not None and result.n_descent > 0:
@@ -484,28 +478,22 @@ def _compare_quantity(
 
 def _build_comparison_figure(
     comparisons: dict[str, QuantityComparison],
-    cd_comparison: "CdComparison | None" = None,
 ) -> matplotlib.figure.Figure:
     """Build a 3×2 comparison figure.
 
-    Five time-series quantities fill positions (0,0)–(2,0); the bottom-
-    right position (2,1) shows drag coefficient vs Mach number.
-    Reference in grey with tolerance band; simulator overlay in green
-    (pass) or red (fail).
+    Six time-series quantities fill all positions in a 3×2 grid, sharing
+    a common time x-axis.  Reference in grey with tolerance band;
+    simulator overlay in green (pass) or red (fail).
     """
     fig = plt.figure(figsize=(12, 9))
     fig.subplots_adjust(hspace=0.30, wspace=0.25, left=0.08, right=0.96,
                         top=0.95, bottom=0.07)
 
-    # Time-series axes share the x-axis (positions 0–4 in the 3×2 grid).
-    # The CD-vs-Mach axis (position 5) has its own x-axis.
     gs = fig.add_gridspec(3, 2)
     time_axes: list[matplotlib.axes.Axes] = []
     first_ax: matplotlib.axes.Axes | None = None
     for row in range(3):
         for col in range(2):
-            if row == 2 and col == 1:
-                continue  # reserve for CD vs Mach
             ax = fig.add_subplot(gs[row, col], sharex=first_ax)
             time_axes.append(ax)
             if first_ax is None:
@@ -542,38 +530,10 @@ def _build_comparison_figure(
     for idx in range(len(plotted_quantities), len(time_axes)):
         time_axes[idx].set_visible(False)
 
-    # X-label only on the visible bottom-row time axis
-    bottom_time_ax = time_axes[4] if len(time_axes) > 4 else time_axes[-1]
-    if bottom_time_ax.get_visible():
-        bottom_time_ax.set_xlabel("Time (s)")
-
-    # --- CD vs Mach (bottom-right) ---
-    if cd_comparison is not None:
-        ax_cd = fig.add_subplot(gs[2, 1])
-        ref_m = cd_comparison.ref_mach
-        ref_cd = cd_comparison.ref_cd
-        sim_m = cd_comparison.sim_mach
-        sim_cd = cd_comparison.sim_cd
-        tol = cd_comparison.tolerance
-
-        ax_cd.plot(ref_m, ref_cd,
-                   color="grey", linewidth=1.5, label="Reference")
-        ax_cd.fill_between(
-            ref_m,
-            ref_cd * (1.0 - tol),
-            ref_cd * (1.0 + tol),
-            color="grey", alpha=0.2,
-        )
-
-        sim_colour = "#2d7a2d" if cd_comparison.passed else "red"
-        ax_cd.plot(sim_m, sim_cd,
-                   color=sim_colour, linewidth=1.2, label="LFS")
-
-        ax_cd.set_xlabel("Mach")
-        ax_cd.set_ylabel("CD")
-        ax_cd.set_xlim(float(np.min(ref_m)), float(np.max(ref_m)))
-        ax_cd.legend(fontsize=8)
-        ax_cd.spines[["right", "top"]].set_visible(False)
+    # X-label on the bottom-row axes
+    for ax in time_axes[-2:]:
+        if ax.get_visible():
+            ax.set_xlabel("Time (s)")
 
     return fig
 
@@ -722,69 +682,46 @@ def run_verification(
         "sm": ver_cfg.sm_tolerance,
         "thrust": ver_cfg.thrust_tolerance,
         "mass": ver_cfg.mass_tolerance,
+        "cd": ver_cfg.cd_tolerance,
     }
+
+    # For CD, truncate at apogee: after apogee the reference CD is the
+    # parachute drag coefficient and the simulator sets CD to zero, so
+    # post-apogee values are not comparable as body aerodynamic CD.
+    ref_apogee = int(np.argmax(ref_data["altitude"])) + 1
+    sim_apogee = int(np.argmax(sim_data["altitude"])) + 1
 
     comparisons: dict[str, QuantityComparison] = {}
     for qty in _COMPARED_QUANTITIES:
         if qty not in ref_data:
             continue
+        if qty == "cd":
+            ref_t = ref_data["time"][:ref_apogee]
+            ref_v = ref_data["cd"][:ref_apogee]
+            sim_t = sim_data["time"][:sim_apogee]
+            sim_v = sim_data["cd"][:sim_apogee]
+        else:
+            ref_t = ref_data["time"]
+            ref_v = ref_data[qty]
+            sim_t = sim_data["time"]
+            sim_v = sim_data[qty]
         comparisons[qty] = _compare_quantity(
             name=qty,
-            ref_time=ref_data["time"],
-            ref_values=ref_data[qty],
-            sim_time=sim_data["time"],
-            sim_values=sim_data[qty],
+            ref_time=ref_t,
+            ref_values=ref_v,
+            sim_time=sim_t,
+            sim_values=sim_v,
             tolerance=tolerance_map[qty],
             exceedance_fraction=ver_cfg.exceedance_fraction,
         )
 
     all_passed = all(c.passed for c in comparisons.values())
 
-    # --- CD vs Mach comparison ---
-    cd_comparison: CdComparison | None = None
-    if "cd" in ref_data and "cd" in sim_data:
-        # Sort both by Mach for a clean plot
-        ref_order = np.argsort(ref_data["mach"])
-        ref_mach = ref_data["mach"][ref_order]
-        ref_cd = ref_data["cd"][ref_order]
-
-        sim_order = np.argsort(sim_data["mach"])
-        sim_mach = sim_data["mach"][sim_order]
-        sim_cd = sim_data["cd"][sim_order]
-
-        # Clip simulator to reference Mach range
-        m_min, m_max = float(ref_mach[0]), float(ref_mach[-1])
-        sim_mask = (sim_mach >= m_min) & (sim_mach <= m_max)
-        sim_mach = sim_mach[sim_mask]
-        sim_cd = sim_cd[sim_mask]
-
-        # Interpolate simulator CD onto reference Mach points for pass/fail
-        sim_cd_interp = np.interp(ref_mach, sim_mach, sim_cd)
-        floor = _TOLERANCE_FLOORS.get("cd", 0.01)
-        scale = np.maximum(np.abs(ref_cd), floor)
-        within = np.abs(sim_cd_interp - ref_cd) <= ver_cfg.cd_tolerance * scale
-        n_outside = int(np.sum(~within))
-        n_total = len(within)
-        cd_passed = (n_outside / n_total) <= ver_cfg.exceedance_fraction if n_total > 0 else True
-
-        cd_comparison = CdComparison(
-            ref_mach=ref_mach,
-            ref_cd=ref_cd,
-            sim_mach=sim_mach,
-            sim_cd=sim_cd,
-            tolerance=ver_cfg.cd_tolerance,
-            passed=cd_passed,
-        )
-
-        if not cd_passed:
-            all_passed = False
-
     # --- Build comparison figure ---
-    fig = _build_comparison_figure(comparisons, cd_comparison)
+    fig = _build_comparison_figure(comparisons)
 
     return VerificationResult(
         passed=all_passed,
         comparisons=comparisons,
-        cd_comparison=cd_comparison,
         figure=fig,
     )

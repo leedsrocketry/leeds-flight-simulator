@@ -663,8 +663,9 @@ def verify(config_path: Path, azimuth: float | None,
     if dump_csv is not None:
         import csv
         dump_path = Path(dump_csv).resolve()
-        # All comparisons share the same ref_time (interpolated to reference timebase)
-        qty_names = list(ver_result.comparisons.keys())
+        # Quantities may span different time ranges (e.g. CD is
+        # truncated at apogee), so write each on its own timebase.
+        qty_names = [q for q in ver_result.comparisons if q != "cd"]
         first = ver_result.comparisons[qty_names[0]]
 
         with open(dump_path, "w", newline="", encoding="utf-8") as f:
@@ -682,6 +683,21 @@ def verify(config_path: Path, azimuth: float | None,
                     row.append(f"{c.sim_values[i]:.6f}")
                     row.append(f"{c.sim_values[i] - c.ref_values[i]:.6f}")
                 writer.writerow(row)
+
+        # CD comparison has a shorter timebase; append as a second file
+        if "cd" in ver_result.comparisons:
+            cd_cmp = ver_result.comparisons["cd"]
+            cd_path = dump_path.with_stem(dump_path.stem + "_cd")
+            with open(cd_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["time_s", "ref_cd", "lfs_cd", "err_cd"])
+                for i in range(len(cd_cmp.ref_time)):
+                    writer.writerow([
+                        f"{cd_cmp.ref_time[i]:.6f}",
+                        f"{cd_cmp.ref_values[i]:.6f}",
+                        f"{cd_cmp.sim_values[i]:.6f}",
+                        f"{cd_cmp.sim_values[i] - cd_cmp.ref_values[i]:.6f}",
+                    ])
 
         console.print(f"\nComparison data written to: {dump_path}")
 
