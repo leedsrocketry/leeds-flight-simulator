@@ -911,6 +911,6 @@ leeds-flight-simulator/      ← git repo root = package root
     ├── wind_profiles.npz
     ├── d802.geojson
     ├── coastline.geojson
-    ├── rasaero-nominal-simulation.csv
+    ├── rasaero_nominal_simulation.csv
     └── simulation.yaml
 ```
