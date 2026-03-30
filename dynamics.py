@@ -117,8 +117,9 @@ class SimParams:
     motor_cg_loaded: float
     I_roll_dry: float
     I_lateral_dry: float
-    prop_I_roll: float
-    prop_I_lateral: float
+    prop_r_outer: float
+    prop_r_inner_0: float
+    prop_length: float
 
     # Aero (from AeroModel)
     mach_g: np.ndarray
@@ -566,7 +567,7 @@ def _sixdof_deriv(
     nozzle_area: float, nozzle_position: float,
     m_dry: float, cg_dry: float, motor_cg_loaded: float,
     I_roll_dry: float, I_lateral_dry: float,
-    prop_I_roll: float, prop_I_lateral: float,
+    prop_r_outer: float, prop_r_inner_0: float, prop_length: float,
     impulse_factor: float,
     # Aero
     mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
@@ -649,7 +650,8 @@ def _sixdof_deriv(
     I_roll, I_lat = inertia_at(
         motor_times, motor_thrusts, m_prop_0, total_impulse,
         m_dry, cg_dry, motor_cg_loaded,
-        I_roll_dry, I_lateral_dry, prop_I_roll, prop_I_lateral, t,
+        I_roll_dry, I_lateral_dry,
+        prop_r_outer, prop_r_inner_0, prop_length, t,
     )
 
     # --- Aerodynamic forces and moments ---
@@ -743,7 +745,7 @@ def integrate_sixdof(
     nozzle_area: float, nozzle_position: float,
     m_dry: float, cg_dry: float, motor_cg_loaded: float,
     I_roll_dry: float, I_lateral_dry: float,
-    prop_I_roll: float, prop_I_lateral: float,
+    prop_r_outer: float, prop_r_inner_0: float, prop_length: float,
     impulse_factor: float,
     # Aero
     mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
@@ -820,7 +822,7 @@ def integrate_sixdof(
     _na = nozzle_area; _np_ = nozzle_position
     _md = m_dry; _cgd = cg_dry; _mcl = motor_cg_loaded
     _ird = I_roll_dry; _ild = I_lateral_dry
-    _pir = prop_I_roll; _pil = prop_I_lateral
+    _pro = prop_r_outer; _pri = prop_r_inner_0; _pl = prop_length
     _if = impulse_factor
     _mg = mach_g; _rg = re_g; _ag = alpha_g
     _cat = ca_tbl; _cnt = cn_tbl; _cpt = cp_tbl
@@ -834,7 +836,7 @@ def integrate_sixdof(
     _sixdof_deriv(
         t, y, k1,
         _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
-        _ird, _ild, _pir, _pil, _if,
+        _ird, _ild, _pro, _pri, _pl, _if,
         _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
         _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
     )
@@ -851,7 +853,7 @@ def integrate_sixdof(
         _sixdof_deriv(
             t + DP_C[1] * h_step, ys, k2,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
-            _ird, _ild, _pir, _pil, _if,
+            _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
         )
@@ -862,7 +864,7 @@ def integrate_sixdof(
         _sixdof_deriv(
             t + DP_C[2] * h_step, ys, k3,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
-            _ird, _ild, _pir, _pil, _if,
+            _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
         )
@@ -875,7 +877,7 @@ def integrate_sixdof(
         _sixdof_deriv(
             t + DP_C[3] * h_step, ys, k4,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
-            _ird, _ild, _pir, _pil, _if,
+            _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
         )
@@ -889,7 +891,7 @@ def integrate_sixdof(
         _sixdof_deriv(
             t + DP_C[4] * h_step, ys, k5,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
-            _ird, _ild, _pir, _pil, _if,
+            _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
         )
@@ -904,7 +906,7 @@ def integrate_sixdof(
         _sixdof_deriv(
             t + DP_C[5] * h_step, ys, k6,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
-            _ird, _ild, _pir, _pil, _if,
+            _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
         )
@@ -920,7 +922,7 @@ def integrate_sixdof(
         alpha_rad, cp_whole, mach_now = _sixdof_deriv(
             t + h_step, y_new, k7,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
-            _ird, _ild, _pir, _pil, _if,
+            _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
         )
@@ -1416,8 +1418,9 @@ def build_sim_params(
         motor_cg_loaded=motor.motor_cg_loaded,
         I_roll_dry=motor.I_roll_dry,
         I_lateral_dry=motor.I_lateral_dry,
-        prop_I_roll=motor.prop_I_roll,
-        prop_I_lateral=motor.prop_I_lateral,
+        prop_r_outer=motor.prop_r_outer,
+        prop_r_inner_0=motor.prop_r_inner_0,
+        prop_length=motor.prop_length,
         mach_g=aero.mach_grid,
         re_g=aero.re_grid,
         alpha_g=aero.alpha_grid,
@@ -1513,7 +1516,8 @@ def run_trajectory(
         p.motor_times, p.motor_thrusts, p.m_prop_0, p.total_impulse,
         p.nozzle_area, p.nozzle_position, p.m_dry, p.cg_dry,
         p.motor_cg_loaded,
-        p.I_roll_dry, p.I_lateral_dry, p.prop_I_roll, p.prop_I_lateral,
+        p.I_roll_dry, p.I_lateral_dry,
+        p.prop_r_outer, p.prop_r_inner_0, p.prop_length,
         p.impulse_factor,
         p.mach_g, p.re_g, p.alpha_g,
         p.ca_tbl, p.cn_tbl, p.cp_tbl,

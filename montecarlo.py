@@ -172,8 +172,9 @@ def build_sim_params(
         motor_cg_loaded=motor_model.motor_cg_loaded,
         I_roll_dry=motor_model.I_roll_dry,
         I_lateral_dry=motor_model.I_lateral_dry,
-        prop_I_roll=motor_model.prop_I_roll,
-        prop_I_lateral=motor_model.prop_I_lateral,
+        prop_r_outer=motor_model.prop_r_outer,
+        prop_r_inner_0=motor_model.prop_r_inner_0,
+        prop_length=motor_model.prop_length,
         # Aero
         mach_g=aero_model.mach_grid,
         re_g=aero_model.re_grid,

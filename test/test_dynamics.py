@@ -490,7 +490,7 @@ def test_sixdof_gravity_only_apogee():
         mt, mth, mp0, ti,
         0.0, 1.0,             # nozzle_area, nozzle_position
         10.0, 0.5, 0.5,       # m_dry, cg_dry, motor_cg_loaded
-        0.01, 0.01, 0.001, 0.001,  # inertias
+        0.01, 0.01, 0.01, 0.0, 0.1,  # I_roll_dry, I_lat_dry, prop_r_outer, prop_r_inner_0, prop_length
         1.0,                   # impulse_factor
         mg, rg, ag, cat, cnt, cpt, cnc, cpc,
         False, cnaf,           # no components
@@ -537,7 +537,7 @@ def test_integrator_convergence():
         nozzle_area=0.0, nozzle_position=1.0,
         m_dry=10.0, cg_dry=0.5, motor_cg_loaded=0.5,
         I_roll_dry=0.01, I_lateral_dry=0.01,
-        prop_I_roll=0.001, prop_I_lateral=0.001,
+        prop_r_outer=0.01, prop_r_inner_0=0.0, prop_length=0.1,
         impulse_factor=1.0,
         mach_g=mg, re_g=rg, alpha_g=ag,
         ca_tbl=cat, cn_tbl=cnt, cp_tbl=cpt,
@@ -634,7 +634,7 @@ def test_sixdof_deriv_gravity_direction():
         mt, mth, mp0, ti,
         0.0, 1.0,
         10.0, 0.5, 0.5,
-        0.01, 0.01, 0.001, 0.001,
+        0.01, 0.01, 0.01, 0.0, 0.1,  # I_roll_dry, I_lat_dry, prop_r_outer, prop_r_inner_0, prop_length
         1.0,
         mg, rg, ag, cat, cnt, cpt, cnc, cpc, False, cnaf,
         0.1, 1.0, 0.01, 0.05,

@@ -1,13 +1,18 @@
 """Motor model: time-varying thrust, mass, CG, and moments of inertia.
 
 Dry vehicle properties (m_dry, cg_dry, I_roll_dry, I_lateral_dry) are derived
-in build_motor_model from the wet vehicle properties and the propellant mass and
-inertias provided in vehicle.yaml.  The user never has to specify dry values.
+in build_motor_model from the wet vehicle properties and the motor geometry
+in the .eng file header.  The user never has to specify dry values.
 
-An inside-out burn model is assumed: the propellant CG stays fixed at
-``motor_cg_loaded`` throughout the burn, and propellant inertias scale
-linearly with remaining propellant fraction.  Instantaneous inertias are
-computed via the parallel-axis theorem at each timestep.
+Motor CG is assumed at the geometric centre of the motor, which is flush
+with the aft end of the vehicle: ``motor_cg = vehicle_length − motor_length/2``.
+The nozzle exit plane is at ``vehicle_length``.
+
+Propellant is modelled as an annular cylinder (outer radius from the .eng
+diameter minus optional casing thickness, inner radius from an optional bore
+diameter).  During the burn the inner radius grows outward following the mass
+flow rate (standard BATES grain assumption).  Propellant moments of inertia
+are recomputed from the current annular geometry at each timestep.
 
 Thrust correction for altitude:
 
@@ -32,7 +37,8 @@ build_motor_model(motor_data, vehicle_cfg)  →  MotorModel
     inertia_at(times, thrusts, m_prop_0, total_impulse,
                m_dry, cg_dry, motor_cg_loaded,
                I_roll_dry, I_lateral_dry,
-               prop_I_roll, prop_I_lateral, t)                →  (I_roll, I_lat)
+               prop_r_outer, prop_r_inner_0, prop_length,
+               t)                                             →  (I_roll, I_lat)
 
 MotorModel bundles all scalars/arrays needed to call the @njit functions.
 """
@@ -78,12 +84,20 @@ class MotorModel:
     # Inertias
     I_roll_dry: float        # dry roll inertia about roll axis [kg·m²]
     I_lateral_dry: float     # dry lateral inertia about dry CG [kg·m²]
-    prop_I_roll: float       # propellant roll inertia about roll axis [kg·m²]
-    prop_I_lateral: float    # propellant lateral inertia about propellant CG [kg·m²]
+
+    # Propellant annular geometry for time-varying inertia
+    prop_r_outer: float      # propellant outer radius [m]
+    prop_r_inner_0: float    # initial propellant inner radius (bore) [m]
+    prop_length: float       # motor/propellant length [m]
 
 
 def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> MotorModel:
     """Construct a MotorModel, deriving dry vehicle properties from wet + propellant.
+
+    Motor CG is placed at the geometric centre of the motor, flush with the
+    aft end of the vehicle.  Propellant inertias are computed from the annular
+    cross-section geometry (outer radius from .eng diameter, optional casing
+    thickness and bore diameter from vehicle.yaml).
 
     Raises
     ------
@@ -109,6 +123,37 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
     mass = vehicle_cfg.mass
     geom = vehicle_cfg.geometry
 
+    # --- motor geometry
+    motor_length = motor_data.length_m
+    r_motor = motor_data.diameter_m / 2.0
+
+    # Motor CG at geometric centre, flush with aft end
+    motor_cg_loaded = geom.length - motor_length / 2.0
+    nozzle_position = geom.length
+
+    # Propellant annular geometry
+    if mass.casing_thickness is not None:
+        prop_r_outer = r_motor - mass.casing_thickness
+    else:
+        prop_r_outer = r_motor
+
+    if mass.propellant_inner_diameter is not None:
+        prop_r_inner_0 = mass.propellant_inner_diameter / 2.0
+    else:
+        prop_r_inner_0 = 0.0
+
+    if prop_r_inner_0 >= prop_r_outer:
+        raise ValueError(
+            f"Propellant inner radius ({prop_r_inner_0*1000:.1f} mm) must be "
+            f"less than outer radius ({prop_r_outer*1000:.1f} mm)"
+        )
+
+    # --- initial propellant inertias (for deriving dry properties)
+    r_o2 = prop_r_outer ** 2
+    r_i2 = prop_r_inner_0 ** 2
+    I_roll_prop_0 = 0.5 * m_prop_0 * (r_o2 + r_i2)
+    I_lat_prop_0 = m_prop_0 * (3.0 * (r_o2 + r_i2) + motor_length ** 2) / 12.0
+
     # --- dry mass
     m_dry = mass.wet_mass - m_prop_0
     if m_dry <= 0:
@@ -118,17 +163,17 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
         )
 
     # --- dry CG
-    # wet_mass·wet_cg = m_dry·cg_dry + m_prop·wet_motor_cg
-    cg_dry = (mass.wet_mass * mass.wet_cg - m_prop_0 * mass.wet_motor_cg) / m_dry
+    # wet_mass·wet_cg = m_dry·cg_dry + m_prop·motor_cg_loaded
+    cg_dry = (mass.wet_mass * mass.wet_cg - m_prop_0 * motor_cg_loaded) / m_dry
 
     # --- dry roll inertia
     # Roll axis is the symmetry axis, so propellant contribution needs no PAT.
-    I_roll_dry = mass.wet_inertia_roll - mass.propellant_inertia_roll
+    I_roll_dry = mass.wet_inertia_roll - I_roll_prop_0
 
     # --- dry lateral inertia
     # Step 1: transfer propellant inertia from propellant CG → wet vehicle CG
-    d_prop_wet = mass.wet_motor_cg - mass.wet_cg
-    I_prop_lat_at_wet_cg = mass.propellant_inertia_lateral + m_prop_0 * d_prop_wet ** 2
+    d_prop_wet = motor_cg_loaded - mass.wet_cg
+    I_prop_lat_at_wet_cg = I_lat_prop_0 + m_prop_0 * d_prop_wet ** 2
     # Step 2: dry lateral inertia about wet vehicle CG
     I_lat_dry_at_wet_cg = mass.wet_inertia_lateral - I_prop_lat_at_wet_cg
     # Step 3: transfer to dry vehicle CG
@@ -142,14 +187,15 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
         m_casing=m_casing,
         total_impulse=total_impulse,
         nozzle_area=geom.nozzle_area,
-        nozzle_position=geom.nozzle_position,
+        nozzle_position=nozzle_position,
         m_dry=m_dry,
         cg_dry=cg_dry,
-        motor_cg_loaded=mass.wet_motor_cg,
+        motor_cg_loaded=motor_cg_loaded,
         I_roll_dry=I_roll_dry,
         I_lateral_dry=I_lateral_dry,
-        prop_I_roll=mass.propellant_inertia_roll,
-        prop_I_lateral=mass.propellant_inertia_lateral,
+        prop_r_outer=prop_r_outer,
+        prop_r_inner_0=prop_r_inner_0,
+        prop_length=motor_length,
     )
 
 
@@ -299,32 +345,54 @@ def inertia_at(
     motor_cg_loaded: float,
     I_roll_dry: float,
     I_lateral_dry: float,
-    prop_I_roll: float,
-    prop_I_lateral: float,
+    prop_r_outer: float,
+    prop_r_inner_0: float,
+    prop_length: float,
     t: float,
 ) -> tuple[float, float]:
     """Whole-vehicle (I_roll, I_lateral) [kg·m²] at time *t*.
 
-    Inside-out burn: propellant CG stays at ``motor_cg_loaded`` and propellant
-    inertias scale linearly with remaining propellant fraction.  The parallel-
-    axis theorem is applied to transfer each mass contribution to the
-    instantaneous vehicle CG.
+    Propellant is an annular cylinder burning radially outward.  As the mass
+    fraction *f* decreases the inner radius grows:
+
+        r_inner(t) = sqrt(r_outer² − f · (r_outer² − r_inner_0²))
+
+    Inertias are recomputed from the current annular geometry rather than
+    scaled linearly with mass fraction.  The parallel-axis theorem transfers
+    each contribution to the instantaneous vehicle CG.
     """
     m_p = m_prop_at(times, thrusts, m_prop_0, total_impulse, t)
-    prop_frac = m_p / m_prop_0   # 1 at ignition → 0 at burnout
+
+    if m_p <= 0.0:
+        # Burnout — only dry inertias remain
+        return I_roll_dry, I_lateral_dry
+
+    f = m_p / m_prop_0   # 1 at ignition → 0 at burnout
+
+    # Current inner radius (radial burn outward from bore)
+    r_o2 = prop_r_outer * prop_r_outer
+    r_i0_2 = prop_r_inner_0 * prop_r_inner_0
+    r_i2 = r_o2 - f * (r_o2 - r_i0_2)
+    # Guard against floating-point overshoot
+    if r_i2 < 0.0:
+        r_i2 = 0.0
 
     # Current vehicle CG
     cg_t = (m_dry * cg_dry + m_p * motor_cg_loaded) / (m_dry + m_p)
 
-    # Roll: no PAT needed (propellant is symmetric about roll axis)
-    I_roll = I_roll_dry + prop_I_roll * prop_frac
+    # Propellant roll inertia (annulus, no PAT needed)
+    I_roll_prop = 0.5 * m_p * (r_o2 + r_i2)
+    I_roll = I_roll_dry + I_roll_prop
 
-    # Lateral — dry contribution about current CG
+    # Propellant lateral inertia about its own CG (annular cylinder)
+    I_lat_prop_own = m_p * (3.0 * (r_o2 + r_i2) + prop_length * prop_length) / 12.0
+
+    # Lateral — dry contribution about current CG (PAT)
     d_dry = cg_dry - cg_t
     I_lat_dry = I_lateral_dry + m_dry * d_dry * d_dry
 
-    # Lateral — propellant contribution about current CG (via PAT from propellant CG)
+    # Lateral — propellant contribution about current CG (PAT)
     d_prop = motor_cg_loaded - cg_t
-    I_lat_prop = prop_I_lateral * prop_frac + m_p * d_prop * d_prop
+    I_lat_prop = I_lat_prop_own + m_p * d_prop * d_prop
 
     return I_roll, I_lat_dry + I_lat_prop

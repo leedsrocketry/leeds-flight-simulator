@@ -56,6 +56,8 @@ def test_parse_basic(tmp_path):
     md = load_motor(p)
     assert isinstance(md, MotorData)
     assert md.name == "M2020"
+    assert md.diameter_m == pytest.approx(0.098)
+    assert md.length_m == pytest.approx(0.732)
     assert md.m_prop_kg == pytest.approx(5.0)
     assert md.m_motor_kg == pytest.approx(8.0)
 
@@ -120,23 +122,27 @@ def test_real_motor_file_loads(motor_path):
 _VEHICLE_YAML = (
     "motor: \"motor.eng\"\naero_tables: \"aero_tables\"\n"
     "geometry:\n  diameter: 0.1\n  length: 2.0\n"
-    "  nozzle_position: 1.95\n  nozzle_diameter: 0.05\n  fin_cp_radius: 0.09\n"
-    "mass:\n  wet_mass: 20.0\n  wet_cg: 0.90\n  wet_motor_cg: 1.40\n"
-    "  propellant_inertia_roll: 0.001\n  propellant_inertia_lateral: 0.20\n"
+    "  nozzle_diameter: 0.05\n  fin_cp_radius: 0.09\n"
+    "mass:\n  wet_mass: 20.0\n  wet_cg: 0.90\n"
     "  wet_inertia_lateral: 4.0\n  wet_inertia_roll: 0.010\n"
     "recovery:\n"
     "  drogue:\n    cd: 1.5\n    area: 0.05\n    threshold: apogee\n"
     "  main:\n    cd: 2.2\n    area: 2.5\n    threshold: 305\n"
 )
-# Derived values for hand-checking (m_prop=5.0 from _SIMPLE_ENG):
+# Derived values for hand-checking (m_prop=5.0, motor 98mm×732mm from _SIMPLE_ENG):
+#   motor_cg_loaded = 2.0 - 0.732/2 = 1.634 m
+#   prop_r_outer = 0.098/2 = 0.049 m  (no casing_thickness)
+#   prop_r_inner_0 = 0.0 m  (no propellant_inner_diameter → solid cylinder)
+#   I_roll_prop_0 = 0.5 * 5.0 * 0.049² = 0.006003 kg·m²
+#   I_lat_prop_0 = 5.0 * (3*0.049² + 0.732²) / 12 = 0.22626 kg·m²
 #   m_dry = 20.0 - 5.0 = 15.0 kg
-#   cg_dry = (20.0*0.90 - 5.0*1.40) / 15.0 = 11.0/15.0 ≈ 0.7333 m
-#   I_roll_dry = 0.010 - 0.001 = 0.009 kg·m²
-#   d_prop_wet = 1.40 - 0.90 = 0.50 m
-#   I_prop_lat_wet_cg = 0.20 + 5.0*0.25 = 1.45 kg·m²
-#   I_lat_dry_wet_cg  = 4.0 - 1.45 = 2.55 kg·m²
-#   d_dry_wet = 0.7333 - 0.90 = −0.1667 m
-#   I_lateral_dry = 2.55 - 15.0*0.02778 = 2.1333 kg·m²
+#   cg_dry = (20.0*0.90 - 5.0*1.634) / 15.0 ≈ 0.6553 m
+#   I_roll_dry = 0.010 - 0.006003 = 0.003997 kg·m²
+#   d_prop_wet = 1.634 - 0.90 = 0.734 m
+#   I_prop_lat_wet_cg = 0.22626 + 5.0*0.734² ≈ 2.92004 kg·m²
+#   I_lat_dry_wet_cg  = 4.0 - 2.92004 = 1.07996 kg·m²
+#   d_dry_wet = 0.6553 - 0.90 = −0.2447 m
+#   I_lateral_dry = 1.07996 - 15.0*0.2447² ≈ 0.1818 kg·m²
 
 
 def _make_model(tmp_path):
@@ -182,8 +188,9 @@ def test_dry_mass_computed(tmp_path):
 def test_dry_cg_computed(tmp_path):
     model, md, vc = _make_model(tmp_path)
     m_dry = vc.mass.wet_mass - md.m_prop_kg
+    motor_cg = vc.geometry.length - md.length_m / 2.0
     expected = (vc.mass.wet_mass * vc.mass.wet_cg
-                - md.m_prop_kg * vc.mass.wet_motor_cg) / m_dry
+                - md.m_prop_kg * motor_cg) / m_dry
     assert model.cg_dry == pytest.approx(expected, rel=1e-6)
 
 
@@ -323,7 +330,7 @@ def test_cg_at_burnout_is_dry(tmp_path):
 def test_cg_moves_forward_during_burn(tmp_path):
     """Motor is aft of CG → CG shifts forward (toward nosecone) as propellant burns."""
     model, _, vc = _make_model(tmp_path)
-    # wet_motor_cg (1.40) > wet_cg (0.90), so burning propellant moves CG forward
+    # motor_cg_loaded (1.634) > wet_cg (0.90), so burning propellant moves CG forward
     cg_mid = cg_at(model.times, model.thrusts, model.m_prop_0, model.total_impulse,
                    model.m_dry, model.cg_dry, model.motor_cg_loaded, 1.0)
     assert cg_mid < vc.mass.wet_cg
@@ -339,7 +346,7 @@ def _inertia(model, t):
         model.times, model.thrusts, model.m_prop_0, model.total_impulse,
         model.m_dry, model.cg_dry, model.motor_cg_loaded,
         model.I_roll_dry, model.I_lateral_dry,
-        model.prop_I_roll, model.prop_I_lateral,
+        model.prop_r_outer, model.prop_r_inner_0, model.prop_length,
         t,
     )
 

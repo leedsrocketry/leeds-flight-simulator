@@ -186,16 +186,52 @@ Key sections:
 
 ### `vehicle.yaml`
 
-Defines the vehicle's physical properties. All distances are in metres from the nosecone tip. All masses are in kg. Dry mass properties are derived automatically from the wet properties and propellant data.
+Defines the vehicle's physical properties. All distances are in metres from the nosecone tip. All masses are in kg. Dry mass properties are derived automatically from the wet properties and motor geometry.
 
 - **Reference area:** A_ref = π · d² / 4 (same convention as RASAero)
 - **Reference length:** Rocket's overall length, used for Reynolds number calculation (same convention as RASAero)
+- **Nozzle position:** Assumed at the aft end of the vehicle (= `length`); the motor is flush-mounted.
+- **Motor CG:** Derived from the `.eng` file header: `vehicle_length − motor_length / 2`. Stays fixed during the burn (inside-out burn model).
+- **Propellant inertias:** Derived from the annular cross-section geometry (see below).
+
+#### Optional motor geometry fields
+
+Two optional fields in the `mass` section refine the propellant inertia model:
+
+| Field | Default | Effect |
+|-------|---------|--------|
+| `propellant_inner_diameter` | 0 (solid cylinder) | Propellant bore diameter [m]. Defines the inner radius of the propellant annulus. |
+| `casing_thickness` | 0 (no casing) | Motor casing wall thickness [m]. Reduces the propellant outer radius by this amount. |
+
+A warning is emitted when either field is omitted, since the default assumptions (solid cylinder, no casing) underestimate propellant roll inertia for hollow-grain motors.
+
+#### Motor inertia model
+
+Propellant is modelled as an annular cylinder with outer radius `r_o` and initial inner radius `r_i`:
+
+- `r_o = motor_diameter / 2 − casing_thickness`
+- `r_i = propellant_inner_diameter / 2`
+
+Initial propellant inertias (used to derive dry vehicle inertias from the user-supplied wet values):
+
+- **Roll:** `I_roll = ½ m (r_o² + r_i²)`
+- **Lateral** (about propellant CG): `I_lat = m (3(r_o² + r_i²) + L²) / 12`
+
+During the burn the propellant burns radially outward from the bore. The inner radius grows as mass is consumed:
+
+```
+r_i(t) = sqrt( r_o² − f(t) · (r_o² − r_i₀²) )
+```
+
+where `f(t) = m_prop(t) / m_prop₀` is the remaining mass fraction. Propellant inertias are recomputed from the current annular geometry at each integration timestep, rather than scaled linearly with mass fraction. This correctly captures the increasing specific inertia of the remaining propellant as it sits at progressively larger radii.
+
+The parallel-axis theorem transfers the dry and propellant contributions to the instantaneous vehicle CG at each timestep.
 
 See `simulations/g2b2-safety-case/g2b2.yaml` for a fully annotated example.
 
 ### Motor File (`.eng`)
 
-Standard RASP/RockSim `.eng` file. Downloadable from [thrustcurve.org](https://www.thrustcurve.org) for most certified motors. Referenced from `vehicle.yaml`.
+Standard RASP/RockSim `.eng` file. Downloadable from [thrustcurve.org](https://www.thrustcurve.org) for most certified motors. Referenced from `vehicle.yaml`. The `.eng` header provides the motor's outer diameter, length, propellant mass, and total mass — all used to derive motor CG and propellant inertias automatically.
 
 ### Aerodynamic Tables
 

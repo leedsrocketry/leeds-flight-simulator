@@ -87,17 +87,15 @@ _VEHICLE_YAML = """
     geometry:
       diameter: 0.130
       length: 2.6
-      nozzle_position: 2.55
       nozzle_diameter: 0.08
       fin_cp_radius: 0.095
     mass:
       wet_mass: 26.5
       wet_cg: 1.15
-      wet_motor_cg: 1.82
-      propellant_inertia_roll: 0.05
-      propellant_inertia_lateral: 0.8
       wet_inertia_lateral: 5.2
       wet_inertia_roll: 0.012
+      propellant_inner_diameter: 0.030
+      casing_thickness: 0.002
     recovery:
       drogue:
         cd: 2.0
@@ -308,7 +306,7 @@ def test_vehicle_geometry(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.geometry.diameter == pytest.approx(0.130)
     assert v.geometry.length == pytest.approx(2.6)
-    assert v.geometry.nozzle_position == pytest.approx(2.55)
+    assert v.geometry.nozzle_position == pytest.approx(2.6)  # = length (flush aft)
     assert v.geometry.nozzle_diameter == pytest.approx(0.08)
     assert v.geometry.fin_cp_radius == pytest.approx(0.095)
 
@@ -332,15 +330,18 @@ def test_vehicle_mass(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.mass.wet_mass == pytest.approx(26.5)
     assert v.mass.wet_cg == pytest.approx(1.15)
-    assert v.mass.wet_motor_cg == pytest.approx(1.82)
 
 
 def test_vehicle_inertia(tmp_path):
     v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.mass.wet_inertia_roll == pytest.approx(0.012)
     assert v.mass.wet_inertia_lateral == pytest.approx(5.2)
-    assert v.mass.propellant_inertia_roll == pytest.approx(0.05)
-    assert v.mass.propellant_inertia_lateral == pytest.approx(0.8)
+
+
+def test_vehicle_propellant_geometry(tmp_path):
+    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    assert v.mass.propellant_inner_diameter == pytest.approx(0.030)
+    assert v.mass.casing_thickness == pytest.approx(0.002)
 
 
 def test_vehicle_recovery(tmp_path):

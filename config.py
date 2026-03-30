@@ -11,6 +11,7 @@ file itself; paths inside VehicleConfig are resolved relative to vehicle.yaml.
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -143,7 +144,6 @@ class SimulationConfig:
 class VehicleGeometry:
     diameter: float         # m — reference diameter
     length: float           # m — total length
-    nozzle_position: float  # m from nosecone tip — nozzle exit plane
     nozzle_diameter: float  # m — nozzle exit diameter (for thrust correction)
     fin_cp_radius: float    # m — fin CP spanwise distance from centreline
 
@@ -157,17 +157,20 @@ class VehicleGeometry:
         """π·dₑ²/4 [m²] — nozzle exit area for pressure thrust correction."""
         return math.pi * self.nozzle_diameter ** 2 / 4.0
 
+    @property
+    def nozzle_position(self) -> float:
+        """Nozzle exit plane [m] — assumed flush with the aft end."""
+        return self.length
+
 
 @dataclass(frozen=True)
 class VehicleMass:
     wet_mass: float              # kg — total mass at launch
     wet_cg: float                # m from nosecone tip — wet vehicle CG
-    wet_motor_cg: float          # m from nosecone tip — loaded motor CG
-                                 # used as propellant CG (inside-out burn model)
-    propellant_inertia_roll: float     # kg·m² — propellant roll inertia about roll axis
-    propellant_inertia_lateral: float  # kg·m² — propellant lateral inertia about propellant CG
     wet_inertia_lateral: float   # kg·m² — wet vehicle lateral inertia about wet CG
     wet_inertia_roll: float      # kg·m² — wet vehicle roll inertia about roll axis
+    propellant_inner_diameter: float | None  # m — propellant bore diameter (None = solid)
+    casing_thickness: float | None           # m — motor casing wall thickness (None = none)
 
 
 @dataclass(frozen=True)
@@ -456,22 +459,34 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
     fins_raw = raw.get("fins_aero_table")
     fins_aero_table: Path | None = _resolve(fins_raw) if fins_raw is not None else None
 
+    prop_inner_raw = mass.get("propellant_inner_diameter")
+    casing_raw = mass.get("casing_thickness")
+
+    if prop_inner_raw is None:
+        warnings.warn(
+            "No propellant_inner_diameter specified; assuming solid cylinder. "
+            "Propellant roll inertia will be underestimated for hollow grains."
+        )
+    if casing_raw is None:
+        warnings.warn(
+            "No casing_thickness specified; assuming propellant fills the full "
+            "motor diameter."
+        )
+
     return VehicleConfig(
         geometry=VehicleGeometry(
             diameter=float(geom["diameter"]),
             length=float(geom["length"]),
-            nozzle_position=float(geom["nozzle_position"]),
             nozzle_diameter=float(geom["nozzle_diameter"]),
             fin_cp_radius=float(geom["fin_cp_radius"]),
         ),
         mass=VehicleMass(
             wet_mass=float(mass["wet_mass"]),
             wet_cg=float(mass["wet_cg"]),
-            wet_motor_cg=float(mass["wet_motor_cg"]),
-            propellant_inertia_roll=float(mass["propellant_inertia_roll"]),
-            propellant_inertia_lateral=float(mass["propellant_inertia_lateral"]),
             wet_inertia_lateral=float(mass["wet_inertia_lateral"]),
             wet_inertia_roll=float(mass["wet_inertia_roll"]),
+            propellant_inner_diameter=float(prop_inner_raw) if prop_inner_raw is not None else None,
+            casing_thickness=float(casing_raw) if casing_raw is not None else None,
         ),
         recovery=VehicleRecovery(
             drogue=drogue,
@@ -493,9 +508,13 @@ class MotorData:
 
     Masses are in kg, time in seconds, thrust in Newtons.
     ``m_motor_kg`` is the total motor mass (casing + propellant) as stated in
-    the .eng header (\"total weight\" field).
+    the .eng header (\"total weight\" field).  ``diameter_m`` and ``length_m``
+    are the motor's outer diameter and length, converted from the mm values in
+    the .eng header.
     """
     name: str
+    diameter_m: float         # motor outer diameter [m]
+    length_m: float           # motor length [m]
     m_prop_kg: float          # propellant mass [kg]
     m_motor_kg: float         # total motor mass: casing + propellant [kg]
     time_s: np.ndarray        # (K,) thrust curve time points [s]
@@ -541,13 +560,19 @@ def load_motor(path: Path | str) -> MotorData:
         )
     name = header[0]
     try:
+        diameter_m = float(header[1]) / 1000.0
+        length_m = float(header[2]) / 1000.0
         m_prop_kg = float(header[4])
         m_motor_kg = float(header[5])
     except ValueError as exc:
         raise ValueError(
-            f"Could not parse motor masses from header: {data_lines[0]!r}"
+            f"Could not parse motor header fields: {data_lines[0]!r}"
         ) from exc
 
+    if diameter_m <= 0:
+        raise ValueError(f"Motor diameter must be > 0, got {diameter_m * 1000:.1f} mm")
+    if length_m <= 0:
+        raise ValueError(f"Motor length must be > 0, got {length_m * 1000:.1f} mm")
     if m_prop_kg <= 0:
         raise ValueError(f"Propellant mass must be > 0, got {m_prop_kg}")
     if m_motor_kg <= m_prop_kg:
@@ -588,6 +613,8 @@ def load_motor(path: Path | str) -> MotorData:
 
     return MotorData(
         name=name,
+        diameter_m=diameter_m,
+        length_m=length_m,
         m_prop_kg=m_prop_kg,
         m_motor_kg=m_motor_kg,
         time_s=time_arr,
