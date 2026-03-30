@@ -1,8 +1,4 @@
-"""Motor model: time-varying thrust, mass, CG, and moments of inertia.
-
-Dry vehicle properties (m_dry, cg_dry, I_roll_dry, I_lateral_dry) are derived
-in build_motor_model from the wet vehicle properties and the motor geometry
-in the .eng file header.  The user never has to specify dry values.
+"""Propellant model: thrust curve, motor geometry, and propellant-level helpers.
 
 Motor CG is assumed at the geometric centre of the motor, which is flush
 with the aft end of the vehicle: ``motor_cg = vehicle_length − motor_length/2``.
@@ -14,56 +10,174 @@ diameter).  During the burn the inner radius grows outward following the mass
 flow rate (standard BATES grain assumption).  Propellant moments of inertia
 are recomputed from the current annular geometry at each timestep.
 
-Thrust correction for altitude:
+Dry vehicle properties (m_dry, cg_dry, I_roll_dry, I_lateral_dry) are derived
+in config.py when the ``Vehicle`` dataclass is constructed.
 
-    F(h) = F₀ + Aₑ · (p₀ − p_ISA(h))
-
-where Aₑ = π·dₑ²/4 and p₀ = 101 325 Pa.  Use thrust_corrected_at in the
-dynamics hot loop; thrust_at returns the raw (sea-level) thrust curve value.
+Time-varying vehicle properties (mass, CG, inertia, altitude-corrected thrust)
+are computed by functions in dynamics.py.
 
 Public API
 ----------
-build_motor_model(motor_data, vehicle_cfg)  →  MotorModel
+Data:
+    MotorData                                               — raw .eng parse
+    PropellantModel                                         — derived model
 
-@njit functions — call directly in the dynamics hot loop:
-    thrust_at(times, thrusts, t)                              →  float  [N]
-    thrust_corrected_at(times, thrusts, nozzle_area, alt, t)  →  float  [N]
-    mdot_at(times, thrusts, m_prop_0, total_impulse, t)       →  float  [kg/s]
-    m_prop_at(times, thrusts, m_prop_0, total_impulse, t)     →  float  [kg]
-    mass_at(times, thrusts, m_prop_0, total_impulse,
-            m_dry, t)                                         →  float  [kg]
-    cg_at(times, thrusts, m_prop_0, total_impulse,
-          m_dry, cg_dry, motor_cg_loaded, t)                  →  float  [m]
-    inertia_at(times, thrusts, m_prop_0, total_impulse,
-               m_dry, cg_dry, motor_cg_loaded,
-               I_roll_dry, I_lateral_dry,
-               prop_r_outer, prop_r_inner_0, prop_length,
-               t)                                             →  (I_roll, I_lat)
+Loaders:
+    load_motor(path)                                        → MotorData
 
-MotorModel bundles all scalars/arrays needed to call the @njit functions.
+Builders:
+    build_propellant_model(motor_data, vehicle_length,
+                           nozzle_area, casing_thickness,
+                           propellant_inner_diameter)        → PropellantModel
+
+@njit functions — propellant-level only:
+    thrust_at(times, thrusts, t)                            → float  [N]
+    mdot_at(times, thrusts, m_prop_0, total_impulse, t)     → float  [kg/s]
+    m_prop_at(times, thrusts, m_prop_0, total_impulse, t)   → float  [kg]
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import numba as nb
 
-from atmosphere import pressure as _atm_pressure
-from config import MotorData, VehicleConfig
+
+# ---------------------------------------------------------------------------
+# Motor data (raw parse of .eng file)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MotorData:
+    """Raw data parsed from a RASP .eng file.
+
+    Masses are in kg, time in seconds, thrust in Newtons.
+    ``m_motor_kg`` is the total motor mass (casing + propellant) as stated in
+    the .eng header (\"total weight\" field).  ``diameter_m`` and ``length_m``
+    are the motor's outer diameter and length, converted from the mm values in
+    the .eng header.
+    """
+    name: str
+    diameter_m: float         # motor outer diameter [m]
+    length_m: float           # motor length [m]
+    m_prop_kg: float          # propellant mass [kg]
+    m_motor_kg: float         # total motor mass: casing + propellant [kg]
+    time_s: np.ndarray        # (K,) thrust curve time points [s]
+    thrust_n: np.ndarray      # (K,) thrust values [N]
+
+
+def load_motor(path: Path | str) -> MotorData:
+    """Parse a RASP .eng file and return a MotorData.
+
+    Format expected::
+
+        ; optional comment lines
+        Name Diam_mm Length_mm Delays PropMass_kg TotalMass_kg Manufacturer
+        time_s  thrust_N
+        ...
+
+    Masses are in kg. Thrust in Newtons. The final data point should have
+    thrust = 0; if absent it is appended automatically.
+
+    Raises
+    ------
+    ValueError
+        If the file cannot be parsed or contains physically implausible values.
+    """
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+
+    # Strip comments and blank lines
+    data_lines = [l.strip() for l in lines
+                  if l.strip() and not l.strip().startswith(";")]
+
+    if len(data_lines) < 2:
+        raise ValueError(f"Motor file {path} has no usable data")
+
+    # --- header line
+    header = data_lines[0].split()
+    if len(header) < 7:
+        raise ValueError(
+            f"Motor file header must have ≥7 fields, got: {data_lines[0]!r}"
+        )
+    name = header[0]
+    try:
+        diameter_m = float(header[1]) / 1000.0
+        length_m = float(header[2]) / 1000.0
+        m_prop_kg = float(header[4])
+        m_motor_kg = float(header[5])
+    except ValueError as exc:
+        raise ValueError(
+            f"Could not parse motor header fields: {data_lines[0]!r}"
+        ) from exc
+
+    if diameter_m <= 0:
+        raise ValueError(f"Motor diameter must be > 0, got {diameter_m * 1000:.1f} mm")
+    if length_m <= 0:
+        raise ValueError(f"Motor length must be > 0, got {length_m * 1000:.1f} mm")
+    if m_prop_kg <= 0:
+        raise ValueError(f"Propellant mass must be > 0, got {m_prop_kg}")
+    if m_motor_kg <= m_prop_kg:
+        raise ValueError(
+            f"Total motor mass ({m_motor_kg} kg) must exceed propellant mass "
+            f"({m_prop_kg} kg)"
+        )
+
+    # --- thrust curve data points
+    times: list[float] = []
+    thrusts: list[float] = []
+    for line in data_lines[1:]:
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            t, f = float(parts[0]), float(parts[1])
+        except ValueError:
+            continue
+        times.append(t)
+        thrusts.append(f)
+
+    if len(times) < 2:
+        raise ValueError(f"Motor file {path} must have ≥2 thrust data points")
+
+    time_arr = np.asarray(times, dtype=np.float64)
+    thrust_arr = np.asarray(thrusts, dtype=np.float64)
+
+    if not np.all(np.diff(time_arr) > 0):
+        raise ValueError("Thrust curve time points must be strictly increasing")
+    if np.any(thrust_arr < 0):
+        raise ValueError("Thrust values must be non-negative")
+
+    # Ensure burnout point has thrust = 0
+    if thrust_arr[-1] != 0.0:
+        time_arr = np.append(time_arr, time_arr[-1])
+        thrust_arr = np.append(thrust_arr, 0.0)
+
+    return MotorData(
+        name=name,
+        diameter_m=diameter_m,
+        length_m=length_m,
+        m_prop_kg=m_prop_kg,
+        m_motor_kg=m_motor_kg,
+        time_s=time_arr,
+        thrust_n=thrust_arr,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Pre-computed bundle
+# Pre-computed bundles
 # ---------------------------------------------------------------------------
 
 @dataclass
-class MotorModel:
-    """All motor data pre-processed and ready for the simulation hot loop.
+class PropellantModel:
+    """Motor and propellant data derived from the .eng file and vehicle geometry.
 
-    Construct via :func:`build_motor_model`.
+    Contains only motor/propellant concerns: thrust curve, masses, CG,
+    annular geometry, nozzle properties.  No vehicle-level properties.
+
+    Construct via :func:`build_propellant_model`.
     """
     # Thrust curve (contiguous float64 arrays)
     times: np.ndarray        # (K,) [s]
@@ -75,34 +189,45 @@ class MotorModel:
     total_impulse: float     # ∫F dt [N·s]
     nozzle_area: float       # π·dₑ²/4 [m²] — for pressure thrust correction
     nozzle_position: float   # m from nosecone tip — for jet damping (§8.3.4)
-
-    # Dry vehicle properties (derived from wet + propellant in build_motor_model)
-    m_dry: float             # dry vehicle mass [kg]
-    cg_dry: float            # dry vehicle CG from nosecone [m]
     motor_cg_loaded: float   # propellant CG (constant, inside-out burn) [m]
-
-    # Inertias
-    I_roll_dry: float        # dry roll inertia about roll axis [kg·m²]
-    I_lateral_dry: float     # dry lateral inertia about dry CG [kg·m²]
 
     # Propellant annular geometry for time-varying inertia
     prop_r_outer: float      # propellant outer radius [m]
     prop_r_inner_0: float    # initial propellant inner radius (bore) [m]
     prop_length: float       # motor/propellant length [m]
 
+    # Initial propellant inertias (about propellant CG)
+    I_roll_prop_0: float     # kg·m² — roll, full load
+    I_lat_prop_0: float      # kg·m² — lateral about propellant CG, full load
 
-def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> MotorModel:
-    """Construct a MotorModel, deriving dry vehicle properties from wet + propellant.
 
-    Motor CG is placed at the geometric centre of the motor, flush with the
-    aft end of the vehicle.  Propellant inertias are computed from the annular
-    cross-section geometry (outer radius from .eng diameter, optional casing
-    thickness and bore diameter from vehicle.yaml).
+def build_propellant_model(
+    motor_data: MotorData,
+    vehicle_length: float,
+    nozzle_area: float,
+    casing_thickness: float | None = None,
+    propellant_inner_diameter: float | None = None,
+) -> PropellantModel:
+    """Build the propellant model from the .eng data and vehicle geometry.
+
+    Parameters
+    ----------
+    motor_data
+        Parsed .eng file data.
+    vehicle_length
+        Total vehicle length [m] — motor is assumed flush with the aft end.
+    nozzle_area
+        Nozzle exit area [m²] — for pressure thrust correction.
+    casing_thickness
+        Motor casing wall thickness [m].  If None, propellant fills the full
+        motor diameter.
+    propellant_inner_diameter
+        Propellant bore diameter [m].  If None, propellant is a solid cylinder.
 
     Raises
     ------
     ValueError
-        If total impulse ≤ 0 or the computed dry mass is non-positive.
+        If total impulse ≤ 0 or propellant geometry is invalid.
     """
     times = np.ascontiguousarray(motor_data.time_s, dtype=np.float64)
     thrusts = np.ascontiguousarray(motor_data.thrust_n, dtype=np.float64)
@@ -114,31 +239,26 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
         thrusts = np.concatenate(([0.0], thrusts))
 
     total_impulse = float(np.trapz(thrusts, times))
-
     if total_impulse <= 0:
         raise ValueError("Total impulse must be > 0")
 
-    m_casing = motor_data.m_motor_kg - motor_data.m_prop_kg
     m_prop_0 = motor_data.m_prop_kg
-    mass = vehicle_cfg.mass
-    geom = vehicle_cfg.geometry
-
-    # --- motor geometry
+    m_casing = motor_data.m_motor_kg - m_prop_0
     motor_length = motor_data.length_m
     r_motor = motor_data.diameter_m / 2.0
 
     # Motor CG at geometric centre, flush with aft end
-    motor_cg_loaded = geom.length - motor_length / 2.0
-    nozzle_position = geom.length
+    motor_cg_loaded = vehicle_length - motor_length / 2.0
+    nozzle_position = vehicle_length
 
     # Propellant annular geometry
-    if mass.casing_thickness is not None:
-        prop_r_outer = r_motor - mass.casing_thickness
+    if casing_thickness is not None:
+        prop_r_outer = r_motor - casing_thickness
     else:
         prop_r_outer = r_motor
 
-    if mass.propellant_inner_diameter is not None:
-        prop_r_inner_0 = mass.propellant_inner_diameter / 2.0
+    if propellant_inner_diameter is not None:
+        prop_r_inner_0 = propellant_inner_diameter / 2.0
     else:
         prop_r_inner_0 = 0.0
 
@@ -148,54 +268,26 @@ def build_motor_model(motor_data: MotorData, vehicle_cfg: VehicleConfig) -> Moto
             f"less than outer radius ({prop_r_outer*1000:.1f} mm)"
         )
 
-    # --- initial propellant inertias (for deriving dry properties)
+    # Initial propellant inertias
     r_o2 = prop_r_outer ** 2
     r_i2 = prop_r_inner_0 ** 2
     I_roll_prop_0 = 0.5 * m_prop_0 * (r_o2 + r_i2)
     I_lat_prop_0 = m_prop_0 * (3.0 * (r_o2 + r_i2) + motor_length ** 2) / 12.0
 
-    # --- dry mass
-    m_dry = mass.wet_mass - m_prop_0
-    if m_dry <= 0:
-        raise ValueError(
-            f"Computed dry mass {m_dry:.3f} kg must be > 0 "
-            f"(wet_mass={mass.wet_mass} kg, m_prop={m_prop_0} kg)"
-        )
-
-    # --- dry CG
-    # wet_mass·wet_cg = m_dry·cg_dry + m_prop·motor_cg_loaded
-    cg_dry = (mass.wet_mass * mass.wet_cg - m_prop_0 * motor_cg_loaded) / m_dry
-
-    # --- dry roll inertia
-    # Roll axis is the symmetry axis, so propellant contribution needs no PAT.
-    I_roll_dry = mass.wet_inertia_roll - I_roll_prop_0
-
-    # --- dry lateral inertia
-    # Step 1: transfer propellant inertia from propellant CG → wet vehicle CG
-    d_prop_wet = motor_cg_loaded - mass.wet_cg
-    I_prop_lat_at_wet_cg = I_lat_prop_0 + m_prop_0 * d_prop_wet ** 2
-    # Step 2: dry lateral inertia about wet vehicle CG
-    I_lat_dry_at_wet_cg = mass.wet_inertia_lateral - I_prop_lat_at_wet_cg
-    # Step 3: transfer to dry vehicle CG
-    d_dry_wet = cg_dry - mass.wet_cg
-    I_lateral_dry = I_lat_dry_at_wet_cg - m_dry * d_dry_wet ** 2
-
-    return MotorModel(
+    return PropellantModel(
         times=times,
         thrusts=thrusts,
         m_prop_0=m_prop_0,
         m_casing=m_casing,
         total_impulse=total_impulse,
-        nozzle_area=geom.nozzle_area,
+        nozzle_area=nozzle_area,
         nozzle_position=nozzle_position,
-        m_dry=m_dry,
-        cg_dry=cg_dry,
         motor_cg_loaded=motor_cg_loaded,
-        I_roll_dry=I_roll_dry,
-        I_lateral_dry=I_lateral_dry,
         prop_r_outer=prop_r_outer,
         prop_r_inner_0=prop_r_inner_0,
         prop_length=motor_length,
+        I_roll_prop_0=I_roll_prop_0,
+        I_lat_prop_0=I_lat_prop_0,
     )
 
 
@@ -223,35 +315,13 @@ def _interp(times: np.ndarray, values: np.ndarray, t: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Numba hot-loop functions — public API
+# Numba hot-loop functions — propellant-level public API
 # ---------------------------------------------------------------------------
 
 @nb.njit(cache=True, fastmath=True)
 def thrust_at(times: np.ndarray, thrusts: np.ndarray, t: float) -> float:
     """Sea-level thrust [N] at time *t* [s]."""
     return _interp(times, thrusts, t)
-
-
-@nb.njit(cache=True, fastmath=True)
-def thrust_corrected_at(
-    times: np.ndarray,
-    thrusts: np.ndarray,
-    nozzle_area: float,
-    altitude_m: float,
-    t: float,
-) -> float:
-    """Altitude-corrected thrust [N] at time *t* and altitude *altitude_m*.
-
-    The .eng thrust curve is assumed to be measured at sea level.  Thrust
-    increases as ambient back-pressure falls:
-
-        F(h) = F₀ + Aₑ · (p₀ − p_ISA(h))
-    """
-    F0 = _interp(times, thrusts, t)
-    if F0 <= 0.0:
-        return 0.0
-    delta_p = 101325.0 - _atm_pressure(altitude_m)
-    return F0 + nozzle_area * delta_p
 
 
 @nb.njit(cache=True, fastmath=True)
@@ -300,99 +370,3 @@ def m_prop_at(
     if prop_fraction_remaining < 0.0:
         prop_fraction_remaining = 0.0
     return m_prop_0 * prop_fraction_remaining
-
-
-@nb.njit(cache=True, fastmath=True)
-def mass_at(
-    times: np.ndarray,
-    thrusts: np.ndarray,
-    m_prop_0: float,
-    total_impulse: float,
-    m_dry: float,
-    t: float,
-) -> float:
-    """Total vehicle mass [kg] at time *t*."""
-    return m_dry + m_prop_at(times, thrusts, m_prop_0, total_impulse, t)
-
-
-@nb.njit(cache=True, fastmath=True)
-def cg_at(
-    times: np.ndarray,
-    thrusts: np.ndarray,
-    m_prop_0: float,
-    total_impulse: float,
-    m_dry: float,
-    cg_dry: float,
-    motor_cg_loaded: float,
-    t: float,
-) -> float:
-    """Vehicle CG [m from nosecone] at time *t*.
-
-    CG(t) = (m_dry · cg_dry + m_prop(t) · motor_cg_loaded) / (m_dry + m_prop(t))
-    """
-    m_p = m_prop_at(times, thrusts, m_prop_0, total_impulse, t)
-    return (m_dry * cg_dry + m_p * motor_cg_loaded) / (m_dry + m_p)
-
-
-@nb.njit(cache=True, fastmath=True)
-def inertia_at(
-    times: np.ndarray,
-    thrusts: np.ndarray,
-    m_prop_0: float,
-    total_impulse: float,
-    m_dry: float,
-    cg_dry: float,
-    motor_cg_loaded: float,
-    I_roll_dry: float,
-    I_lateral_dry: float,
-    prop_r_outer: float,
-    prop_r_inner_0: float,
-    prop_length: float,
-    t: float,
-) -> tuple[float, float]:
-    """Whole-vehicle (I_roll, I_lateral) [kg·m²] at time *t*.
-
-    Propellant is an annular cylinder burning radially outward.  As the mass
-    fraction *f* decreases the inner radius grows:
-
-        r_inner(t) = sqrt(r_outer² − f · (r_outer² − r_inner_0²))
-
-    Inertias are recomputed from the current annular geometry rather than
-    scaled linearly with mass fraction.  The parallel-axis theorem transfers
-    each contribution to the instantaneous vehicle CG.
-    """
-    m_p = m_prop_at(times, thrusts, m_prop_0, total_impulse, t)
-
-    if m_p <= 0.0:
-        # Burnout — only dry inertias remain
-        return I_roll_dry, I_lateral_dry
-
-    f = m_p / m_prop_0   # 1 at ignition → 0 at burnout
-
-    # Current inner radius (radial burn outward from bore)
-    r_o2 = prop_r_outer * prop_r_outer
-    r_i0_2 = prop_r_inner_0 * prop_r_inner_0
-    r_i2 = r_o2 - f * (r_o2 - r_i0_2)
-    # Guard against floating-point overshoot
-    if r_i2 < 0.0:
-        r_i2 = 0.0
-
-    # Current vehicle CG
-    cg_t = (m_dry * cg_dry + m_p * motor_cg_loaded) / (m_dry + m_p)
-
-    # Propellant roll inertia (annulus, no PAT needed)
-    I_roll_prop = 0.5 * m_p * (r_o2 + r_i2)
-    I_roll = I_roll_dry + I_roll_prop
-
-    # Propellant lateral inertia about its own CG (annular cylinder)
-    I_lat_prop_own = m_p * (3.0 * (r_o2 + r_i2) + prop_length * prop_length) / 12.0
-
-    # Lateral — dry contribution about current CG (PAT)
-    d_dry = cg_dry - cg_t
-    I_lat_dry = I_lateral_dry + m_dry * d_dry * d_dry
-
-    # Lateral — propellant contribution about current CG (PAT)
-    d_prop = motor_cg_loaded - cg_t
-    I_lat_prop = I_lat_prop_own + m_p * d_prop * d_prop
-
-    return I_roll, I_lat_dry + I_lat_prop

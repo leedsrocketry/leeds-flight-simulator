@@ -11,7 +11,7 @@ Phase 4 — Candidate validation (full-uncertainty MC)
 
 Public API
 ----------
-run_optimisation(sim_cfg, vehicle_cfg, motor_model, aero_model,
+run_optimisation(sim_cfg, vehicle, propellant, aero_model,
                  wind_ensemble, progress_callback) → OptimisationResult
 """
 
@@ -26,8 +26,8 @@ import numpy as np
 from shapely.geometry import Point, Polygon
 
 from atmosphere import isa, density
-from config import SimulationConfig, VehicleConfig
-from motor import MotorModel
+from config import SimulationConfig, Vehicle
+from motor import PropellantModel
 from aerodynamics import AeroModel
 from wind import WindEnsemble, interpolate_wind
 from dynamics import (
@@ -88,24 +88,24 @@ class OptimisationResult:
 # Worst-drift scenario helpers
 # ---------------------------------------------------------------------------
 
-def _worst_drift_scenario(vehicle_cfg: VehicleConfig) -> str:
+def _worst_drift_scenario(vehicle: Vehicle) -> str:
     """Return the active scenario with the most descent drift.
 
     Premature-main drifts most (both chutes from apogee).  If not active
     (main deploys at apogee), nominal drifts most (drogue → main).  Then
     drogue-only.  Ballistic drifts least.
     """
-    active = vehicle_cfg.recovery.active_scenarios
+    active = vehicle.recovery.active_scenarios
     if "premature_main" in active:
         return "premature_main"
-    if "nominal" in active and vehicle_cfg.recovery.main is not None:
+    if "nominal" in active and vehicle.recovery.main is not None:
         return "nominal"
     if "drogue_only" in active:
         return "drogue_only"
     return "ballistic"
 
 
-def _worst_drift_cda(vehicle_cfg: VehicleConfig) -> float:
+def _worst_drift_cda(vehicle: Vehicle) -> float:
     """Return the effective CdA for the worst-drift scenario.
 
     For premature-main: drogue + main (both deploy at apogee).
@@ -113,8 +113,8 @@ def _worst_drift_cda(vehicle_cfg: VehicleConfig) -> float:
     main CdA below — we use main CdA as the conservative (slower descent,
     more drift) estimate for the analytical filter.
     """
-    recovery = vehicle_cfg.recovery
-    scenario = _worst_drift_scenario(vehicle_cfg)
+    recovery = vehicle.recovery
+    scenario = _worst_drift_scenario(vehicle)
     drogue_cda = (recovery.drogue.cd * recovery.drogue.area
                   if recovery.drogue is not None else 0.0)
     main_cda = (recovery.main.cd * recovery.main.area
@@ -132,9 +132,9 @@ def _worst_drift_cda(vehicle_cfg: VehicleConfig) -> float:
     return 0.0
 
 
-def _worst_drift_scenario_int(vehicle_cfg: VehicleConfig) -> int:
+def _worst_drift_scenario_int(vehicle: Vehicle) -> int:
     """Return the integer scenario code for the worst-drift scenario."""
-    return SCENARIO_MAP[_worst_drift_scenario(vehicle_cfg)]
+    return SCENARIO_MAP[_worst_drift_scenario(vehicle)]
 
 
 # ---------------------------------------------------------------------------
@@ -241,8 +241,8 @@ def _compute_wind_drift(
 
 def select_inclination(
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     poly_e: np.ndarray,
     poly_n: np.ndarray,
@@ -259,7 +259,8 @@ def select_inclination(
     assert inc_range is not None
     candidates = list(range(int(inc_range[0]), int(inc_range[1]) + 1))
 
-    geom = vehicle_cfg.geometry
+    geom = vehicle.geometry
+    m_dry = vehicle.m_dry
     exclusion_r = sim_cfg.site.ballistic_exclusion_radius
 
     apogee_positions: dict[int, tuple[float, float, float]] = {}
@@ -272,13 +273,13 @@ def select_inclination(
         t_hist, x_hist, z_hist, _, _ = simulate_ascent_2dof(
             rail_inclination_rad=inc * _DEG2RAD,
             rail_length=rail_cfg.length,
-            motor_times=motor_model.times,
-            motor_thrusts=motor_model.thrusts,
-            nozzle_area=motor_model.nozzle_area,
+            motor_times=propellant.times,
+            motor_thrusts=propellant.thrusts,
+            nozzle_area=propellant.nozzle_area,
             impulse_factor=1.0,
-            m_prop_0=motor_model.m_prop_0,
-            total_impulse=motor_model.total_impulse,
-            m_dry=motor_model.m_dry,
+            m_prop_0=propellant.m_prop_0,
+            total_impulse=propellant.total_impulse,
+            m_dry=m_dry,
             mach_g=aero_model.mach_grid,
             re_g=aero_model.re_grid,
             alpha_g=aero_model.alpha_grid,
@@ -311,7 +312,7 @@ def select_inclination(
             aero_model.mach_grid, aero_model.re_grid,
             aero_model.alpha_grid, aero_model.ca_table,
             geom.reference_area, geom.length,
-            motor_model.m_dry,
+            m_dry,
             0.0, 0.0, -1.0,  # no parachutes, sentinel deploy alt
             SCENARIO_BALLISTIC,
             1.0e-6, 1.0e-6,
@@ -351,8 +352,8 @@ def narrow_azimuth_bounds(
     selected_inclination: int,
     apogee_positions: dict[int, tuple[float, float, float]],
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     wind_ensemble: WindEnsemble,
     buffered_polygon: Polygon,
     progress_callback: Callable[[str, int, int], None] | None = None,
@@ -375,8 +376,8 @@ def narrow_azimuth_bounds(
     apN0, apE0, apD0 = apogee_positions[selected_inclination]
     apogee_alt = -apD0  # D is negative altitude
 
-    cda = _worst_drift_cda(vehicle_cfg)
-    m_dry = motor_model.m_dry
+    cda = _worst_drift_cda(vehicle)
+    m_dry = vehicle.m_dry
 
     feasible: list[int] = []
     for idx, az in enumerate(candidates):
@@ -452,8 +453,8 @@ def _run_descent_batch(
     apogee_N: float, apogee_E: float, apogee_D: float, t_apogee: float,
     wind_ensemble: WindEnsemble,
     aero_model: AeroModel,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     scenario_int: int,
     n_sims: int,
     pool: mp.pool.Pool | None = None,
@@ -462,7 +463,8 @@ def _run_descent_batch(
 
     Returns (n_sims, 2) array of [landing_N, landing_E].
     """
-    recovery = vehicle_cfg.recovery
+    m_dry = vehicle.m_dry
+    recovery = vehicle.recovery
     drogue_cda = (recovery.drogue.cd * recovery.drogue.area
                   if recovery.drogue is not None else 0.0)
     main_cda = (recovery.main.cd * recovery.main.area
@@ -483,8 +485,8 @@ def _run_descent_batch(
             wind_ensemble.wind_north_ms[idx],
             aero_model.mach_grid, aero_model.re_grid,
             aero_model.alpha_grid, aero_model.ca_table,
-            vehicle_cfg.geometry.reference_area, vehicle_cfg.geometry.length,
-            motor_model.m_dry,
+            vehicle.geometry.reference_area, vehicle.geometry.length,
+            m_dry,
             drogue_cda, main_cda, main_deploy_alt,
             scenario_int,
         ))
@@ -502,8 +504,8 @@ def _evaluate_azimuth(
     apogee_N0: float, apogee_E0: float, apogee_D: float, t_apogee: float,
     wind_ensemble: WindEnsemble,
     aero_model: AeroModel,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     poly_e: np.ndarray,
     poly_n: np.ndarray,
     scenario_int: int,
@@ -515,7 +517,7 @@ def _evaluate_azimuth(
 
     landings = _run_descent_batch(
         rot_N, rot_E, apogee_D, t_apogee,
-        wind_ensemble, aero_model, vehicle_cfg, motor_model,
+        wind_ensemble, aero_model, vehicle, propellant,
         scenario_int, n_sims, pool,
     )
 
@@ -537,8 +539,8 @@ def optimise_azimuth(
     apogee_positions: dict[int, tuple[float, float, float]],
     t_apogee: float,
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     poly_e: np.ndarray,
@@ -550,7 +552,7 @@ def optimise_azimuth(
     Returns (top_candidates, observations) where observations is a list
     of (azimuth, p_success) pairs from all evaluations.
     """
-    scenario_int = _worst_drift_scenario_int(vehicle_cfg)
+    scenario_int = _worst_drift_scenario_int(vehicle)
     apN0, apE0, apD0 = apogee_positions[selected_inclination]
     SIMS_PER_ITER = 150
     MAX_ITER = 20
@@ -563,7 +565,7 @@ def optimise_azimuth(
             for i, az in enumerate(feasible_azimuths):
                 p = _evaluate_azimuth(
                     az, apN0, apE0, apD0, t_apogee,
-                    wind_ensemble, aero_model, vehicle_cfg, motor_model,
+                    wind_ensemble, aero_model, vehicle, propellant,
                     poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
                 )
                 observations.append((az, p))
@@ -602,7 +604,7 @@ def optimise_azimuth(
                 continue
             p = _evaluate_azimuth(
                 az, apN0, apE0, apD0, t_apogee,
-                wind_ensemble, aero_model, vehicle_cfg, motor_model,
+                wind_ensemble, aero_model, vehicle, propellant,
                 poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
             )
             X_obs.append(float(az))
@@ -660,7 +662,7 @@ def optimise_azimuth(
             # Evaluate next candidate
             p = _evaluate_azimuth(
                 next_az, apN0, apE0, apD0, t_apogee,
-                wind_ensemble, aero_model, vehicle_cfg, motor_model,
+                wind_ensemble, aero_model, vehicle, propellant,
                 poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
             )
             X_obs.append(float(next_az))
@@ -708,8 +710,8 @@ def _validation_worker(args: tuple) -> tuple[int, list[tuple[float, float]]]:
 
     Returns (azimuth, list_of_(landing_N, landing_E)).
     """
-    (azimuth_deg, selected_inclination, sim_cfg, vehicle_cfg,
-     motor_model, aero_model, wind_ensemble, n_sims, scenario_name) = args
+    (azimuth_deg, selected_inclination, sim_cfg, vehicle,
+     propellant, aero_model, wind_ensemble, n_sims, scenario_name) = args
 
     from montecarlo import run_sample, _prepare_geofence
 
@@ -724,8 +726,8 @@ def _validation_worker(args: tuple) -> tuple[int, list[tuple[float, float]]]:
             run_index=0,
             scenario_name=scenario_name,
             sim_cfg=sim_cfg,
-            vehicle_cfg=vehicle_cfg,
-            motor_model=motor_model,
+            vehicle=vehicle,
+            propellant=propellant,
             aero_model=aero_model,
             wind_ensemble=wind_ensemble,
             azimuth_mean=float(azimuth_deg),
@@ -747,8 +749,8 @@ def validate_candidates(
     top_candidates: list[int],
     selected_inclination: int,
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     buffered_polygon: Polygon,
@@ -761,12 +763,12 @@ def validate_candidates(
     Returns (optimal_azimuth, compliance_fractions, margins).
     """
     SIMS_PER_CANDIDATE = 500
-    scenario_name = _worst_drift_scenario(vehicle_cfg)
+    scenario_name = _worst_drift_scenario(vehicle)
     compliance_threshold = sim_cfg.monte_carlo.acceptance.compliance_threshold
 
     args_list = [
-        (az, selected_inclination, sim_cfg, vehicle_cfg,
-         motor_model, aero_model, wind_ensemble,
+        (az, selected_inclination, sim_cfg, vehicle,
+         propellant, aero_model, wind_ensemble,
          SIMS_PER_CANDIDATE, scenario_name)
         for az in top_candidates
     ]
@@ -815,8 +817,8 @@ def validate_candidates(
 
 def run_optimisation(
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     progress_callback: Callable[[str, int, int], None] | None = None,
@@ -837,27 +839,29 @@ def run_optimisation(
     poly_e, poly_n = polygon_to_arrays(buffered_poly)
 
     # --- Phase 1: Inclination ---
+    m_dry = vehicle.m_dry
+
     if inc_is_auto:
         selected_inc, apogee_positions, ballistic_landings, apogee_times = (
             select_inclination(
-                sim_cfg, vehicle_cfg, motor_model, aero_model,
+                sim_cfg, vehicle, propellant, aero_model,
                 poly_e, poly_n, progress_callback,
             )
         )
     else:
         selected_inc = int(rail.inclination)
         # Still need a 2DoF ascent at this inclination for Phases 2-4
-        geom = vehicle_cfg.geometry
+        geom = vehicle.geometry
         t_hist, x_hist, z_hist, _, _ = simulate_ascent_2dof(
             rail_inclination_rad=selected_inc * _DEG2RAD,
             rail_length=rail.length,
-            motor_times=motor_model.times,
-            motor_thrusts=motor_model.thrusts,
-            nozzle_area=motor_model.nozzle_area,
+            motor_times=propellant.times,
+            motor_thrusts=propellant.thrusts,
+            nozzle_area=propellant.nozzle_area,
             impulse_factor=1.0,
-            m_prop_0=motor_model.m_prop_0,
-            total_impulse=motor_model.total_impulse,
-            m_dry=motor_model.m_dry,
+            m_prop_0=propellant.m_prop_0,
+            total_impulse=propellant.total_impulse,
+            m_dry=m_dry,
             mach_g=aero_model.mach_grid,
             re_g=aero_model.re_grid,
             alpha_g=aero_model.alpha_grid,
@@ -878,21 +882,21 @@ def run_optimisation(
         # Phase 2
         feasible = narrow_azimuth_bounds(
             selected_inc, apogee_positions,
-            sim_cfg, vehicle_cfg, motor_model, wind_ensemble,
+            sim_cfg, vehicle, propellant, wind_ensemble,
             buffered_poly, progress_callback,
         )
 
         # Phase 3
         top_candidates, phase3_obs = optimise_azimuth(
             feasible, selected_inc, apogee_positions, t_apogee,
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             wind_ensemble, poly_e, poly_n, progress_callback,
         )
 
         # Phase 4
         optimal_az, phase4_compliance, phase4_margins = validate_candidates(
             top_candidates, selected_inc,
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             wind_ensemble, buffered_poly, poly_e, poly_n,
             progress_callback,
         )

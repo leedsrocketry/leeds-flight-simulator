@@ -47,7 +47,7 @@ from dataclasses import dataclass
 import numpy as np
 import numba as nb
 
-from atmosphere import isa
+from atmosphere import isa, pressure as _atm_pressure
 from wind import interpolate_wind
 from aerodynamics import (
     aero_forces_moments,
@@ -57,14 +57,11 @@ from aerodynamics import (
     _interp3,
 )
 from motor import (
-    thrust_corrected_at,
+    _interp as _motor_interp,
     mdot_at,
-    mass_at,
-    cg_at,
-    inertia_at,
-    MotorModel,
+    m_prop_at,
+    PropellantModel,
 )
-from aerodynamics import AeroModel
 from integrator import (
     DP_C, DP_A1, DP_A2, DP_A3, DP_A4, DP_A5, DP_B, DP_E,
     error_norm, optimal_step_factor, clamp_step,
@@ -95,6 +92,128 @@ SCENARIO_MAP: dict[str, int] = {
 
 
 # ---------------------------------------------------------------------------
+# Vehicle-level @njit helpers (time-varying mass properties + thrust)
+# ---------------------------------------------------------------------------
+
+@nb.njit(cache=True, fastmath=True)
+def thrust_corrected_at(
+    times: np.ndarray,
+    thrusts: np.ndarray,
+    nozzle_area: float,
+    altitude_m: float,
+    t: float,
+) -> float:
+    """Altitude-corrected thrust [N] at time *t* and altitude *altitude_m*.
+
+    The .eng thrust curve is assumed to be measured at sea level.  Thrust
+    increases as ambient back-pressure falls:
+
+        F(h) = F₀ + Aₑ · (p₀ − p_ISA(h))
+    """
+    F0 = _motor_interp(times, thrusts, t)
+    if F0 <= 0.0:
+        return 0.0
+    delta_p = 101325.0 - _atm_pressure(altitude_m)
+    return F0 + nozzle_area * delta_p
+
+
+@nb.njit(cache=True, fastmath=True)
+def mass_at(
+    times: np.ndarray,
+    thrusts: np.ndarray,
+    m_prop_0: float,
+    total_impulse: float,
+    m_dry: float,
+    t: float,
+) -> float:
+    """Total vehicle mass [kg] at time *t*."""
+    return m_dry + m_prop_at(times, thrusts, m_prop_0, total_impulse, t)
+
+
+@nb.njit(cache=True, fastmath=True)
+def cg_at(
+    times: np.ndarray,
+    thrusts: np.ndarray,
+    m_prop_0: float,
+    total_impulse: float,
+    m_dry: float,
+    cg_dry: float,
+    motor_cg_loaded: float,
+    t: float,
+) -> float:
+    """Vehicle CG [m from nosecone] at time *t*.
+
+    CG(t) = (m_dry · cg_dry + m_prop(t) · motor_cg_loaded) / (m_dry + m_prop(t))
+    """
+    m_p = m_prop_at(times, thrusts, m_prop_0, total_impulse, t)
+    return (m_dry * cg_dry + m_p * motor_cg_loaded) / (m_dry + m_p)
+
+
+@nb.njit(cache=True, fastmath=True)
+def inertia_at(
+    times: np.ndarray,
+    thrusts: np.ndarray,
+    m_prop_0: float,
+    total_impulse: float,
+    m_dry: float,
+    cg_dry: float,
+    motor_cg_loaded: float,
+    I_roll_dry: float,
+    I_lateral_dry: float,
+    prop_r_outer: float,
+    prop_r_inner_0: float,
+    prop_length: float,
+    t: float,
+) -> tuple[float, float]:
+    """Whole-vehicle (I_roll, I_lateral) [kg·m²] at time *t*.
+
+    Propellant is an annular cylinder burning radially outward.  As the mass
+    fraction *f* decreases the inner radius grows:
+
+        r_inner(t) = sqrt(r_outer² − f · (r_outer² − r_inner_0²))
+
+    Inertias are recomputed from the current annular geometry rather than
+    scaled linearly with mass fraction.  The parallel-axis theorem transfers
+    each contribution to the instantaneous vehicle CG.
+    """
+    m_p = m_prop_at(times, thrusts, m_prop_0, total_impulse, t)
+
+    if m_p <= 0.0:
+        # Burnout — only dry inertias remain
+        return I_roll_dry, I_lateral_dry
+
+    f = m_p / m_prop_0   # 1 at ignition → 0 at burnout
+
+    # Current inner radius (radial burn outward from bore)
+    r_o2 = prop_r_outer * prop_r_outer
+    r_i0_2 = prop_r_inner_0 * prop_r_inner_0
+    r_i2 = r_o2 - f * (r_o2 - r_i0_2)
+    # Guard against floating-point overshoot
+    if r_i2 < 0.0:
+        r_i2 = 0.0
+
+    # Current vehicle CG
+    cg_t = (m_dry * cg_dry + m_p * motor_cg_loaded) / (m_dry + m_p)
+
+    # Propellant roll inertia (annulus, no PAT needed)
+    I_roll_prop = 0.5 * m_p * (r_o2 + r_i2)
+    I_roll = I_roll_dry + I_roll_prop
+
+    # Propellant lateral inertia about its own CG (annular cylinder)
+    I_lat_prop_own = m_p * (3.0 * (r_o2 + r_i2) + prop_length * prop_length) / 12.0
+
+    # Lateral — dry contribution about current CG (PAT)
+    d_dry = cg_dry - cg_t
+    I_lat_dry = I_lateral_dry + m_dry * d_dry * d_dry
+
+    # Lateral — propellant contribution about current CG (PAT)
+    d_prop = motor_cg_loaded - cg_t
+    I_lat_prop = I_lat_prop_own + m_p * d_prop * d_prop
+
+    return I_roll, I_lat_dry + I_lat_prop
+
+
+# ---------------------------------------------------------------------------
 # Data structures (plain Python — not Numba-visible)
 # ---------------------------------------------------------------------------
 
@@ -102,10 +221,10 @@ SCENARIO_MAP: dict[str, int] = {
 class SimParams:
     """All pre-processed data needed to run a single trajectory.
 
-    Construct in ``montecarlo.py`` from ``MotorModel``, ``AeroModel``,
+    Construct in ``montecarlo.py`` from ``PropellantModel``, ``AeroModel``,
     ``WindEnsemble``, and the simulation/vehicle configs.
     """
-    # Motor (from MotorModel)
+    # Motor / propellant (from PropellantModel + derived dry properties)
     motor_times: np.ndarray       # (K,) float64
     motor_thrusts: np.ndarray     # (K,) float64
     m_prop_0: float
@@ -1376,87 +1495,6 @@ def simulate_ascent_2dof(
 # ---------------------------------------------------------------------------
 # Top-level trajectory runner (plain Python)
 # ---------------------------------------------------------------------------
-
-def build_sim_params(
-    motor: MotorModel,
-    aero: AeroModel,
-    wind_alt: np.ndarray,
-    wind_east: np.ndarray,
-    wind_north: np.ndarray,
-    diameter: float,
-    length: float,
-    A_ref: float,
-    fin_cp_radius: float,
-    rail_azimuth_rad: float,
-    rail_inclination_rad: float,
-    rail_length: float,
-    fin_cant_rad: float,
-    impulse_factor: float,
-    drogue_cda: float,
-    main_cda: float,
-    main_deploy_alt: float,
-    has_drogue: bool,
-    has_main: bool,
-    sm_transition_mach: float,
-    sm_subsonic_min: float,
-    sm_supersonic_min: float,
-    aoa_max_rad: float,
-    sm_aoa_threshold_rad: float,
-    rtol: float = 1.0e-6,
-    atol: float = 1.0e-6,
-) -> SimParams:
-    """Convenience constructor for SimParams from model objects."""
-    return SimParams(
-        motor_times=motor.times,
-        motor_thrusts=motor.thrusts,
-        m_prop_0=motor.m_prop_0,
-        total_impulse=motor.total_impulse,
-        nozzle_area=motor.nozzle_area,
-        nozzle_position=motor.nozzle_position,
-        m_dry=motor.m_dry,
-        cg_dry=motor.cg_dry,
-        motor_cg_loaded=motor.motor_cg_loaded,
-        I_roll_dry=motor.I_roll_dry,
-        I_lateral_dry=motor.I_lateral_dry,
-        prop_r_outer=motor.prop_r_outer,
-        prop_r_inner_0=motor.prop_r_inner_0,
-        prop_length=motor.prop_length,
-        mach_g=aero.mach_grid,
-        re_g=aero.re_grid,
-        alpha_g=aero.alpha_grid,
-        ca_tbl=aero.ca_table,
-        cn_tbl=aero.cn_table,
-        cp_tbl=aero.cp_table,
-        cn_comp=aero.cn_comp,
-        cp_comp=aero.cp_comp,
-        has_components=aero.has_components,
-        cn_alpha_fins=aero.cn_alpha_fins,
-        diameter=diameter,
-        length=length,
-        A_ref=A_ref,
-        fin_cp_radius=fin_cp_radius,
-        wind_alt=wind_alt,
-        wind_east=wind_east,
-        wind_north=wind_north,
-        rail_azimuth_rad=rail_azimuth_rad,
-        rail_inclination_rad=rail_inclination_rad,
-        rail_length=rail_length,
-        fin_cant_rad=fin_cant_rad,
-        impulse_factor=impulse_factor,
-        drogue_cda=drogue_cda,
-        main_cda=main_cda,
-        main_deploy_alt=main_deploy_alt,
-        has_drogue=has_drogue,
-        has_main=has_main,
-        sm_transition_mach=sm_transition_mach,
-        sm_subsonic_min=sm_subsonic_min,
-        sm_supersonic_min=sm_supersonic_min,
-        aoa_max_rad=aoa_max_rad,
-        sm_aoa_threshold_rad=sm_aoa_threshold_rad,
-        rtol=rtol,
-        atol=atol,
-    )
-
 
 def run_trajectory(
     params: SimParams,

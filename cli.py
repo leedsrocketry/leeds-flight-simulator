@@ -240,8 +240,8 @@ def _open_figures(paths: list[Path]) -> None:
 
 def _generate_altitude_curves(
     sim_cfg,
-    vehicle_cfg,
-    motor_model,
+    vehicle,
+    propellant,
     aero_model,
     wind_ensemble,
     azimuth_mean: float,
@@ -255,9 +255,9 @@ def _generate_altitude_curves(
     """
     curves: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
-    for scenario in vehicle_cfg.recovery.active_scenarios:
+    for scenario in vehicle.recovery.active_scenarios:
         params = build_sim_params(
-            sim_cfg, vehicle_cfg, motor_model, aero_model, wind_ensemble,
+            sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
             wind_profile_index=0,
             azimuth_deg=azimuth_mean,
             inclination_deg=inclination_mean,
@@ -333,7 +333,7 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
 
     display.start()
     display.update_status("Loading configuration and models...")
-    vehicle_cfg, motor_model, aero_model, wind_ensemble = load_all_models(sim_cfg)
+    vehicle, propellant, aero_model, wind_ensemble = load_all_models(sim_cfg)
 
     # --- Clear and create results directory ---
     results_root = config_path.parent / "results"
@@ -348,7 +348,7 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
         ver_task = progress.add_task("Verification", total=1)
         display.start_task(ver_task)
 
-        ver_result = run_verification(sim_cfg, vehicle_cfg, motor_model, aero_model)
+        ver_result = run_verification(sim_cfg, vehicle, propellant, aero_model)
         if ver_result.figure is not None:
             ver_fig_path = results_root / "verification_plot.png"
             ver_result.figure.savefig(ver_fig_path, dpi=150, bbox_inches="tight")
@@ -380,7 +380,7 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
 
         try:
             opt_result = run_optimisation(
-                sim_cfg, vehicle_cfg, motor_model, aero_model,
+                sim_cfg, vehicle, propellant, aero_model,
                 wind_ensemble, _opt_callback,
             )
         except ValueError as exc:
@@ -422,7 +422,7 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
             )
 
         # --- Monte Carlo ---
-        active_scenarios = vehicle_cfg.recovery.active_scenarios
+        active_scenarios = vehicle.recovery.active_scenarios
         n_samples = sim_cfg.monte_carlo.samples
 
         display.update_status("Running Monte Carlo analysis...")
@@ -449,7 +449,7 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
                 )
 
         mc_result = run_monte_carlo(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             wind_ensemble, azimuth_mean, inclination_mean,
             progress_callback=_mc_callback,
             scenario_done_callback=_scenario_done,
@@ -462,10 +462,10 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
         # --- Plots and outputs ---
         display.update_status("Generating plots...")
         altitude_data = _generate_altitude_curves(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             wind_ensemble, azimuth_mean, inclination_mean,
         )
-        burnout_time = float(motor_model.times[-1])
+        burnout_time = float(propellant.times[-1])
 
         results_dir = create_results_dir(config_path, wind_suffix, _clear=False)
 
@@ -549,7 +549,7 @@ def replay(
         rail = sim_cfg.launch.rail
         azimuth_mean = float(rail.azimuth)
         inclination_mean = float(rail.inclination)
-    vehicle_cfg, motor_model, aero_model, wind_ensemble = load_all_models(sim_cfg)
+    vehicle, propellant, aero_model, wind_ensemble = load_all_models(sim_cfg)
 
     # --- Replay ---
     if single_replay:
@@ -558,7 +558,7 @@ def replay(
         )
         results = [
             replay_sample(
-                sim_cfg, vehicle_cfg, motor_model, aero_model, wind_ensemble,
+                sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
                 master_seed, run_index, sample_index,
                 azimuth_mean, inclination_mean,
             )
@@ -570,7 +570,7 @@ def replay(
             sys.exit(1)
         console.print("Replaying all non-compliant samples...")
         results = replay_non_compliant(
-            sim_cfg, vehicle_cfg, motor_model, aero_model, wind_ensemble,
+            sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
             master_seed, azimuth_mean, inclination_mean, samples_csv,
         )
 
@@ -657,11 +657,11 @@ def verify(config_path: Path, dof: str, azimuth: float | None,
         )
 
     display.update_status("Loading configuration and models...")
-    vehicle_cfg, motor_model, aero_model, _ = load_all_models(sim_cfg)
+    vehicle, propellant, aero_model, _ = load_all_models(sim_cfg)
 
     display.update_status(f"Running {dof}DoF verification trajectory...")
     ver_result = run_verification(
-        sim_cfg, vehicle_cfg, motor_model, aero_model, dof=int(dof),
+        sim_cfg, vehicle, propellant, aero_model, dof=int(dof),
         azimuth_override=azimuth, inclination_override=inclination,
     )
 

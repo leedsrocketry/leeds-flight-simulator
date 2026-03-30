@@ -31,12 +31,11 @@ import numpy as np
 
 from config import (
     SimulationConfig,
-    VehicleConfig,
+    Vehicle,
     load_simulation_config,
-    load_vehicle_config,
-    load_motor,
+    load_vehicle,
 )
-from motor import MotorModel, build_motor_model
+from motor import PropellantModel
 from aerodynamics import AeroModel, build_aero_model
 from wind import WindEnsemble, load_wind_ensemble
 from dynamics import (
@@ -126,8 +125,8 @@ class SampleResult:
 
 def build_sim_params(
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     wind_profile_index: int,
@@ -136,9 +135,13 @@ def build_sim_params(
     impulse_factor: float,
     fin_cant_deg: float,
 ) -> SimParams:
-    """Construct a SimParams from configs and per-sample stochastic draws."""
-    geom = vehicle_cfg.geometry
-    recovery = vehicle_cfg.recovery
+    """Construct a SimParams from configs and per-sample stochastic draws.
+
+    Dry vehicle properties are read from the Vehicle dataclass
+    (computed once during vehicle loading).
+    """
+    geom = vehicle.geometry
+    recovery = vehicle.recovery
     acc = sim_cfg.monte_carlo.acceptance
 
     # Wind profile for this sample (wrapping index)
@@ -160,21 +163,21 @@ def build_sim_params(
             main_deploy_alt = recovery.main.threshold
 
     return SimParams(
-        # Motor
-        motor_times=motor_model.times,
-        motor_thrusts=motor_model.thrusts,
-        m_prop_0=motor_model.m_prop_0,
-        total_impulse=motor_model.total_impulse,
-        nozzle_area=motor_model.nozzle_area,
-        nozzle_position=motor_model.nozzle_position,
-        m_dry=motor_model.m_dry,
-        cg_dry=motor_model.cg_dry,
-        motor_cg_loaded=motor_model.motor_cg_loaded,
-        I_roll_dry=motor_model.I_roll_dry,
-        I_lateral_dry=motor_model.I_lateral_dry,
-        prop_r_outer=motor_model.prop_r_outer,
-        prop_r_inner_0=motor_model.prop_r_inner_0,
-        prop_length=motor_model.prop_length,
+        # Motor / propellant + derived dry properties
+        motor_times=propellant.times,
+        motor_thrusts=propellant.thrusts,
+        m_prop_0=propellant.m_prop_0,
+        total_impulse=propellant.total_impulse,
+        nozzle_area=propellant.nozzle_area,
+        nozzle_position=propellant.nozzle_position,
+        m_dry=vehicle.m_dry,
+        cg_dry=vehicle.cg_dry,
+        motor_cg_loaded=propellant.motor_cg_loaded,
+        I_roll_dry=vehicle.I_roll_dry,
+        I_lateral_dry=vehicle.I_lateral_dry,
+        prop_r_outer=propellant.prop_r_outer,
+        prop_r_inner_0=propellant.prop_r_inner_0,
+        prop_length=propellant.prop_length,
         # Aero
         mach_g=aero_model.mach_grid,
         re_g=aero_model.re_grid,
@@ -270,8 +273,8 @@ def run_sample(
     run_index: int,
     scenario_name: str,
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     azimuth_mean: float,
@@ -299,7 +302,7 @@ def run_sample(
 
     # --- Build SimParams ---
     params = build_sim_params(
-        sim_cfg, vehicle_cfg, motor_model, aero_model, wind_ensemble,
+        sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
         draws.wind_profile_index,
         draws.azimuth_deg, draws.inclination_deg,
         draws.impulse_factor, draws.fin_cant_deg,
@@ -465,8 +468,8 @@ def run_scenario(
     scenario_name: str,
     run_index: int,
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     azimuth_mean: float,
@@ -491,8 +494,8 @@ def run_scenario(
             run_index=run_index,
             scenario_name=scenario_name,
             sim_cfg=sim_cfg,
-            vehicle_cfg=vehicle_cfg,
-            motor_model=motor_model,
+            vehicle=vehicle,
+            propellant=propellant,
             aero_model=aero_model,
             wind_ensemble=wind_ensemble,
             azimuth_mean=azimuth_mean,
@@ -605,27 +608,25 @@ class MonteCarloResult:
 
 def load_all_models(
     sim_cfg: SimulationConfig,
-) -> tuple[VehicleConfig, MotorModel, AeroModel, WindEnsemble]:
-    """Load vehicle config and build motor, aero, and wind models."""
-    vehicle_cfg = load_vehicle_config(sim_cfg.vehicle)
-    motor_data = load_motor(vehicle_cfg.motor)
-    motor_model = build_motor_model(motor_data, vehicle_cfg)
+) -> tuple[Vehicle, PropellantModel, AeroModel, WindEnsemble]:
+    """Load vehicle config and build propellant, aero, and wind models."""
+    vehicle, propellant = load_vehicle(sim_cfg.vehicle)
     aero_model = build_aero_model(
-        vehicle_cfg.aero_tables,
-        fins_override=vehicle_cfg.fins_aero_table,
+        vehicle.aero_tables,
+        fins_override=vehicle.fins_aero_table,
     )
     wind_ensemble = load_wind_ensemble(
         sim_cfg.launch.wind_profiles,
         sim_cfg.monte_carlo.samples,
         surface_wind=sim_cfg.launch.surface_wind,
     )
-    return vehicle_cfg, motor_model, aero_model, wind_ensemble
+    return vehicle, propellant, aero_model, wind_ensemble
 
 
 def run_monte_carlo(
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     azimuth_mean: float,
@@ -637,7 +638,7 @@ def run_monte_carlo(
 
     Parameters
     ----------
-    sim_cfg, vehicle_cfg, motor_model, aero_model, wind_ensemble
+    sim_cfg, vehicle, propellant, aero_model, wind_ensemble
         Pre-loaded configuration and model objects.
     azimuth_mean, inclination_mean
         Nominal rail angles in degrees (from config or optimisation).
@@ -652,7 +653,7 @@ def run_monte_carlo(
     -------
     MonteCarloResult
     """
-    active = vehicle_cfg.recovery.active_scenarios
+    active = vehicle.recovery.active_scenarios
     warnings_list: list[str] = []
     acc = sim_cfg.monte_carlo.acceptance
 
@@ -694,7 +695,7 @@ def run_monte_carlo(
                     run_scenario,
                     args=(
                         scenario_name, run_idx,
-                        sim_cfg, vehicle_cfg, motor_model, aero_model,
+                        sim_cfg, vehicle, propellant, aero_model,
                         wind_ensemble, azimuth_mean, inclination_mean,
                         progress_queue,
                     ),
@@ -738,7 +739,7 @@ def run_monte_carlo(
         for run_idx, scenario_name in enumerate(active):
             scenario_results = run_scenario(
                 scenario_name, run_idx,
-                sim_cfg, vehicle_cfg, motor_model, aero_model,
+                sim_cfg, vehicle, propellant, aero_model,
                 wind_ensemble, azimuth_mean, inclination_mean,
             )
             # Report progress for each sample
@@ -770,8 +771,8 @@ def run_monte_carlo(
 
 def replay_sample(
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     master_seed: int,
@@ -785,7 +786,7 @@ def replay_sample(
     Returns a SampleResult with the full TrajectoryResult attached
     (``keep_trajectory=True``).
     """
-    active = vehicle_cfg.recovery.active_scenarios
+    active = vehicle.recovery.active_scenarios
     if run_index < 0 or run_index >= len(active):
         raise ValueError(
             f"run_index {run_index} out of range for "
@@ -803,8 +804,8 @@ def replay_sample(
         run_index=run_index,
         scenario_name=scenario_name,
         sim_cfg=sim_cfg,
-        vehicle_cfg=vehicle_cfg,
-        motor_model=motor_model,
+        vehicle=vehicle,
+        propellant=propellant,
         aero_model=aero_model,
         wind_ensemble=wind_ensemble,
         azimuth_mean=azimuth_mean,
@@ -822,8 +823,8 @@ def replay_sample(
 
 def replay_non_compliant(
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     master_seed: int,
@@ -854,7 +855,7 @@ def replay_non_compliant(
                 sid = int(row["sample_id"])
                 # Derive run_index from scenario name
                 scenario = row["scenario"].strip()
-                active = vehicle_cfg.recovery.active_scenarios
+                active = vehicle.recovery.active_scenarios
                 if scenario in active:
                     ridx = active.index(scenario)
                 else:
@@ -864,7 +865,7 @@ def replay_non_compliant(
     results: list[SampleResult] = []
     for run_idx, sample_idx in non_compliant:
         sr = replay_sample(
-            sim_cfg, vehicle_cfg, motor_model, aero_model, wind_ensemble,
+            sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
             master_seed, run_idx, sample_idx,
             azimuth_mean, inclination_mean,
         )

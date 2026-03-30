@@ -21,12 +21,10 @@ from shapely.geometry import Polygon, Point
 
 from config import (
     load_simulation_config,
-    load_vehicle_config,
-    load_motor,
+    load_vehicle,
     VehicleRecovery,
     ParachuteConfig,
 )
-from motor import build_motor_model
 from aerodynamics import build_aero_model
 from wind import load_wind_ensemble
 from optimisation import (
@@ -66,20 +64,24 @@ def sim_cfg():
 
 
 @pytest.fixture(scope="module")
-def vehicle_cfg(sim_cfg):
-    return load_vehicle_config(sim_cfg.vehicle)
+def vehicle_and_propellant(sim_cfg):
+    return load_vehicle(sim_cfg.vehicle)
 
 
 @pytest.fixture(scope="module")
-def motor_model(vehicle_cfg):
-    motor_data = load_motor(vehicle_cfg.motor)
-    return build_motor_model(motor_data, vehicle_cfg)
+def vehicle(vehicle_and_propellant):
+    return vehicle_and_propellant[0]
 
 
 @pytest.fixture(scope="module")
-def aero_model(vehicle_cfg):
+def propellant(vehicle_and_propellant):
+    return vehicle_and_propellant[1]
+
+
+@pytest.fixture(scope="module")
+def aero_model(vehicle):
     return build_aero_model(
-        vehicle_cfg.aero_tables, fins_override=vehicle_cfg.fins_aero_table,
+        vehicle.aero_tables, fins_override=vehicle.fins_aero_table,
     )
 
 
@@ -110,10 +112,10 @@ def poly_arrays(buffered_poly):
 # ===========================================================================
 
 class TestWorstDriftScenario:
-    def test_with_premature_main(self, vehicle_cfg):
+    def test_with_premature_main(self, vehicle):
         """When premature_main is active, it drifts most."""
-        assert "premature_main" in vehicle_cfg.recovery.active_scenarios
-        assert _worst_drift_scenario(vehicle_cfg) == "premature_main"
+        assert "premature_main" in vehicle.recovery.active_scenarios
+        assert _worst_drift_scenario(vehicle) == "premature_main"
 
     def test_main_only_at_apogee(self):
         """When main deploys at apogee (no premature_main), nominal drifts most."""
@@ -272,25 +274,25 @@ class TestWindDrift:
 
 class TestSelectInclination:
     def test_selects_valid_inclination(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model, poly_arrays,
+        self, sim_cfg, vehicle, propellant, aero_model, poly_arrays,
     ):
         """Phase 1 selects an inclination within the configured range."""
         poly_e, poly_n = poly_arrays
         inc_range = sim_cfg.launch.rail.inclination_range
         selected, apogees, landings, times = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         assert int(inc_range[0]) <= selected <= int(inc_range[1])
 
     def test_apogee_positions_populated(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model, poly_arrays,
+        self, sim_cfg, vehicle, propellant, aero_model, poly_arrays,
     ):
         """Every candidate inclination has an apogee position recorded."""
         poly_e, poly_n = poly_arrays
         inc_range = sim_cfg.launch.rail.inclination_range
         selected, apogees, landings, times = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         candidates = range(int(inc_range[0]), int(inc_range[1]) + 1)
@@ -300,27 +302,27 @@ class TestSelectInclination:
             assert D < 0.0  # D is negative (above ground)
 
     def test_ballistic_landing_inside_danger_area(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model,
+        self, sim_cfg, vehicle, propellant, aero_model,
         poly_arrays, buffered_poly,
     ):
         """The selected inclination's ballistic landing is inside the
         buffered danger area."""
         poly_e, poly_n = poly_arrays
         selected, apogees, landings, times = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         land_N, land_E = landings[selected]
         assert buffered_poly.contains(Point(land_E, land_N))
 
     def test_ballistic_landing_outside_exclusion(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model, poly_arrays,
+        self, sim_cfg, vehicle, propellant, aero_model, poly_arrays,
     ):
         """The selected inclination's ballistic landing is outside the
         exclusion radius."""
         poly_e, poly_n = poly_arrays
         selected, apogees, landings, times = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         land_N, land_E = landings[selected]
@@ -328,12 +330,12 @@ class TestSelectInclination:
         assert dist >= sim_cfg.site.ballistic_exclusion_radius
 
     def test_selects_maximum_valid(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model, poly_arrays,
+        self, sim_cfg, vehicle, propellant, aero_model, poly_arrays,
     ):
         """Phase 1 selects the maximum valid inclination (to maximise apogee)."""
         poly_e, poly_n = poly_arrays
         selected, apogees, landings, times = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         # All higher inclinations should fail at least one constraint
@@ -350,12 +352,12 @@ class TestSelectInclination:
             assert dist < exclusion_r or not inside
 
     def test_higher_inclination_higher_apogee(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model, poly_arrays,
+        self, sim_cfg, vehicle, propellant, aero_model, poly_arrays,
     ):
         """More vertical launch → higher apogee (monotonic for near-vertical)."""
         poly_e, poly_n = poly_arrays
         _, apogees, _, _ = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         sorted_incs = sorted(apogees.keys())
@@ -371,51 +373,51 @@ class TestSelectInclination:
 
 class TestNarrowAzimuthBounds:
     def test_returns_nonempty(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model,
+        self, sim_cfg, vehicle, propellant, aero_model,
         wind_ensemble, buffered_poly, poly_arrays,
     ):
         """Phase 2 returns at least one feasible azimuth for the example config."""
         poly_e, poly_n = poly_arrays
         selected, apogees, _, _ = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         feasible = narrow_azimuth_bounds(
-            selected, apogees, sim_cfg, vehicle_cfg,
-            motor_model, wind_ensemble, buffered_poly,
+            selected, apogees, sim_cfg, vehicle,
+            propellant, wind_ensemble, buffered_poly,
         )
         assert len(feasible) > 0
 
     def test_all_feasible_are_integers(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model,
+        self, sim_cfg, vehicle, propellant, aero_model,
         wind_ensemble, buffered_poly, poly_arrays,
     ):
         """All returned azimuths are integers."""
         poly_e, poly_n = poly_arrays
         selected, apogees, _, _ = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         feasible = narrow_azimuth_bounds(
-            selected, apogees, sim_cfg, vehicle_cfg,
-            motor_model, wind_ensemble, buffered_poly,
+            selected, apogees, sim_cfg, vehicle,
+            propellant, wind_ensemble, buffered_poly,
         )
         for az in feasible:
             assert isinstance(az, int)
 
     def test_feasible_within_range(
-        self, sim_cfg, vehicle_cfg, motor_model, aero_model,
+        self, sim_cfg, vehicle, propellant, aero_model,
         wind_ensemble, buffered_poly, poly_arrays,
     ):
         """All feasible azimuths are within the configured range."""
         poly_e, poly_n = poly_arrays
         selected, apogees, _, _ = select_inclination(
-            sim_cfg, vehicle_cfg, motor_model, aero_model,
+            sim_cfg, vehicle, propellant, aero_model,
             poly_e, poly_n,
         )
         feasible = narrow_azimuth_bounds(
-            selected, apogees, sim_cfg, vehicle_cfg,
-            motor_model, wind_ensemble, buffered_poly,
+            selected, apogees, sim_cfg, vehicle,
+            propellant, wind_ensemble, buffered_poly,
         )
         az_range = sim_cfg.launch.rail.azimuth_range
         az_min, az_max = int(az_range[0]), int(az_range[1])

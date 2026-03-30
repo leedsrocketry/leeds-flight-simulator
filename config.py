@@ -1,11 +1,16 @@
 """Configuration loader: YAML files → dataclasses.
 
-Two public functions:
-    load_simulation_config(path)  →  SimulationConfig
-    load_vehicle_config(path)     →  VehicleConfig
+Public functions:
+    load_simulation_config(path)                    →  SimulationConfig
+    load_vehicle(path, propellant)                  →  Vehicle
 
 Paths inside SimulationConfig are resolved relative to the simulation.yaml
-file itself; paths inside VehicleConfig are resolved relative to vehicle.yaml.
+file itself; paths inside Vehicle are resolved relative to vehicle.yaml.
+
+The ``Vehicle`` dataclass holds both user-specified wet properties and
+derived dry properties.  Dry properties are computed once during loading
+by subtracting the propellant contribution (from the ``PropellantModel``)
+from the wet values.
 """
 
 from __future__ import annotations
@@ -18,6 +23,8 @@ from typing import Literal
 
 import numpy as np
 import yaml
+
+from motor import PropellantModel, MotorData, load_motor, build_propellant_model
 
 
 # ---------------------------------------------------------------------------
@@ -164,16 +171,6 @@ class VehicleGeometry:
 
 
 @dataclass(frozen=True)
-class VehicleMass:
-    wet_mass: float              # kg — total mass at launch
-    wet_cg: float                # m from nosecone tip — wet vehicle CG
-    wet_inertia_lateral: float   # kg·m² — wet vehicle lateral inertia about wet CG
-    wet_inertia_roll: float      # kg·m² — wet vehicle roll inertia about roll axis
-    propellant_inner_diameter: float | None  # m — propellant bore diameter (None = solid)
-    casing_thickness: float | None           # m — motor casing wall thickness (None = none)
-
-
-@dataclass(frozen=True)
 class ParachuteConfig:
     """Configuration for a single parachute stage."""
     cd: float                                  # drag coefficient
@@ -215,14 +212,30 @@ class VehicleRecovery:
 
 
 @dataclass(frozen=True)
-class VehicleConfig:
+class Vehicle:
+    """Complete vehicle description: geometry, mass (wet + dry), recovery, paths.
+
+    Dry mass properties are derived from the wet values and the propellant
+    model during construction (see :func:`load_vehicle`).
+    """
     geometry: VehicleGeometry
-    mass: VehicleMass
     recovery: VehicleRecovery
     motor: Path               # resolved path to .eng file
     aero_tables: Path         # resolved path to aero tables directory
     fins_aero_table: Path | None  # resolved path to fins component CSV, or None to
                                   # use the filename heuristic in aerodynamics.py
+
+    # Wet mass properties (user-specified)
+    wet_mass: float              # kg — total mass at launch
+    wet_cg: float                # m from nosecone tip — wet vehicle CG
+    wet_inertia_lateral: float   # kg·m² — wet vehicle lateral inertia about wet CG
+    wet_inertia_roll: float      # kg·m² — wet vehicle roll inertia about roll axis
+
+    # Derived dry properties (computed once from wet − propellant)
+    m_dry: float                 # kg
+    cg_dry: float                # m from nosecone tip
+    I_roll_dry: float            # kg·m² — roll inertia about roll axis
+    I_lateral_dry: float         # kg·m² — lateral inertia about dry CG
 
     @property
     def reference_area(self) -> float:
@@ -418,11 +431,58 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     )
 
 
-def load_vehicle_config(path: Path | str) -> VehicleConfig:
-    """Parse *path* (vehicle.yaml) and return a VehicleConfig.
+def _derive_dry_properties(
+    propellant: PropellantModel,
+    wet_mass: float,
+    wet_cg: float,
+    wet_inertia_roll: float,
+    wet_inertia_lateral: float,
+) -> tuple[float, float, float, float]:
+    """Derive dry vehicle properties by subtracting propellant from wet.
+
+    Returns ``(m_dry, cg_dry, I_roll_dry, I_lateral_dry)``.
+    """
+    m_prop_0 = propellant.m_prop_0
+    motor_cg = propellant.motor_cg_loaded
+
+    # --- dry mass
+    m_dry = wet_mass - m_prop_0
+    if m_dry <= 0:
+        raise ValueError(
+            f"Computed dry mass {m_dry:.3f} kg must be > 0 "
+            f"(wet_mass={wet_mass} kg, m_prop={m_prop_0} kg)"
+        )
+
+    # --- dry CG
+    cg_dry = (wet_mass * wet_cg - m_prop_0 * motor_cg) / m_dry
+
+    # --- dry roll inertia (no PAT needed on symmetry axis)
+    I_roll_dry = wet_inertia_roll - propellant.I_roll_prop_0
+
+    # --- dry lateral inertia
+    # Step 1: transfer propellant inertia from propellant CG → wet vehicle CG
+    d_prop_wet = motor_cg - wet_cg
+    I_prop_lat_at_wet_cg = propellant.I_lat_prop_0 + m_prop_0 * d_prop_wet ** 2
+    # Step 2: dry lateral inertia about wet vehicle CG
+    I_lat_dry_at_wet_cg = wet_inertia_lateral - I_prop_lat_at_wet_cg
+    # Step 3: transfer to dry vehicle CG
+    d_dry_wet = cg_dry - wet_cg
+    I_lateral_dry = I_lat_dry_at_wet_cg - m_dry * d_dry_wet ** 2
+
+    return m_dry, cg_dry, I_roll_dry, I_lateral_dry
+
+
+def load_vehicle(path: Path | str) -> tuple[Vehicle, PropellantModel]:
+    """Parse *path* (vehicle.yaml), load the motor, and return Vehicle + PropellantModel.
 
     All file paths are resolved relative to the directory containing the
-    vehicle.yaml file.
+    vehicle.yaml file.  The motor .eng file is loaded and a propellant model
+    built automatically.  Dry mass properties are derived from the wet values
+    and the propellant model.
+
+    Returns
+    -------
+    (vehicle, propellant)
     """
     path = Path(path).resolve()
     base_dir = path.parent
@@ -433,7 +493,7 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
     def _resolve(p: str) -> Path:
         return (base_dir / p).resolve()
 
-    geom = raw["geometry"]
+    geom_raw = raw["geometry"]
     mass = raw["mass"]
     recovery_raw = raw.get("recovery") or {}
 
@@ -459,9 +519,19 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
     fins_raw = raw.get("fins_aero_table")
     fins_aero_table: Path | None = _resolve(fins_raw) if fins_raw is not None else None
 
+    geometry = VehicleGeometry(
+        diameter=float(geom_raw["diameter"]),
+        length=float(geom_raw["length"]),
+        nozzle_diameter=float(geom_raw["nozzle_diameter"]),
+        fin_cp_radius=float(geom_raw["fin_cp_radius"]),
+    )
+
+    # --- Load motor and build propellant model ---
+    motor_path = _resolve(raw["motor"])
+    motor_data = load_motor(motor_path)
+
     prop_inner_raw = mass.get("propellant_inner_diameter")
     casing_raw = mass.get("casing_thickness")
-
     if prop_inner_raw is None:
         warnings.warn(
             "No propellant_inner_diameter specified; assuming solid cylinder. "
@@ -473,150 +543,45 @@ def load_vehicle_config(path: Path | str) -> VehicleConfig:
             "motor diameter."
         )
 
-    return VehicleConfig(
-        geometry=VehicleGeometry(
-            diameter=float(geom["diameter"]),
-            length=float(geom["length"]),
-            nozzle_diameter=float(geom["nozzle_diameter"]),
-            fin_cp_radius=float(geom["fin_cp_radius"]),
-        ),
-        mass=VehicleMass(
-            wet_mass=float(mass["wet_mass"]),
-            wet_cg=float(mass["wet_cg"]),
-            wet_inertia_lateral=float(mass["wet_inertia_lateral"]),
-            wet_inertia_roll=float(mass["wet_inertia_roll"]),
-            propellant_inner_diameter=float(prop_inner_raw) if prop_inner_raw is not None else None,
-            casing_thickness=float(casing_raw) if casing_raw is not None else None,
-        ),
+    propellant = build_propellant_model(
+        motor_data,
+        vehicle_length=geometry.length,
+        nozzle_area=geometry.nozzle_area,
+        casing_thickness=float(casing_raw) if casing_raw is not None else None,
+        propellant_inner_diameter=float(prop_inner_raw) if prop_inner_raw is not None else None,
+    )
+
+    # --- Derive dry properties ---
+    wet_mass_val = float(mass["wet_mass"])
+    wet_cg_val = float(mass["wet_cg"])
+    wet_inertia_lateral_val = float(mass["wet_inertia_lateral"])
+    wet_inertia_roll_val = float(mass["wet_inertia_roll"])
+
+    m_dry, cg_dry, I_roll_dry, I_lateral_dry = _derive_dry_properties(
+        propellant,
+        wet_mass_val,
+        wet_cg_val,
+        wet_inertia_roll_val,
+        wet_inertia_lateral_val,
+    )
+
+    vehicle = Vehicle(
+        geometry=geometry,
         recovery=VehicleRecovery(
             drogue=drogue,
             main=main,
         ),
-        motor=_resolve(raw["motor"]),
+        motor=motor_path,
         aero_tables=_resolve(raw["aero_tables"]),
         fins_aero_table=fins_aero_table,
+        wet_mass=wet_mass_val,
+        wet_cg=wet_cg_val,
+        wet_inertia_lateral=wet_inertia_lateral_val,
+        wet_inertia_roll=wet_inertia_roll_val,
+        m_dry=m_dry,
+        cg_dry=cg_dry,
+        I_roll_dry=I_roll_dry,
+        I_lateral_dry=I_lateral_dry,
     )
 
-
-# ---------------------------------------------------------------------------
-# Motor data dataclass  (raw parsed output of load_motor)
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class MotorData:
-    """Raw data parsed from a RASP .eng file.
-
-    Masses are in kg, time in seconds, thrust in Newtons.
-    ``m_motor_kg`` is the total motor mass (casing + propellant) as stated in
-    the .eng header (\"total weight\" field).  ``diameter_m`` and ``length_m``
-    are the motor's outer diameter and length, converted from the mm values in
-    the .eng header.
-    """
-    name: str
-    diameter_m: float         # motor outer diameter [m]
-    length_m: float           # motor length [m]
-    m_prop_kg: float          # propellant mass [kg]
-    m_motor_kg: float         # total motor mass: casing + propellant [kg]
-    time_s: np.ndarray        # (K,) thrust curve time points [s]
-    thrust_n: np.ndarray      # (K,) thrust values [N]
-
-
-# ---------------------------------------------------------------------------
-# Motor loader
-# ---------------------------------------------------------------------------
-
-def load_motor(path: Path | str) -> MotorData:
-    """Parse a RASP .eng file and return a MotorData.
-
-    Format expected::
-
-        ; optional comment lines
-        Name Diam_mm Length_mm Delays PropMass_kg TotalMass_kg Manufacturer
-        time_s  thrust_N
-        ...
-
-    Masses are in kg. Thrust in Newtons. The final data point should have
-    thrust = 0; if absent it is appended automatically.
-
-    Raises
-    ------
-    ValueError
-        If the file cannot be parsed or contains physically implausible values.
-    """
-    lines = Path(path).read_text(encoding="utf-8").splitlines()
-
-    # Strip comments and blank lines
-    data_lines = [l.strip() for l in lines
-                  if l.strip() and not l.strip().startswith(";")]
-
-    if len(data_lines) < 2:
-        raise ValueError(f"Motor file {path} has no usable data")
-
-    # --- header line
-    header = data_lines[0].split()
-    if len(header) < 7:
-        raise ValueError(
-            f"Motor file header must have ≥7 fields, got: {data_lines[0]!r}"
-        )
-    name = header[0]
-    try:
-        diameter_m = float(header[1]) / 1000.0
-        length_m = float(header[2]) / 1000.0
-        m_prop_kg = float(header[4])
-        m_motor_kg = float(header[5])
-    except ValueError as exc:
-        raise ValueError(
-            f"Could not parse motor header fields: {data_lines[0]!r}"
-        ) from exc
-
-    if diameter_m <= 0:
-        raise ValueError(f"Motor diameter must be > 0, got {diameter_m * 1000:.1f} mm")
-    if length_m <= 0:
-        raise ValueError(f"Motor length must be > 0, got {length_m * 1000:.1f} mm")
-    if m_prop_kg <= 0:
-        raise ValueError(f"Propellant mass must be > 0, got {m_prop_kg}")
-    if m_motor_kg <= m_prop_kg:
-        raise ValueError(
-            f"Total motor mass ({m_motor_kg} kg) must exceed propellant mass "
-            f"({m_prop_kg} kg)"
-        )
-
-    # --- thrust curve data points
-    times: list[float] = []
-    thrusts: list[float] = []
-    for line in data_lines[1:]:
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        try:
-            t, f = float(parts[0]), float(parts[1])
-        except ValueError:
-            continue
-        times.append(t)
-        thrusts.append(f)
-
-    if len(times) < 2:
-        raise ValueError(f"Motor file {path} must have ≥2 thrust data points")
-
-    time_arr = np.asarray(times, dtype=np.float64)
-    thrust_arr = np.asarray(thrusts, dtype=np.float64)
-
-    if not np.all(np.diff(time_arr) > 0):
-        raise ValueError("Thrust curve time points must be strictly increasing")
-    if np.any(thrust_arr < 0):
-        raise ValueError("Thrust values must be non-negative")
-
-    # Ensure burnout point has thrust = 0
-    if thrust_arr[-1] != 0.0:
-        time_arr = np.append(time_arr, time_arr[-1])
-        thrust_arr = np.append(thrust_arr, 0.0)
-
-    return MotorData(
-        name=name,
-        diameter_m=diameter_m,
-        length_m=length_m,
-        m_prop_kg=m_prop_kg,
-        m_motor_kg=m_motor_kg,
-        time_s=time_arr,
-        thrust_n=thrust_arr,
-    )
+    return vehicle, propellant

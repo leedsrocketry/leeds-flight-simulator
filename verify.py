@@ -9,7 +9,7 @@ model (rail → 2DoF ascent → 3DoF descent).
 
 Public API
 ----------
-run_verification(sim_cfg, vehicle_cfg, motor_model, aero_model, dof=6)
+run_verification(sim_cfg, vehicle, propellant, aero_model, dof=6)
     → VerificationResult
 
 Supporting dataclasses:
@@ -31,8 +31,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.figure
 
-from config import SimulationConfig, VehicleConfig, VerificationConfig
-from motor import MotorModel, mass_at, cg_at, thrust_corrected_at
+from config import SimulationConfig, Vehicle, VerificationConfig
+from motor import PropellantModel
 from aerodynamics import AeroModel, aero_forces_moments
 from atmosphere import isa
 from wind import WindEnsemble
@@ -43,6 +43,9 @@ from dynamics import (
     simulate_ascent_2dof,
     integrate_descent,
     SCENARIO_NOMINAL,
+    mass_at,
+    cg_at,
+    thrust_corrected_at,
 )
 from montecarlo import build_sim_params
 
@@ -191,9 +194,11 @@ def _quantities_from_rail_hist(
     t_hist: np.ndarray,
     V_hist: np.ndarray,
     alt_hist: np.ndarray,
-    motor_model: MotorModel,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     geometry: "VehicleGeometry",
+    m_dry: float,
+    cg_dry: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute comparison quantities from the actual simulate_rail() history.
 
@@ -206,7 +211,7 @@ def _quantities_from_rail_hist(
     -------
     (t, alt, mach, thrust, mass, sm)
     """
-    mm = motor_model
+    mm = propellant
     am = aero_model
     N = len(t_hist)
     diameter = geometry.diameter
@@ -229,12 +234,12 @@ def _quantities_from_rail_hist(
         )
         mass_arr[i] = mass_at(
             mm.times, mm.thrusts, mm.m_prop_0,
-            mm.total_impulse, mm.m_dry, ti,
+            mm.total_impulse, m_dry, ti,
         )
 
         cg = cg_at(
             mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
-            mm.m_dry, mm.cg_dry, mm.motor_cg_loaded, ti,
+            m_dry, cg_dry, mm.motor_cg_loaded, ti,
         )
         M = mach_arr[i]
         Re = rho * Vi * geometry.length / mu if Vi > 1.0e-6 and mu > 0.0 else 0.0
@@ -257,9 +262,9 @@ def _quantities_from_rail_hist(
 
 def _extract_trajectory_quantities_6dof(
     result: TrajectoryResult,
-    motor_model: MotorModel,
+    propellant: PropellantModel,
     aero_model: AeroModel,
-    vehicle_cfg: VehicleConfig,
+    vehicle: Vehicle,
     rail_t_hist: np.ndarray | None = None,
     rail_V_hist: np.ndarray | None = None,
     rail_alt_hist: np.ndarray | None = None,
@@ -285,10 +290,12 @@ def _extract_trajectory_quantities_6dof(
     mass_asc = np.empty(n_asc, dtype=np.float64)
     sm_asc = np.empty(n_asc, dtype=np.float64)
 
-    mm = motor_model
+    mm = propellant
     am = aero_model
-    geom = vehicle_cfg.geometry
+    geom = vehicle.geometry
     diameter = geom.diameter
+    m_dry = vehicle.m_dry
+    cg_dry = vehicle.cg_dry
 
     for i in range(n_asc):
         ti = float(t_asc[i])
@@ -309,12 +316,12 @@ def _extract_trajectory_quantities_6dof(
 
         mass_asc[i] = mass_at(
             mm.times, mm.thrusts, mm.m_prop_0,
-            mm.total_impulse, mm.m_dry, ti,
+            mm.total_impulse, m_dry, ti,
         )
 
         cg = cg_at(
             mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
-            mm.m_dry, mm.cg_dry, mm.motor_cg_loaded, ti,
+            m_dry, cg_dry, mm.motor_cg_loaded, ti,
         )
 
         M = mach_asc[i]
@@ -341,7 +348,7 @@ def _extract_trajectory_quantities_6dof(
 
         mach_desc = np.empty(n_desc, dtype=np.float64)
         thrust_desc = np.zeros(n_desc, dtype=np.float64)
-        mass_desc = np.full(n_desc, mm.m_dry, dtype=np.float64)
+        mass_desc = np.full(n_desc, m_dry, dtype=np.float64)
         sm_desc = np.empty(n_desc, dtype=np.float64)
 
         for i in range(n_desc):
@@ -355,7 +362,7 @@ def _extract_trajectory_quantities_6dof(
 
             mach_desc[i] = V / a if a > 0.0 else 0.0
 
-            cg = mm.cg_dry
+            cg = cg_dry
             M = mach_desc[i]
             Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
 
@@ -390,6 +397,7 @@ def _extract_trajectory_quantities_6dof(
     if rail_t_hist is not None and len(rail_t_hist) > 0:
         t_r, alt_r, mach_r, thrust_r, mass_r, sm_r = _quantities_from_rail_hist(
             rail_t_hist, rail_V_hist, rail_alt_hist, mm, am, geom,
+            m_dry, cg_dry,
         )
         t_full      = np.concatenate([t_r,      t_full])
         alt_full    = np.concatenate([alt_r,    alt_full])
@@ -420,9 +428,9 @@ def _extract_trajectory_quantities_2dof(
     t_desc: np.ndarray,
     state_desc: np.ndarray,
     n_desc: int,
-    motor_model: MotorModel,
+    propellant: PropellantModel,
     aero_model: AeroModel,
-    vehicle_cfg: VehicleConfig,
+    vehicle: Vehicle,
     rail_t_hist: np.ndarray | None = None,
     rail_V_hist: np.ndarray | None = None,
     rail_alt_hist: np.ndarray | None = None,
@@ -434,10 +442,12 @@ def _extract_trajectory_quantities_2dof(
     dict with keys "time", "altitude", "mach", "sm", "thrust", "mass"
     → 1-D arrays.
     """
-    mm = motor_model
+    mm = propellant
     am = aero_model
-    geom = vehicle_cfg.geometry
+    geom = vehicle.geometry
     diameter = geom.diameter
+    m_dry = vehicle.m_dry
+    cg_dry = vehicle.cg_dry
     n_asc = len(t_asc)
 
     # --- Ascent quantities ---
@@ -460,13 +470,13 @@ def _extract_trajectory_quantities_2dof(
 
         mass_asc[i] = mass_at(
             mm.times, mm.thrusts, mm.m_prop_0,
-            mm.total_impulse, mm.m_dry, ti,
+            mm.total_impulse, m_dry, ti,
         )
 
         # SM at α=0
         cg = cg_at(
             mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
-            mm.m_dry, mm.cg_dry, mm.motor_cg_loaded, ti,
+            m_dry, cg_dry, mm.motor_cg_loaded, ti,
         )
         M = mach_asc[i]
         Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
@@ -487,7 +497,7 @@ def _extract_trajectory_quantities_2dof(
 
     mach_desc = np.empty(n_desc, dtype=np.float64)
     thrust_desc = np.zeros(n_desc, dtype=np.float64)
-    mass_desc = np.full(n_desc, mm.m_dry, dtype=np.float64)
+    mass_desc = np.full(n_desc, m_dry, dtype=np.float64)
     sm_desc = np.empty(n_desc, dtype=np.float64)
 
     for i in range(n_desc):
@@ -500,7 +510,7 @@ def _extract_trajectory_quantities_2dof(
         V = math.sqrt(vN * vN + vE * vE + vD * vD)
         mach_desc[i] = V / a if a > 0.0 else 0.0
 
-        cg = mm.cg_dry
+        cg = cg_dry
         M = mach_desc[i]
         Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
 
@@ -525,6 +535,7 @@ def _extract_trajectory_quantities_2dof(
     if rail_t_hist is not None and len(rail_t_hist) > 0:
         t_r, alt_r, mach_r, thrust_r, mass_r, sm_r = _quantities_from_rail_hist(
             rail_t_hist, rail_V_hist, rail_alt_hist, mm, am, geom,
+            m_dry, cg_dry,
         )
         t_full      = np.concatenate([t_r,      t_full])
         alt_full    = np.concatenate([alt_r,    alt_full])
@@ -685,8 +696,8 @@ def _resolve_rail_angle(
 
 def run_verification(
     sim_cfg: SimulationConfig,
-    vehicle_cfg: VehicleConfig,
-    motor_model: MotorModel,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
     aero_model: AeroModel,
     dof: int = 6,
     azimuth_override: float | None = None,
@@ -706,8 +717,8 @@ def run_verification(
     ----------
     sim_cfg
         Simulation configuration (must have ``verification`` set).
-    vehicle_cfg, motor_model, aero_model
-        Pre-loaded vehicle/motor/aero models.
+    vehicle, propellant, aero_model
+        Pre-loaded vehicle/propellant/aero models.
     dof : int
         Degrees of freedom for the ascent model: 6 (full 6DoF) or 2
         (point-mass in a vertical plane).
@@ -744,9 +755,10 @@ def run_verification(
     else:
         inclination = 0.0 if rail.inclination == "auto" else float(rail.inclination)
 
-    geom = vehicle_cfg.geometry
+    geom = vehicle.geometry
     zero_wind = _zero_wind_ensemble()
-    mm = motor_model
+    mm = propellant
+    m_dry = vehicle.m_dry
 
     # Run the rail phase once to capture the trajectory history.
     # This uses the same simulate_rail() called inside run_trajectory()
@@ -755,7 +767,7 @@ def run_verification(
     _, _, _, _, _, rt_hist, rV_hist, ralt_hist, rn = simulate_rail(
         azimuth * _DEG2RAD, inclination * _DEG2RAD, rail.length,
         mm.times, mm.thrusts, mm.nozzle_area, 1.0,
-        mm.m_prop_0, mm.total_impulse, mm.m_dry,
+        mm.m_prop_0, mm.total_impulse, m_dry,
         aero_model.mach_grid, aero_model.re_grid,
         aero_model.alpha_grid, aero_model.ca_table,
         geom.reference_area, geom.length,
@@ -768,7 +780,7 @@ def run_verification(
     if dof == 6:
         # --- Full 6DoF trajectory ---
         params = build_sim_params(
-            sim_cfg, vehicle_cfg, motor_model, aero_model, zero_wind,
+            sim_cfg, vehicle, propellant, aero_model, zero_wind,
             wind_profile_index=0,
             azimuth_deg=azimuth,
             inclination_deg=inclination,
@@ -778,7 +790,7 @@ def run_verification(
         traj = run_trajectory(params, SCENARIO_NOMINAL, None, None, float("inf"))
 
         sim_data = _extract_trajectory_quantities_6dof(
-            traj, motor_model, aero_model, vehicle_cfg,
+            traj, propellant, aero_model, vehicle,
             rail_t, rail_V, rail_alt,
         )
     elif dof == 2:
@@ -786,13 +798,13 @@ def run_verification(
         t_asc, x_asc, z_asc, vx_asc, vz_asc = simulate_ascent_2dof(
             rail_inclination_rad=inclination * _DEG2RAD,
             rail_length=rail.length,
-            motor_times=motor_model.times,
-            motor_thrusts=motor_model.thrusts,
-            nozzle_area=motor_model.nozzle_area,
+            motor_times=mm.times,
+            motor_thrusts=mm.thrusts,
+            nozzle_area=mm.nozzle_area,
             impulse_factor=1.0,
-            m_prop_0=motor_model.m_prop_0,
-            total_impulse=motor_model.total_impulse,
-            m_dry=motor_model.m_dry,
+            m_prop_0=mm.m_prop_0,
+            total_impulse=mm.total_impulse,
+            m_dry=m_dry,
             mach_g=aero_model.mach_grid,
             re_g=aero_model.re_grid,
             alpha_g=aero_model.alpha_grid,
@@ -820,7 +832,7 @@ def run_verification(
         ], dtype=np.float64)
 
         # Recovery CdA
-        rec = vehicle_cfg.recovery
+        rec = vehicle.recovery
         has_drogue = rec.drogue is not None
         has_main = rec.main is not None
         drogue_cda = rec.drogue.cd * rec.drogue.area if has_drogue else 0.0
@@ -837,7 +849,7 @@ def run_verification(
             aero_model.mach_grid, aero_model.re_grid,
             aero_model.alpha_grid, aero_model.ca_table,
             geom.reference_area, geom.length,
-            motor_model.m_dry,
+            m_dry,
             drogue_cda, main_cda, main_deploy_alt,
             SCENARIO_NOMINAL,
             1.0e-6, 1.0e-6,
@@ -846,7 +858,7 @@ def run_verification(
         sim_data = _extract_trajectory_quantities_2dof(
             t_asc, z_asc, vx_asc, vz_asc,
             t_desc, y_desc, n_desc,
-            motor_model, aero_model, vehicle_cfg,
+            propellant, aero_model, vehicle,
             rail_t, rail_V, rail_alt,
         )
     else:

@@ -9,14 +9,25 @@ import pytest
 
 from config import (
     load_simulation_config,
-    load_vehicle_config,
+    load_vehicle,
     SimulationConfig,
-    VehicleConfig,
+    Vehicle,
 )
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_STUB_ENG = """\
+; Stub motor for config tests — small propellant mass to stay consistent
+; with _VEHICLE_YAML wet values (26.5 kg, 5.2 kg·m² lateral inertia)
+M100 54 200 0 0.5 1.0 TestMfr
+0.0    0.0
+0.1   200.0
+1.0   200.0
+2.0     0.0
+"""
+
 
 def _write(tmp_path: Path, name: str, content: str) -> Path:
     p = tmp_path / name
@@ -26,6 +37,10 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
     if not stub.exists():
         np.savez(stub, altitude_m=np.array([0.0]), wind_east_ms=np.zeros((1, 1)),
                  wind_north_ms=np.zeros((1, 1)))
+    # Create a stub motor.eng so load_vehicle can parse it
+    eng = tmp_path / "motor.eng"
+    if not eng.exists():
+        eng.write_text(_STUB_ENG, encoding="utf-8")
     return p
 
 
@@ -266,18 +281,18 @@ def test_acceptance_scenario_lists_empty_when_omitted(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# VehicleConfig tests
+# Vehicle tests
 # ---------------------------------------------------------------------------
 
 def test_vehicle_config_loads(tmp_path):
     p = _write(tmp_path, "vehicle.yaml", _VEHICLE_YAML)
-    v = load_vehicle_config(p)
-    assert isinstance(v, VehicleConfig)
+    v, _ = load_vehicle(p)
+    assert isinstance(v, Vehicle)
 
 
 def test_vehicle_file_paths(tmp_path):
     """motor and aero_tables are resolved to absolute paths."""
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.motor.is_absolute()
     assert v.motor == (tmp_path / "motor.eng").resolve()
     assert v.aero_tables.is_absolute()
@@ -286,7 +301,7 @@ def test_vehicle_file_paths(tmp_path):
 
 def test_fins_aero_table_absent(tmp_path):
     """fins_aero_table defaults to None when not specified."""
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.fins_aero_table is None
 
 
@@ -296,14 +311,14 @@ def test_fins_aero_table_specified(tmp_path):
         'motor: "motor.eng"',
         'motor: "motor.eng"\n    fins_aero_table: "aero_tables/fins.csv"',
     )
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_with_fins))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", yaml_with_fins))
     assert v.fins_aero_table is not None
     assert v.fins_aero_table.is_absolute()
     assert v.fins_aero_table == (tmp_path / "aero_tables" / "fins.csv").resolve()
 
 
 def test_vehicle_geometry(tmp_path):
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.geometry.diameter == pytest.approx(0.130)
     assert v.geometry.length == pytest.approx(2.6)
     assert v.geometry.nozzle_position == pytest.approx(2.6)  # = length (flush aft)
@@ -313,7 +328,7 @@ def test_vehicle_geometry(tmp_path):
 
 def test_reference_area_computed(tmp_path):
     """reference_area is π·d²/4 — derived from diameter, not read from YAML."""
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     expected = math.pi * 0.130 ** 2 / 4.0
     assert v.reference_area == pytest.approx(expected, rel=1e-6)
     assert v.geometry.reference_area == pytest.approx(expected, rel=1e-6)
@@ -321,31 +336,29 @@ def test_reference_area_computed(tmp_path):
 
 def test_nozzle_area_computed(tmp_path):
     """nozzle_area is π·dₑ²/4 — derived from nozzle_diameter."""
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     expected = math.pi * 0.08 ** 2 / 4.0
     assert v.geometry.nozzle_area == pytest.approx(expected, rel=1e-6)
 
 
 def test_vehicle_mass(tmp_path):
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.mass.wet_mass == pytest.approx(26.5)
-    assert v.mass.wet_cg == pytest.approx(1.15)
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    assert v.wet_mass == pytest.approx(26.5)
+    assert v.wet_cg == pytest.approx(1.15)
+    assert v.m_dry > 0.0
+    assert v.cg_dry > 0.0
 
 
 def test_vehicle_inertia(tmp_path):
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.mass.wet_inertia_roll == pytest.approx(0.012)
-    assert v.mass.wet_inertia_lateral == pytest.approx(5.2)
-
-
-def test_vehicle_propellant_geometry(tmp_path):
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
-    assert v.mass.propellant_inner_diameter == pytest.approx(0.030)
-    assert v.mass.casing_thickness == pytest.approx(0.002)
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    assert v.wet_inertia_roll == pytest.approx(0.012)
+    assert v.wet_inertia_lateral == pytest.approx(5.2)
+    assert v.I_roll_dry > 0.0
+    assert v.I_lateral_dry > 0.0
 
 
 def test_vehicle_recovery(tmp_path):
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.recovery.drogue is not None
     assert v.recovery.drogue.cd == pytest.approx(2.0)
     assert v.recovery.drogue.area == pytest.approx(0.15)
@@ -358,7 +371,7 @@ def test_vehicle_recovery(tmp_path):
 
 def test_recovery_numeric_threshold(tmp_path):
     """main threshold=305 parses as float; drogue threshold='apogee' as literal."""
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert isinstance(v.recovery.main.threshold, float)
     assert v.recovery.drogue.threshold == "apogee"
 
@@ -373,7 +386,7 @@ def test_recovery_drogue_optional(tmp_path):
         "        threshold: apogee\n",
         "    recovery:\n",
     )
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_no_drogue))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", yaml_no_drogue))
     assert v.recovery.drogue is None
     assert v.recovery.main is not None
 
@@ -388,7 +401,7 @@ def test_recovery_drogue_without_main_raises(tmp_path):
         "",
     )
     with pytest.raises(ValueError, match="drogue"):
-        load_vehicle_config(_write(tmp_path, "v.yaml", yaml_no_main))
+        load_vehicle(_write(tmp_path, "v.yaml", yaml_no_main))
 
 
 def test_recovery_main_only(tmp_path):
@@ -401,7 +414,7 @@ def test_recovery_main_only(tmp_path):
         "        threshold: apogee\n",
         "    recovery:\n",
     )
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_main_only))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", yaml_main_only))
     assert v.recovery.drogue is None
     assert v.recovery.main is not None
 
@@ -420,13 +433,13 @@ def test_recovery_no_chutes(tmp_path):
         "        threshold: 305\n",
         "    recovery:\n",
     )
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_no_chutes))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", yaml_no_chutes))
     assert v.recovery.drogue is None
     assert v.recovery.main is None
 
 
 def test_vehicle_is_frozen(tmp_path):
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     with pytest.raises(Exception):
         v.geometry.diameter = 0.2  # type: ignore[misc]
 
@@ -437,7 +450,7 @@ def test_vehicle_is_frozen(tmp_path):
 
 def test_active_scenarios_both_numeric_main(tmp_path):
     """Both drogue and main with numeric main threshold → all four scenarios."""
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert set(v.recovery.active_scenarios) == {
         "nominal", "ballistic", "drogue_only", "premature_main"
     }
@@ -446,7 +459,7 @@ def test_active_scenarios_both_numeric_main(tmp_path):
 def test_active_scenarios_both_apogee_main(tmp_path):
     """Both drogue and main with apogee main threshold → no premature_main."""
     yaml_apogee_main = _VEHICLE_YAML.replace("threshold: 305", "threshold: apogee")
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_apogee_main))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", yaml_apogee_main))
     assert set(v.recovery.active_scenarios) == {
         "nominal", "ballistic", "drogue_only"
     }
@@ -462,7 +475,7 @@ def test_active_scenarios_main_only_numeric(tmp_path):
         "        threshold: apogee\n",
         "    recovery:\n",
     )
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_main_only))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", yaml_main_only))
     assert set(v.recovery.active_scenarios) == {
         "nominal", "ballistic", "premature_main"
     }
@@ -482,7 +495,7 @@ def test_active_scenarios_no_chutes(tmp_path):
         "        threshold: 305\n",
         "    recovery:\n",
     )
-    v = load_vehicle_config(_write(tmp_path, "v.yaml", yaml_no_chutes))
+    v, _ = load_vehicle(_write(tmp_path, "v.yaml", yaml_no_chutes))
     assert v.recovery.active_scenarios == ("nominal",)
 
 
@@ -498,5 +511,5 @@ def test_real_simulation_yaml_loads(sim_yaml_path):
 
 def test_real_vehicle_yaml_loads(vehicle_yaml_path):
     """The committed vehicle YAML must parse without errors."""
-    v = load_vehicle_config(vehicle_yaml_path)
+    v, _ = load_vehicle(vehicle_yaml_path)
     assert v.geometry.diameter == pytest.approx(0.130)
