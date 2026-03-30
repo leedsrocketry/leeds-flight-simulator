@@ -39,6 +39,7 @@ from wind import WindEnsemble
 from dynamics import (
     TrajectoryResult,
     run_trajectory,
+    simulate_rail,
     simulate_ascent_2dof,
     integrate_descent,
     SCENARIO_NOMINAL,
@@ -186,43 +187,68 @@ def _load_reference_csv(path: Path) -> dict[str, np.ndarray]:
 # Rail phase reconstruction helper
 # ---------------------------------------------------------------------------
 
-def _rail_phase_arrays(
-    t_exit: float,
-    z_exit: float,
-    V_exit: float,
+def _quantities_from_rail_hist(
+    t_hist: np.ndarray,
+    V_hist: np.ndarray,
+    alt_hist: np.ndarray,
     motor_model: MotorModel,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Generate time series for the launch rail phase (t=0 to t_exit, exclusive).
+    aero_model: AeroModel,
+    geometry: "VehicleGeometry",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute comparison quantities from the actual simulate_rail() history.
 
-    Altitude and speed are linearly interpolated from 0 to their exit values
-    (a good approximation for the short rail phase).  Thrust and mass are
-    computed exactly from the motor model.
+    The time, velocity, and altitude arrays come directly from the RK45
+    integrator in ``simulate_rail()``, so they reflect the same code path
+    used by the Monte Carlo simulation.  Thrust, mass, Mach, and SM are
+    derived from the motor and aero models at each recorded time step.
 
     Returns
     -------
-    (t_rail, alt_rail, mach_rail, thrust_rail, mass_rail)
-        Each array has length N where N = ceil(t_exit / 0.002), minimum 2.
+    (t, alt, mach, thrust, mass, sm)
     """
     mm = motor_model
-    N = max(2, math.ceil(t_exit / 0.002))
-    t_rail = np.linspace(0.0, t_exit, N + 1)[:-1]  # exclude t_exit (it starts the free-flight arrays)
+    am = aero_model
+    N = len(t_hist)
+    diameter = geometry.diameter
 
-    alt_rail = np.linspace(0.0, z_exit, N)
-    V_rail = np.linspace(0.0, V_exit, N)
-
-    thrust_rail = np.empty(N, dtype=np.float64)
-    mass_rail = np.empty(N, dtype=np.float64)
-    mach_rail = np.empty(N, dtype=np.float64)
+    mach_arr = np.empty(N, dtype=np.float64)
+    thrust_arr = np.empty(N, dtype=np.float64)
+    mass_arr = np.empty(N, dtype=np.float64)
+    sm_arr = np.empty(N, dtype=np.float64)
 
     for i in range(N):
-        ti = float(t_rail[i])
-        hi = float(alt_rail[i])
-        thrust_rail[i] = thrust_corrected_at(mm.times, mm.thrusts, mm.nozzle_area, hi, ti)
-        mass_rail[i] = mass_at(mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse, mm.m_dry, ti)
-        _, _, _, a_sound, _ = isa(hi)
-        mach_rail[i] = V_rail[i] / a_sound if a_sound > 0.0 else 0.0
+        ti = float(t_hist[i])
+        hi = float(alt_hist[i])
+        Vi = float(V_hist[i])
 
-    return t_rail, alt_rail, mach_rail, thrust_rail, mass_rail
+        _, _, rho, a_sound, mu = isa(hi)
+        mach_arr[i] = Vi / a_sound if a_sound > 0.0 else 0.0
+
+        thrust_arr[i] = thrust_corrected_at(
+            mm.times, mm.thrusts, mm.nozzle_area, hi, ti,
+        )
+        mass_arr[i] = mass_at(
+            mm.times, mm.thrusts, mm.m_prop_0,
+            mm.total_impulse, mm.m_dry, ti,
+        )
+
+        cg = cg_at(
+            mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
+            mm.m_dry, mm.cg_dry, mm.motor_cg_loaded, ti,
+        )
+        M = mach_arr[i]
+        Re = rho * Vi * geometry.length / mu if Vi > 1.0e-6 and mu > 0.0 else 0.0
+
+        _, _, _, _, _, cp_whole = aero_forces_moments(
+            am.mach_grid, am.re_grid, am.alpha_grid,
+            am.ca_table, am.cn_table, am.cp_table,
+            am.cn_comp, am.cp_comp, am.has_components,
+            M, Re, rho, Vi, geometry.reference_area,
+            Vi, 0.0, 0.0, 0.0, 0.0, cg,
+        )
+        sm_arr[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+
+    return t_hist.copy(), alt_hist.copy(), mach_arr, thrust_arr, mass_arr, sm_arr
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +260,9 @@ def _extract_trajectory_quantities_6dof(
     motor_model: MotorModel,
     aero_model: AeroModel,
     vehicle_cfg: VehicleConfig,
+    rail_t_hist: np.ndarray | None = None,
+    rail_V_hist: np.ndarray | None = None,
+    rail_alt_hist: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Extract altitude, Mach, SM, thrust, and mass from a 6DoF trajectory.
 
@@ -356,21 +385,16 @@ def _extract_trajectory_quantities_6dof(
         mass_full = mass_asc
 
     # --- Prepend launch rail phase (t=0 to t_asc[0]) ---
-    # t_asc starts at rail exit; prepend the on-rail period so the LFS time
-    # axis aligns with reference simulators that start at ignition (t=0).
-    t_exit = float(t_asc[0])
-    if t_exit > 0.0:
-        u0 = float(state_asc[0, 7])
-        v0 = float(state_asc[0, 8])
-        w0 = float(state_asc[0, 9])
-        V_exit = math.sqrt(u0 * u0 + v0 * v0 + w0 * w0)
-        z_exit = float(alt_asc[0])
-        t_r, alt_r, mach_r, thrust_r, mass_r = _rail_phase_arrays(t_exit, z_exit, V_exit, mm)
-        sm_r = np.full(len(t_r), float(sm_asc[0]))
-        t_full    = np.concatenate([t_r,     t_full])
-        alt_full  = np.concatenate([alt_r,   alt_full])
-        mach_full = np.concatenate([mach_r,  mach_full])
-        sm_full   = np.concatenate([sm_r,    sm_full])
+    # Uses the actual trajectory recorded by simulate_rail() so the
+    # comparison exercises the same code path as the Monte Carlo simulation.
+    if rail_t_hist is not None and len(rail_t_hist) > 0:
+        t_r, alt_r, mach_r, thrust_r, mass_r, sm_r = _quantities_from_rail_hist(
+            rail_t_hist, rail_V_hist, rail_alt_hist, mm, am, geom,
+        )
+        t_full      = np.concatenate([t_r,      t_full])
+        alt_full    = np.concatenate([alt_r,    alt_full])
+        mach_full   = np.concatenate([mach_r,   mach_full])
+        sm_full     = np.concatenate([sm_r,     sm_full])
         thrust_full = np.concatenate([thrust_r, thrust_full])
         mass_full   = np.concatenate([mass_r,   mass_full])
 
@@ -399,6 +423,9 @@ def _extract_trajectory_quantities_2dof(
     motor_model: MotorModel,
     aero_model: AeroModel,
     vehicle_cfg: VehicleConfig,
+    rail_t_hist: np.ndarray | None = None,
+    rail_V_hist: np.ndarray | None = None,
+    rail_alt_hist: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Extract altitude, Mach, SM, thrust, and mass from a 2DoF ascent + 3DoF descent.
 
@@ -495,12 +522,10 @@ def _extract_trajectory_quantities_2dof(
     mass_full = np.concatenate([mass_asc, mass_desc[1:]])
 
     # --- Prepend launch rail phase (t=0 to t_asc[0]) ---
-    t_exit = float(t_asc[0])
-    if t_exit > 0.0:
-        V_exit = math.sqrt(float(vx_asc[0])**2 + float(vz_asc[0])**2)
-        z_exit = float(z_asc[0])
-        t_r, alt_r, mach_r, thrust_r, mass_r = _rail_phase_arrays(t_exit, z_exit, V_exit, mm)
-        sm_r = np.full(len(t_r), float(sm_asc[0]))
+    if rail_t_hist is not None and len(rail_t_hist) > 0:
+        t_r, alt_r, mach_r, thrust_r, mass_r, sm_r = _quantities_from_rail_hist(
+            rail_t_hist, rail_V_hist, rail_alt_hist, mm, am, geom,
+        )
         t_full      = np.concatenate([t_r,      t_full])
         alt_full    = np.concatenate([alt_r,    alt_full])
         mach_full   = np.concatenate([mach_r,   mach_full])
@@ -702,6 +727,24 @@ def run_verification(
 
     geom = vehicle_cfg.geometry
     zero_wind = _zero_wind_ensemble()
+    mm = motor_model
+
+    # Run the rail phase once to capture the trajectory history.
+    # This uses the same simulate_rail() called inside run_trajectory()
+    # and simulate_ascent_2dof(), so the comparison exercises the real
+    # rail-phase code path.
+    _, _, _, _, _, rt_hist, rV_hist, ralt_hist, rn = simulate_rail(
+        azimuth * _DEG2RAD, inclination * _DEG2RAD, rail.length,
+        mm.times, mm.thrusts, mm.nozzle_area, 1.0,
+        mm.m_prop_0, mm.total_impulse, mm.m_dry,
+        aero_model.mach_grid, aero_model.re_grid,
+        aero_model.alpha_grid, aero_model.ca_table,
+        geom.reference_area, geom.length,
+        1.0e-6, 1.0e-6,
+    )
+    rail_t = rt_hist[:rn]
+    rail_V = rV_hist[:rn]
+    rail_alt = ralt_hist[:rn]
 
     if dof == 6:
         # --- Full 6DoF trajectory ---
@@ -717,6 +760,7 @@ def run_verification(
 
         sim_data = _extract_trajectory_quantities_6dof(
             traj, motor_model, aero_model, vehicle_cfg,
+            rail_t, rail_V, rail_alt,
         )
     elif dof == 2:
         # --- 2DoF ascent + 3DoF nominal descent ---
@@ -784,6 +828,7 @@ def run_verification(
             t_asc, z_asc, vx_asc, vz_asc,
             t_desc, y_desc, n_desc,
             motor_model, aero_model, vehicle_cfg,
+            rail_t, rail_V, rail_alt,
         )
     else:
         raise ValueError(f"dof must be 2 or 6, got {dof}")

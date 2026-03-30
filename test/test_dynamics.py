@@ -303,7 +303,7 @@ def test_rail_no_drag_no_gravity():
 
     # Horizontal rail (0° inclination) pointing north (0° azimuth)
     # → no gravity component along rail
-    V_exit, t_exit, rN, rE, rD = simulate_rail(
+    V_exit, t_exit, rN, rE, rD, _, _, _, _ = simulate_rail(
         rail_azimuth_rad=0.0,
         rail_inclination_rad=0.0,
         rail_length=rail_length,
@@ -352,7 +352,7 @@ def test_rail_vertical_with_gravity():
     total_impulse = float(np.trapz(thrusts, times))
     mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
 
-    V_exit, t_exit, rN, rE, rD = simulate_rail(
+    V_exit, t_exit, rN, rE, rD, _, _, _, _ = simulate_rail(
         rail_azimuth_rad=0.0,
         rail_inclination_rad=math.radians(90.0),
         rail_length=rail_length,
@@ -403,7 +403,7 @@ def test_rail_exit_position_direction(az_deg, inc_deg):
     az = math.radians(az_deg)
     inc = math.radians(inc_deg)
 
-    V_exit, t_exit, rN, rE, rD = simulate_rail(
+    V_exit, t_exit, rN, rE, rD, _, _, _, _ = simulate_rail(
         az, inc, rail_length,
         times, thrusts, 0.0, 1.0,
         m_prop_0, total_impulse, m_dry,

@@ -358,12 +358,19 @@ def simulate_rail(
     length: float,
     rtol: float,
     atol: float,
-) -> tuple[float, float, float, float, float]:
+) -> tuple[float, float, float, float, float,
+           np.ndarray, np.ndarray, np.ndarray, int]:
     """Integrate launch-rail phase until CG travels ``rail_length``.
+
+    Records ``(t, V, altitude)`` at each accepted integrator step so the
+    full rail-phase trajectory is available to callers that need it (e.g.
+    verification).  Callers that only need exit conditions can ignore the
+    last four return values.
 
     Returns
     -------
-    (V_exit, t_exit, rN_exit, rE_exit, rD_exit)
+    (V_exit, t_exit, rN_exit, rE_exit, rD_exit,
+     t_hist, V_hist, alt_hist, n_hist)
     """
     sin_theta = math.sin(rail_inclination_rad)
     eN, eE, eD = _rail_direction(rail_azimuth_rad, rail_inclination_rad)
@@ -377,6 +384,7 @@ def simulate_rail(
     h_max = 0.05
 
     max_steps = 50000
+    max_hist = 500
     y = np.empty(2)
     y_new = np.empty(2)
     y_err = np.empty(2)
@@ -389,7 +397,18 @@ def simulate_rail(
     k7 = np.empty(2)
     ys = np.empty(2)
 
+    t_hist = np.empty(max_hist, dtype=np.float64)
+    V_hist = np.empty(max_hist, dtype=np.float64)
+    alt_hist = np.empty(max_hist, dtype=np.float64)
+    n_hist = 0
+
     y[0] = s; y[1] = V
+
+    # Record initial state (t=0, V=0, alt=0)
+    t_hist[0] = 0.0
+    V_hist[0] = 0.0
+    alt_hist[0] = 0.0
+    n_hist = 1
 
     ds, dV = _rail_deriv(
         t, y[0], y[1], sin_theta,
@@ -496,6 +515,13 @@ def simulate_rail(
                 y[j] = y_new[j]
             k1, k7 = k7, k1  # FSAL swap — no copy
 
+            # Record accepted step
+            if n_hist < max_hist:
+                t_hist[n_hist] = t
+                V_hist[n_hist] = y[1]
+                alt_hist[n_hist] = max(-y[0] * eD, 0.0)
+                n_hist += 1
+
             if y[0] >= rail_length:
                 # Interpolate to exact rail exit (V² linear in s)
                 if y[0] > s_prev:
@@ -505,7 +531,9 @@ def simulate_rail(
                     ds = rail_length - s_prev
                     V_avg = 0.5 * (V_prev + V_exit)
                     t_exit = t_prev + ds / V_avg if V_avg > 1.0e-15 else t_prev + frac * (t - t_prev)
-                    return V_exit, t_exit, rail_length * eN, rail_length * eE, rail_length * eD
+                    return (V_exit, t_exit,
+                            rail_length * eN, rail_length * eE, rail_length * eD,
+                            t_hist, V_hist, alt_hist, n_hist)
                 break
 
         factor = optimal_step_factor(err)
@@ -521,7 +549,8 @@ def simulate_rail(
     V_exit = y[1]
     t_exit = t
     s_exit = y[0]
-    return V_exit, t_exit, s_exit * eN, s_exit * eE, s_exit * eD
+    return (V_exit, t_exit, s_exit * eN, s_exit * eE, s_exit * eD,
+            t_hist, V_hist, alt_hist, n_hist)
 
 
 # ---------------------------------------------------------------------------
@@ -1253,7 +1282,7 @@ def simulate_ascent_2dof(
     to apogee (inclusive).
     """
     # Rail phase at azimuth=0 — only inclination matters for the 2DoF plane
-    V_exit, t_exit, rN, _, rD = simulate_rail(
+    V_exit, t_exit, rN, _, rD, _, _, _, _ = simulate_rail(
         0.0, rail_inclination_rad, rail_length,
         motor_times, motor_thrusts, nozzle_area, impulse_factor,
         m_prop_0, total_impulse, m_dry,
@@ -1456,7 +1485,7 @@ def run_trajectory(
     t_burnout = float(p.motor_times[-1])
 
     # ---- Phase 1: Launch rail ----
-    V_exit, t_exit, rN_exit, rE_exit, rD_exit = simulate_rail(
+    V_exit, t_exit, rN_exit, rE_exit, rD_exit, _, _, _, _ = simulate_rail(
         p.rail_azimuth_rad, p.rail_inclination_rad, p.rail_length,
         p.motor_times, p.motor_thrusts, p.nozzle_area, p.impulse_factor,
         p.m_prop_0, p.total_impulse, p.m_dry,

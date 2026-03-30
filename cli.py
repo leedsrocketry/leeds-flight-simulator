@@ -642,6 +642,14 @@ def verify(config_path: Path, dof: str, dump_csv: Path | None, no_popup: bool) -
     warnings.showwarning = _showwarning
 
     display.start()
+
+    if dof == "2":
+        display.add_warning(
+            "2DoF verification uses a simplified point-mass model, not the "
+            "6DoF code path used by Monte Carlo. Use --dof 6 to verify the "
+            "production simulation."
+        )
+
     display.update_status("Loading configuration and models...")
     vehicle_cfg, motor_model, aero_model, _ = load_all_models(sim_cfg)
 
