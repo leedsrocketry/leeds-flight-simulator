@@ -21,6 +21,7 @@ Runs entirely offline. The only network access is to fetch base map tiles for th
 - [Output Files](#output-files)
 - [Replaying Samples](#replaying-samples)
 - [Verification](#verification)
+- [Configuration Diff](#configuration-diff)
 - [Operational Workflow](#operational-workflow)
 - [Contact](#contact)
 - [Licence](#licence)
@@ -45,7 +46,7 @@ Although built for G2B2, the simulator is entirely generic. Any team launching a
 ```
 git clone https://github.com/leedsrocketry/leeds-flight-simulator.git
 cd leeds-flight-simulator
-pip install numpy numba scipy shapely pyyaml matplotlib rich click
+pip install numpy numba scipy shapely pyyaml ruamel.yaml matplotlib rich click
 ```
 
 Verify:
@@ -378,6 +379,35 @@ By default, the comparison figure is displayed interactively with linked zoom/pa
 ![Verification plot](simulations/g2b2-safety-case/results/verification_plot.png)
 
 Five time-series subplots (altitude, Mach, stability margin, thrust, mass) share a linked time axis. The bottom-right subplot shows drag coefficient vs Mach number over the reference simulation's Mach range. Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail).
+
+
+## Configuration Diff
+
+Compares the vehicle and launch configuration in the LFS YAML files against a RASAero II CDX1 file, highlighting any discrepancies. Useful for confirming that both tools are using the same inputs before relying on a cross-tool verification.
+
+```
+python . diff <simulation.yaml> <cdx1_file>
+```
+
+The motor is matched automatically: the stem of the `.eng` filename in `vehicle.yaml` (e.g. `o3400` from `o3400.eng`) is matched case-insensitively against the CDX1 simulation entries. If no match is found, the first entry is used and a warning is shown.
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `-t`, `--threshold` `FLOAT` | Acceptance threshold as a fraction (default `0.05` = 5%); a numeric row passes if its percentage difference is within this value |
+| `-m`, `--motor` `TEXT` | Override automatic motor matching; substring matched case-insensitively against CDX1 `SustainerEngine` entries |
+| `-f`, `--force` | Update the YAML configuration files to match CDX1 values for any failing numeric rows |
+
+Rows are sorted by descending percentage difference. String-only rows (deployment type, motor name) are shown at the bottom. Atmospheric values (temperature, pressure) are informational — they compare the CDX1 site conditions against the ISA model at the same altitude and cannot be force-updated.
+
+Example:
+
+```
+python . diff simulations/g2b2-safety-case/cape-wrath.yaml debug/g2b2.CDX1
+python . diff simulations/g2b2-safety-case/cape-wrath.yaml debug/g2b2.CDX1 -t 0.01
+python . diff simulations/g2b2-safety-case/cape-wrath.yaml debug/g2b2.CDX1 -f
+```
 
 
 ## Operational Workflow
