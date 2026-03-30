@@ -450,22 +450,25 @@ def _compare_quantity(
     values gracefully.  A quantity passes if the fraction of points
     outside the tolerance band is ≤ ``exceedance_fraction``.
     """
-    # Clip to overlapping time range
-    t_max = min(ref_time[-1], sim_time[-1])
-    mask = ref_time <= t_max
-    t_ref = ref_time[mask]
-    v_ref = ref_values[mask]
+    # Use the full reference timebase.  Simulator values beyond its
+    # time range are set to NaN so they are not displayed or compared.
+    t_ref = ref_time
+    v_ref = ref_values
 
     # Interpolate simulator to reference time points
     v_sim = np.interp(t_ref, sim_time, sim_values)
+    beyond = t_ref > sim_time[-1]
+    v_sim[beyond] = np.nan
 
-    # Fractional tolerance with absolute floor
+    # Fractional tolerance with absolute floor (NaN points are excluded)
     floor = _TOLERANCE_FLOORS.get(name, 1.0)
     scale = np.maximum(np.abs(v_ref), floor)
+    valid = np.isfinite(v_sim)
     within = np.abs(v_sim - v_ref) <= tolerance * scale
+    within[~valid] = True  # don't penalise beyond-range points
 
     n_outside = int(np.sum(~within))
-    n_total = len(within)
+    n_total = int(np.sum(valid))
     passed = (n_outside / n_total) <= exceedance_fraction if n_total > 0 else True
 
     return QuantityComparison(

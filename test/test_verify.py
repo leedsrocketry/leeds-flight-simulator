@@ -198,8 +198,8 @@ class TestCompareQuantity:
         np.testing.assert_allclose(cmp.sim_values, ref_v, atol=1e-10)
         assert cmp.passed is True
 
-    def test_time_clipping(self) -> None:
-        """Only the overlapping time range is compared."""
+    def test_full_reference_range(self) -> None:
+        """Full reference timebase is used; beyond-range sim values are NaN."""
         ref_t = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
         ref_v = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 500.0])
 
@@ -209,9 +209,14 @@ class TestCompareQuantity:
 
         cmp = _compare_quantity("altitude", ref_t, ref_v, sim_t, sim_v, tolerance=0.05)
 
-        # Should only compare up to t=3 (4 points)
-        assert len(cmp.ref_time) == 4
-        assert cmp.ref_time[-1] == 3.0
+        # All 6 reference points should be present
+        assert len(cmp.ref_time) == 6
+        assert cmp.ref_time[-1] == 5.0
+        # Sim values beyond t=3 should be NaN (not displayed/compared)
+        assert np.isfinite(cmp.sim_values[3])
+        assert np.isnan(cmp.sim_values[4])
+        assert np.isnan(cmp.sim_values[5])
+        # Overlapping region matches, so comparison passes
         assert cmp.passed is True
 
 
