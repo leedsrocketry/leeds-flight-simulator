@@ -330,6 +330,18 @@ Replay displays figures interactively by default. Pass `-q` to save them to disk
 2. **Plan View** — same as above, viewed from directly above.
 3. **Altitude vs. Time** — full flight from rail exit to landing.
 
+The 3D isometric view shows the full trajectory from rail exit through descent, with the danger area and coastline projected onto the ground plane:
+
+![3D replay](simulations/g2b2-safety-case/results/replay_3d.png)
+
+The plan view provides a top-down perspective for checking lateral dispersion against the danger area boundary:
+
+![Plan view replay](simulations/g2b2-safety-case/results/replay_plan_view.png)
+
+The altitude-time plot shows the complete flight profile, highlighting the transition between ascent and descent phases:
+
+![Altitude replay](simulations/g2b2-safety-case/results/replay_altitude.png)
+
 
 ## Verification
 

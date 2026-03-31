@@ -1,87 +1,149 @@
 metadata:
-  timestamp: '2026-03-29T21:33:30.020035+00:00'
+  timestamp: '2026-03-31T03:14:39.536163+00:00'
   config: C:\Users\me\University of Leeds\Leeds University Rocketry Association (LURA)
     - Documents (1)\1. Engineering\2. Gryphon II Block II\team-member-space\Toby\leeds-flight-simulator\simulations\g2b2-safety-case\cape-wrath.yaml
   warnings:
   - Single aeroplot CSV passed directly (aero_table.csv). Treating as whole-vehicle
     data. Roll torques and pitch/yaw damping will not be computed.
   - Reference trajectory CSV is assumed to use SI units (metres, seconds, calibres).
-    There is no unit sanitisation.
-  - "Azimuth and inclination are fixed \u2014 optimisation skipped."
+    There is no unit sanitisation and no check that both simulators used the same
+    input parameters.
+  - 'No azimuth in range [-90, 90] produces a landing centroid inside the buffered
+    danger area (closest miss: 4285 m outside). Continuing with the 18 least-infeasible
+    candidates.'
+  - The optimal value found for dimension 0 of parameter length_scale is close to
+    the specified lower bound 5.0. Decreasing the bound and calling fit again may
+    find a better value.
+  - The optimal value found for dimension 0 of parameter length_scale is close to
+    the specified lower bound 5.0. Decreasing the bound and calling fit again may
+    find a better value.
+  - The optimal value found for dimension 0 of parameter length_scale is close to
+    the specified lower bound 5.0. Decreasing the bound and calling fit again may
+    find a better value.
+optimisation:
+  azimuth_mean: -40.0
+  inclination_mean: 88.0
+  selected_azimuth: -40
+  selected_inclination: 88
+  inclination_selected: 88
+  feasible_azimuths:
+  - -46
+  - -47
+  - -45
+  - -48
+  - -44
+  - -49
+  - -43
+  - -50
+  - -42
+  - -51
+  - -41
+  - -52
+  - -40
+  - -53
+  - -39
+  - -54
+  - -38
+  - -55
+  azimuth_observations:
+  - - -46
+    - 0.64
+  - - -44
+    - 0.5666666666666667
+  - - -42
+    - 0.62
+  - - -40
+    - 0.6333333333333333
+  - - -55
+    - 0.5666666666666667
+  - - -50
+    - 0.5466666666666666
+  top_candidates:
+  - -38
+  - -39
+  - -40
+  validation_compliance:
+    -38: 0.136
+    -39: 0.136
+    -40: 0.136
+  validation_margins:
+    -38: -21908.340039877712
+    -39: -21895.123222545626
+    -40: -21879.084403061337
 scenarios:
-  ballistic:
-    compliant: 0
-    non_compliant: 1000
-    passed: false
-    apogee_m:
-      mean: 11052.313565853838
-      min: 8378.57593177819
-      max: 13781.145398099123
-    landing_distance_m:
-      mean: 3064.907620261943
-      min: 671.963619257881
-      max: 6234.644606539577
-    peak_mach:
-      mean: 2.4301466815773582
-    max_aoa_deg:
-      mean: 12.228202930979753
-    stability_margin:
-      subsonic_min: 2.6557130565048985
-      supersonic_min: 3.5967738194089662
   drogue_only:
-    compliant: 0
-    non_compliant: 1000
+    compliant: 193
+    non_compliant: 807
     passed: false
     apogee_m:
-      mean: 11076.455284604695
-      min: 8320.876751699092
-      max: 15344.930008433334
+      mean: 13551.99557655662
+      min: 9865.110805705543
+      max: 20367.300130402004
     landing_distance_m:
-      mean: 3944.679863847548
-      min: 1157.9362882430432
-      max: 6835.135052100843
+      mean: 8741.630367737647
+      min: 181.70693357209217
+      max: 16443.033841875655
     peak_mach:
-      mean: 2.433787846522095
+      mean: 2.590632336664664
     max_aoa_deg:
-      mean: 12.228165172467023
+      mean: 12.232340054513488
     stability_margin:
-      subsonic_min: 2.651530214022552
-      supersonic_min: 3.5321979485361195
-  premature_main:
-    compliant: 0
-    non_compliant: 1000
-    passed: false
-    apogee_m:
-      mean: 11048.656726689367
-      min: 8521.055181952448
-      max: 13992.849259312206
-    landing_distance_m:
-      mean: 23893.108415620238
-      min: 9154.053223311645
-      max: 41009.599865244636
-    peak_mach:
-      mean: 2.42854006647408
-    max_aoa_deg:
-      mean: 12.218563590095066
-    stability_margin:
-      subsonic_min: 2.6552695071800554
-      supersonic_min: 3.5947615753675417
+      subsonic_min: 1.61422914364006
+      supersonic_min: 1.8425351909824492
   nominal:
-    compliant: 0
-    non_compliant: 1000
+    compliant: 191
+    non_compliant: 809
     passed: false
     apogee_m:
-      mean: 11129.61338589093
-      min: 8236.117346223613
-      max: 14316.4187618652
+      mean: 13625.156002277781
+      min: 9786.894536780486
+      max: 18220.00073090829
     landing_distance_m:
-      mean: 3998.2817496636585
-      min: 1577.3127782035601
-      max: 6804.682976030863
+      mean: 8760.9146779482
+      min: 263.28752095053903
+      max: 15980.374560961205
     peak_mach:
-      mean: 2.443285602009483
+      mean: 2.6008341789046994
     max_aoa_deg:
-      mean: 12.21825312190692
+      mean: 12.285545834956393
     stability_margin:
-      subsonic_min: 2.654528216729099
-      supersonic_min: 3.570598128054099
+      subsonic_min: 1.615553650885087
+      supersonic_min: 1.8856421501663811
+  ballistic:
+    compliant: 44
+    non_compliant: 956
+    passed: false
+    apogee_m:
+      mean: 13516.971013250553
+      min: 9941.052120306455
+      max: 17455.01063180099
+    landing_distance_m:
+      mean: 540.4116420958867
+      min: 50.38936802076871
+      max: 1361.264589507982
+    peak_mach:
+      mean: 2.586676711992034
+    max_aoa_deg:
+      mean: 14.318839084362587
+    stability_margin:
+      subsonic_min: 1.6160777728229956
+      supersonic_min: 1.9141193741853488
+  premature_main:
+    compliant: 14
+    non_compliant: 986
+    passed: false
+    apogee_m:
+      mean: 13509.803216033984
+      min: 10076.482925692482
+      max: 17752.255338036004
+    landing_distance_m:
+      mean: 28651.70517128579
+      min: 296.5686317619239
+      max: 50380.08136795664
+    peak_mach:
+      mean: 2.5849484124011477
+    max_aoa_deg:
+      mean: 12.279290775995964
+    stability_margin:
+      subsonic_min: 1.6158816802108065
+      supersonic_min: 1.9018635444750984
