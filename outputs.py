@@ -10,6 +10,7 @@ save_dispersion_plot    — landing dispersion plot (§16.5)
 save_replay_3d          — 3D isometric replay plot (§16.4)
 save_replay_plan_view   — plan-view replay plot (§16.4)
 save_replay_altitude    — altitude-time replay plot (§16.4)
+save_replay_aoa         — angle-of-attack vs time replay plot (§16.4)
 """
 
 from __future__ import annotations
@@ -51,7 +52,6 @@ from optimisation import OptimisationResult
 
 M_TO_FT = 3.28084
 M_TO_KM = 1 / 1000
-S_TO_MIN = 1 / 60
 
 SCENARIO_KEYS = ["nominal", "ballistic", "drogue_only", "premature_main"]
 SCENARIO_COLOURS = {"nominal": "#2d7a2d", "ballistic": "black",
@@ -379,29 +379,27 @@ def save_altitude_plot(
 
     active_keys = [k for k in SCENARIO_KEYS if k in scenarios]
 
-    # Convert to minutes
-    scenarios_min = {
-        k: (t * S_TO_MIN, alt) for k, (t, alt) in scenarios.items()
-    }
-    burnout_t_min = burnout_time_s * S_TO_MIN
+    scenarios_s = scenarios  # time arrays already in seconds
+
+    burnout_t_s = burnout_time_s
 
     # Left panel x-range — all scenarios except premature_main (if it lands late)
     left_keys = [k for k in active_keys if k != "premature_main"]
     if not left_keys:
         left_keys = active_keys
     t_left_max = np.ceil(
-        max(scenarios_min[k][0][-1] for k in left_keys) * 1.05 * 10
-    ) / 10
+        max(scenarios_s[k][0][-1] for k in left_keys) * 1.05
+    )
 
     # Right panel
     t_right_span = t_left_max * (RIGHT_FRAC / LEFT_FRAC)
-    if "premature_main" in scenarios_min:
-        t_pm_land_min = scenarios_min["premature_main"][0][-1]
+    if "premature_main" in scenarios_s:
+        t_pm_land_s = scenarios_s["premature_main"][0][-1]
     else:
-        t_pm_land_min = 0.0
+        t_pm_land_s = 0.0
     t_right_end = max(
-        t_left_max + 1.0 + t_right_span,
-        t_pm_land_min * 1.01,
+        t_left_max + 60.0 + t_right_span,
+        t_pm_land_s * 1.01,
     )
     t_right_start = t_right_end - t_right_span
 
@@ -422,13 +420,13 @@ def save_altitude_plot(
     # Draw curves (reversed so Nominal paints on top)
     handles = []
     for key in reversed(active_keys):
-        t_min = scenarios_min[key][0]
-        alt_ft = scenarios_min[key][1] * M_TO_FT
+        t_s = scenarios_s[key][0]
+        alt_ft = scenarios_s[key][1] * M_TO_FT
         colour = SCENARIO_COLOURS.get(key, "grey")
         alpha = SCENARIO_ALPHA.get(key, 0.6)
         kw = dict(color=colour, linewidth=1.8, alpha=alpha)
-        line, = ax_l.plot(t_min, alt_ft, **kw)
-        ax_r.plot(t_min, alt_ft, **kw)
+        line, = ax_l.plot(t_s, alt_ft, **kw)
+        ax_r.plot(t_s, alt_ft, **kw)
         handles.insert(0, line)
 
     # Axis limits
@@ -436,17 +434,17 @@ def save_altitude_plot(
     ax_r.set_xlim(t_right_start, t_right_end)
     ax_l.set_ylim(0, alt_max_ft)
 
-    # Consistent tick spacing
-    raw_interval_min = t_left_max / 7
-    tick_interval_min = raw_interval_min
-    for step in [0.5, 1.0, 2.0, 3.0, 5.0, 10.0]:
-        if raw_interval_min <= step:
-            tick_interval_min = step
+    # Consistent tick spacing (seconds)
+    raw_interval_s = t_left_max / 7
+    tick_interval_s = raw_interval_s
+    for step in [10, 20, 30, 60, 120, 180, 300, 600]:
+        if raw_interval_s <= step:
+            tick_interval_s = step
             break
     else:
-        tick_interval_min = round(raw_interval_min)
-    ax_l.xaxis.set_major_locator(mticker.MultipleLocator(tick_interval_min))
-    ax_r.xaxis.set_major_locator(mticker.MultipleLocator(tick_interval_min))
+        tick_interval_s = round(raw_interval_s / 60) * 60
+    ax_l.xaxis.set_major_locator(mticker.MultipleLocator(tick_interval_s))
+    ax_r.xaxis.set_major_locator(mticker.MultipleLocator(tick_interval_s))
 
     # Spines
     ax_l.spines[["right", "top"]].set_visible(False)
@@ -480,7 +478,7 @@ def save_altitude_plot(
     l_pos, r_pos = ax_l.get_position(), ax_r.get_position()
     fig.text(
         (l_pos.x0 + r_pos.x1) / 2, 0.02,
-        "Flight Time (min)", ha="center", va="bottom", fontsize=11,
+        "Flight Time (s)", ha="center", va="bottom", fontsize=11,
     )
 
     # Horizontal apogee line
@@ -502,18 +500,18 @@ def save_altitude_plot(
     )
 
     # Vertical dashed lines at events
-    def fmt_mmin(t_min: float) -> str:
-        total_s = int(round(t_min * 60))
+    def fmt_timestamp(t_s: float) -> str:
+        total_s = int(round(t_s))
         return f"{total_s // 60}:{total_s % 60:02d}"
 
-    def find_landing_min(t_min: np.ndarray, alt_m: np.ndarray) -> float | None:
+    def find_landing_s(t_s: np.ndarray, alt_m: np.ndarray) -> float | None:
         apogee_idx = int(np.argmax(alt_m))
         idx = np.where(alt_m[apogee_idx:] <= 0)[0]
-        return float(t_min[apogee_idx + idx[0]]) if len(idx) else None
+        return float(t_s[apogee_idx + idx[0]]) if len(idx) else None
 
-    apogee_t_min = float(
-        scenarios_min[active_keys[0]][0][
-            np.argmax(scenarios_min[active_keys[0]][1])
+    apogee_t_s = float(
+        scenarios_s[active_keys[0]][0][
+            np.argmax(scenarios_s[active_keys[0]][1])
         ]
     )
 
@@ -525,33 +523,33 @@ def save_altitude_plot(
     }
 
     vline_events: list[tuple[float, str]] = [
-        (burnout_t_min, "Burnout"),
-        (apogee_t_min, "Apogee"),
+        (burnout_t_s, "Burnout"),
+        (apogee_t_s, "Apogee"),
     ]
     for key in active_keys:
-        t_land = find_landing_min(*scenarios_min[key])
+        t_land = find_landing_s(*scenarios_s[key])
         if t_land is not None:
             vline_events.append((t_land, landing_labels.get(key, f"{key} Landing")))
 
     vline_kw = dict(color="grey", linewidth=0.9, linestyle="--", zorder=0)
     bbox_kw = dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8)
 
-    for idx, (t_min_ev, event_name) in enumerate(vline_events):
-        ax_l.axvline(t_min_ev, **vline_kw)
-        ax_r.axvline(t_min_ev, **vline_kw)
+    for idx, (t_s_ev, event_name) in enumerate(vline_events):
+        ax_l.axvline(t_s_ev, **vline_kw)
+        ax_r.axvline(t_s_ev, **vline_kw)
 
         ax = (
             ax_l
-            if ax_l.get_xlim()[0] <= t_min_ev <= ax_l.get_xlim()[1]
+            if ax_l.get_xlim()[0] <= t_s_ev <= ax_l.get_xlim()[1]
             else ax_r
         )
         y_pos = alt_max_ft * 0.05
 
-        timestamp = fmt_mmin(t_min_ev)
+        timestamp = fmt_timestamp(t_s_ev)
         combined_label = f"{event_name}\n{timestamp}"
 
         ax.text(
-            t_min_ev, y_pos, combined_label,
+            t_s_ev, y_pos, combined_label,
             rotation=90, ha="left", va="bottom",
             fontsize=VLINE_LABEL_FONTSIZE, color="grey",
             bbox=bbox_kw,
@@ -1186,6 +1184,17 @@ def _extract_replay_trajectory(
         alt_m = alt_m[mask]
         t_s = t_s[mask]
 
+    # AoA time history (ascent only — 6DoF phase).
+    # Computed from body-frame velocity components stored in state_ascent:
+    #   u = state[:, 7]  (axial, body x)
+    #   v = state[:, 8], w = state[:, 9]  (lateral)
+    # AoA = atan2(sqrt(v²+w²), u).  Wind contribution is not removed, but
+    # during powered ascent the airspeed dominates so the error is small.
+    u_b = traj.state_ascent[:, 7]
+    v_b = traj.state_ascent[:, 8]
+    w_b = traj.state_ascent[:, 9]
+    aoa_deg = np.degrees(np.arctan2(np.sqrt(v_b ** 2 + w_b ** 2), u_b))
+
     is_terminated = not sr.stability_compliant
     colour = "deeppink" if is_terminated else SCENARIO_COLOURS.get(sr.scenario, "grey")
     label = SCENARIO_LABELS.get(sr.scenario, sr.scenario)
@@ -1195,6 +1204,8 @@ def _extract_replay_trajectory(
         "east_km": east_km,
         "alt_m": alt_m,
         "t_s": t_s,
+        "aoa_deg": aoa_deg,
+        "t_asc_s": traj.t_ascent,
         "colour": colour,
         "label": label,
         "is_terminated": is_terminated,
@@ -1259,14 +1270,13 @@ def save_replay_altitude(
 
     for t in trajectories:
         alt_ft = t["alt_m"] * M_TO_FT
-        t_min = t["t_s"] * S_TO_MIN
 
         legend_key = "Terminated" if t["is_terminated"] else t["label"]
         show_label = legend_key not in legend_seen
         legend_seen.add(legend_key)
 
         ax.plot(
-            t_min, alt_ft,
+            t["t_s"], alt_ft,
             color=t["colour"],
             linewidth=lw,
             alpha=alpha,
@@ -1280,7 +1290,7 @@ def save_replay_altitude(
     # Primary y-axis (feet)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(_ft_formatter))
     ax.set_ylabel("Altitude (ft)", fontsize=11)
-    ax.set_xlabel("Flight Time (min)", fontsize=11)
+    ax.set_xlabel("Flight Time (s)", fontsize=11)
 
     # Secondary y-axis (km)
     ax_km = ax.twinx()
@@ -1295,6 +1305,55 @@ def save_replay_altitude(
 
     if output_dir is not None:
         save_path = output_dir / "replay_altitude.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return save_path
+
+    return fig
+
+
+def save_replay_aoa(
+    replayed: list[SampleResult],
+    sim_cfg: SimulationConfig,
+    *,
+    output_dir: Path | None = None,
+) -> Path | plt.Figure:
+    """Generate angle-of-attack vs time replay plot.
+
+    Only the 6DoF ascent phase is shown.  AoA is derived from body-frame
+    velocity components stored in the state history.  All traces are black;
+    opacity scales with trajectory count via :func:`_replay_line_style`.
+    A dashed horizontal line marks the acceptance AoA limit.
+    """
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    trajectories: list[dict] = []
+    for sr in replayed:
+        t = _extract_replay_trajectory(sr)
+        if t is not None:
+            trajectories.append(t)
+
+    lw, alpha = _replay_line_style(len(trajectories))
+
+    for t in trajectories:
+        ax.plot(t["t_asc_s"], t["aoa_deg"], color="black", linewidth=lw, alpha=alpha)
+
+    aoa_limit = sim_cfg.monte_carlo.acceptance.aoa_max
+    ax.axhline(
+        aoa_limit, color="red", linewidth=1.2, linestyle="--",
+        label=f"AoA limit ({aoa_limit:.1f}°)",
+    )
+
+    ax.set_xlabel("Flight Time (s)", fontsize=11)
+    ax.set_ylabel("Angle of Attack (deg)", fontsize=11)
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax.legend(fontsize=9, framealpha=0.9, edgecolor="gray")
+    ax.set_ylim(bottom=0)
+
+    fig.tight_layout()
+
+    if output_dir is not None:
+        save_path = output_dir / "replay_aoa.png"
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return save_path

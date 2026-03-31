@@ -47,6 +47,7 @@ from outputs import (
     save_dispersion_plot,
     save_replay_3d,
     save_replay_altitude,
+    save_replay_aoa,
     save_replay_plan_view,
     write_samples_csv,
     write_summary_yaml,
@@ -671,6 +672,7 @@ def replay(
             (save_replay_3d, "3D isometric"),
             (save_replay_plan_view, "plan view"),
             (save_replay_altitude, "altitude-time"),
+            (save_replay_aoa, "angle of attack"),
         ]:
             try:
                 result = save_fn(results, sim_cfg, output_dir=out_dir)
