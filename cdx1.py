@@ -140,6 +140,7 @@ def load_yaml_for_diff(sim_path: Path, veh_path: Path) -> dict:
     mass = veh["mass"]
     rec = veh.get("recovery", {})
     rail = sim["launch"]["rail"]
+    ver = sim.get("verification") or {}
 
     drogue = rec.get("drogue") or {}
     main = rec.get("main") or {}
@@ -153,13 +154,17 @@ def load_yaml_for_diff(sim_path: Path, veh_path: Path) -> dict:
 
     main_deploy_alt = float(main_deploy) if main_deploy not in ("apogee", "") else None
 
+    # Prefer verification inclination (matches verify command precedence)
+    ver_incl = ver.get("inclination")
+    rail_inclination = ver_incl if ver_incl is not None else rail["inclination"]
+
     return {
         "total_length_m": geom["length"],
         "diameter_m": geom["diameter"],
         "nozzle_diameter_m": geom["nozzle_diameter"],
         "launch_mass_kg": mass["wet_mass"],
         "cg_m": mass["wet_cg"],
-        "rail_inclination_deg": rail["inclination"],
+        "rail_inclination_deg": rail_inclination,
         "rail_length_m": rail["length"],
         "drogue_cd": drogue.get("cd"),
         "drogue_diameter_m": drogue.get("diameter"),

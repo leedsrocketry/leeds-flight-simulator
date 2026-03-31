@@ -182,6 +182,7 @@ class _RunDisplay:
                 title="WARNINGS",
                 title_align="left",
             ))
+            parts.append(Text())
         if self._progress.tasks:
             parts.append(Text())
             parts.append(self._progress)
@@ -354,7 +355,7 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
         display.finish_task(ver_task,
                             description=f"{'Verification':<16} {verdict}")
     else:
-        warnings.warn("Verification section not configured — verification skipped.")
+        warnings.warn("Verification section not configured - verification skipped.")
 
     # --- Optimisation (runs once) ---
     opt_result = None
@@ -386,7 +387,7 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
             f"inclination: {opt_result.selected_inclination}°"
         )
     else:
-        warnings.warn("Azimuth and inclination are fixed — optimisation skipped.")
+        warnings.warn("Azimuth and inclination are fixed - optimisation skipped.")
 
     # Resolve final rail angles
     azimuth_mean = (
@@ -431,10 +432,11 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
         def _scenario_done(scenario_name: str, stats) -> None:
             if scenario_name in tasks:
                 label = SCENARIO_LABELS.get(scenario_name, scenario_name)
+                total = stats.n_compliant + stats.n_non_compliant
                 if stats.passed:
-                    verdict = "[black on green] PASS [/]"
+                    verdict = f"[black on green] PASS {stats.n_compliant}/{total} [/]"
                 else:
-                    verdict = "[white on red] FAIL [/]"
+                    verdict = f"[white on red] FAIL {stats.n_non_compliant}/{total} [/]"
                 display.finish_task(
                     tasks[scenario_name],
                     description=f"{label:<16} {verdict}",
@@ -542,91 +544,106 @@ def replay(
         )
         sys.exit(1)
 
-    # --- Load config and models ---
-    console.print("[bold]Loading configuration and models...[/]")
-    sim_cfg = load_simulation_config(sim_config_path)
+    # --- Live display (same style as run command) ---
+    display = _RunDisplay(console)
 
-    # Seed from CLI override or simulation config
-    master_seed = seed if seed is not None else sim_cfg.monte_carlo.seed
+    def _replay_showwarning(
+        message: Warning | str,
+        category: type[Warning],
+        filename: str,
+        lineno: int,
+        file: object = None,
+        line: str | None = None,
+    ) -> None:
+        display.add_warning(str(message))
 
-    # Azimuth/inclination from optimisation results if available, else config
-    opt_section = summary.get("optimisation")
-    if opt_section is not None:
-        azimuth_mean = float(opt_section["azimuth_mean"])
-        inclination_mean = float(opt_section["inclination_mean"])
-    else:
-        rail = sim_cfg.launch.rail
-        azimuth_mean = float(rail.azimuth)
-        inclination_mean = float(rail.inclination)
-    vehicle, propellant, aero_model, wind_ensemble = load_all_models(sim_cfg)
+    original_showwarning = warnings.showwarning
+    warnings.showwarning = _replay_showwarning
 
-    # --- Replay ---
-    if single_replay:
-        console.print(
-            f"Replaying seed={master_seed}, run={run_index}, sample={sample_index}..."
-        )
-        results = [
-            replay_sample(
-                sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-                master_seed, run_index, sample_index,
-                azimuth_mean, inclination_mean,
-            )
-        ]
-    else:
-        samples_csv = summary_dir / "samples.csv"
-        if not samples_csv.exists():
-            console.print(f"[red]Error:[/] samples.csv not found in {summary_dir}")
-            sys.exit(1)
-        if compliant:
-            console.print("Replaying all compliant samples...")
-            results = replay_compliant(
-                sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-                master_seed, azimuth_mean, inclination_mean, samples_csv,
-            )
+    try:
+        display.start()
+
+        # --- Load config and models ---
+        display.update_status("Loading configuration and models...")
+        sim_cfg = load_simulation_config(sim_config_path)
+
+        master_seed = seed if seed is not None else sim_cfg.monte_carlo.seed
+
+        opt_section = summary.get("optimisation")
+        if opt_section is not None:
+            azimuth_mean = float(opt_section["azimuth_mean"])
+            inclination_mean = float(opt_section["inclination_mean"])
         else:
-            console.print("Replaying all non-compliant samples...")
-            results = replay_non_compliant(
-                sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-                master_seed, azimuth_mean, inclination_mean, samples_csv,
+            rail = sim_cfg.launch.rail
+            azimuth_mean = float(rail.azimuth)
+            inclination_mean = float(rail.inclination)
+        vehicle, propellant, aero_model, wind_ensemble = load_all_models(sim_cfg)
+
+        # --- Replay ---
+        if single_replay:
+            display.update_status(
+                f"Replaying seed={master_seed}, run={run_index}, "
+                f"sample={sample_index}..."
             )
+            results = [
+                replay_sample(
+                    sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+                    master_seed, run_index, sample_index,
+                    azimuth_mean, inclination_mean,
+                )
+            ]
+        else:
+            samples_csv = summary_dir / "samples.csv"
+            if not samples_csv.exists():
+                display.abort(f"samples.csv not found in {summary_dir}")
+            mode = "compliant" if compliant else "non-compliant"
+            display.update_status(f"Replaying all {mode} samples...")
+            if compliant:
+                results = replay_compliant(
+                    sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+                    master_seed, azimuth_mean, inclination_mean, samples_csv,
+                )
+            else:
+                results = replay_non_compliant(
+                    sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+                    master_seed, azimuth_mean, inclination_mean, samples_csv,
+                )
 
-    if not results:
-        msg = "compliant" if compliant else "non-compliant"
-        console.print(f"[green]No {msg} samples to replay.[/]")
-        return
+        if not results:
+            display.stop()
+            msg = "compliant" if compliant else "non-compliant"
+            console.print(f"[green]No {msg} samples to replay.[/]")
+            return
 
-    console.print(f"Replayed {len(results)} sample(s).")
+        display.update_status("Generating plots...")
 
-    # --- Print summary per replayed sample ---
-    for sr in results:
-        label = SCENARIO_LABELS.get(sr.scenario, sr.scenario)
-        status = "[green]Compliant[/]" if sr.compliant else f"[red]Non-compliant: {sr.violation_reason}[/]"
-        console.print(
-            f"  Sample {sr.sample_id} ({label}): {status}"
-        )
+        # --- Generate replay figures ---
+        import matplotlib.pyplot as plt
 
-    # --- Generate replay figures ---
-    import matplotlib.pyplot as plt
+        out_dir = summary_dir if no_popup else None
+        figure_paths: list[Path] = []
+        for save_fn, name in [
+            (save_replay_3d, "3D isometric"),
+            (save_replay_plan_view, "plan view"),
+            (save_replay_altitude, "altitude-time"),
+        ]:
+            try:
+                result = save_fn(results, sim_cfg, output_dir=out_dir)
+                if isinstance(result, Path):
+                    figure_paths.append(result)
+            except NotImplementedError:
+                display.add_warning(f"{name} replay plot not yet implemented.")
 
-    out_dir = summary_dir if no_popup else None
-    figure_paths: list[Path] = []
-    for save_fn, name in [
-        (save_replay_3d, "3D isometric"),
-        (save_replay_plan_view, "plan view"),
-        (save_replay_altitude, "altitude-time"),
-    ]:
-        try:
-            result = save_fn(results, sim_cfg, output_dir=out_dir)
-            if isinstance(result, Path):
-                figure_paths.append(result)
-        except NotImplementedError:
-            console.print(f"[yellow]Warning:[/yellow] {name} replay plot not yet implemented.")
+        display.stop()
 
-    if no_popup and figure_paths:
-        for p in figure_paths:
-            console.print(f"  Saved: {p}")
-    elif not no_popup:
-        plt.show()
+        if no_popup and figure_paths:
+            for p in figure_paths:
+                console.print(f"  Saved: {p}")
+        elif not no_popup:
+            plt.show()
+
+    finally:
+        warnings.showwarning = original_showwarning
 
 
 @main.command()

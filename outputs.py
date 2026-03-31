@@ -783,7 +783,7 @@ def _build_map_axes(
 
         legend_handles.append(mpatches.Patch(
             facecolor="none", edgecolor="red", linewidth=0,
-            hatch="....", label=f"Buffer Zone ({buffer_dist / 1000.0:.0f} km)",
+            hatch="....", label=f"Buffer Zone ({buffer_dist / 1000.0:.1f} km)",
         ))
 
     # --- Monitor circles (unified into single shape, no edge) ---
@@ -1264,6 +1264,8 @@ def save_replay_3d(
     ax = fig.add_subplot(111, projection="3d")
     ax.view_init(elev=30, azim=-60)
 
+    legend_handles: list = []
+
     # --- Danger area + buffer on ground plane ---
     danger_poly = load_polygon_ned(site.danger_area, lat0, lon0)
     da_e, da_n = polygon_to_arrays(danger_poly)
@@ -1282,8 +1284,12 @@ def save_replay_3d(
         inner_e, inner_n = polygon_to_arrays(inner_ned)
         ax.plot(
             inner_e / 1000.0, inner_n / 1000.0, zs=0, zdir="z",
-            color="red", linewidth=0.6, linestyle="--", alpha=0.5, zorder=5,
+            color="red", linewidth=0.6, linestyle=":", alpha=0.6, zorder=5,
         )
+        legend_handles.append(mlines.Line2D(
+            [], [], color="red", linewidth=0.6, linestyle=":",
+            alpha=0.6, label=f"Buffer Zone ({buffer_dist / 1000.0:.1f} km)",
+        ))
 
     # --- Coastline on ground plane (clipped to plot extents) ---
     if site.coastline is not None:
@@ -1354,7 +1360,6 @@ def save_replay_3d(
     _marker_pool = ["s", "D", "^", "v", "p", "h", "8", "*"]
     _marker_idx = 0
 
-    legend_handles: list = []
     legend_handles.append(mlines.Line2D(
         [], [], marker="x", color="none",
         markerfacecolor="none", markeredgecolor="black",
@@ -1486,7 +1491,7 @@ def save_replay_plan_view(
         ax, sim_cfg,
         extra_north_km=all_north,
         extra_east_km=all_east,
-        show_buffer=False,
+        show_buffer=True,
     )
 
     # --- Count trajectories per legend group ---
