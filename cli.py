@@ -182,8 +182,8 @@ class _RunDisplay:
                 title="WARNINGS",
                 title_align="left",
             ))
-        if self._progress.tasks:
             parts.append(Text())
+        if self._progress.tasks:
             parts.append(self._progress)
         return Group(*parts)
 
@@ -642,10 +642,7 @@ def replay(
 
         display.stop()
 
-        if no_popup and figure_paths:
-            for p in figure_paths:
-                console.print(f"  Saved: {p}")
-        elif not no_popup:
+        if not no_popup:
             plt.show()
 
     finally:
