@@ -82,8 +82,8 @@ monte_carlo:
                                   # the definition of this boundary varies between tools; the value
                                   # used here follows the RASAero II convention
     sm_subsonic_min: 1.0          # calibres — minimum acceptable static margin when M < sm_transition_mach
-    sm_supersonic_min: 1.0        # calibres — minimum acceptable static margin when M >= sm_transition_mach
-    aoa_max: 15.0                 # degrees — maximum acceptable angle of attack at any point in flight
+    sm_supersonic_min: 2.0        # calibres — minimum acceptable static margin when M >= sm_transition_mach
+    aoa_max: 12.0                 # degrees — maximum acceptable angle of attack at any point in flight
     sm_aoa_threshold: 5.0         # degrees — SM check is only applied when AoA < this value;
                                   # naturally excludes rail-exit and apogee transients
 
