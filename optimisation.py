@@ -573,16 +573,11 @@ def optimise_azimuth(
     from sklearn.gaussian_process import GaussianProcessRegressor
     from sklearn.gaussian_process.kernels import RBF
     from scipy.stats import norm
-    from scipy.stats.qmc import Sobol
-
-    # Initial evaluation points via Sobol
+    # Initial evaluation points: evenly spaced across the feasible range
     n_init = min(5, len(feasible_azimuths))
-    sobol = Sobol(d=1, scramble=True, seed=sim_cfg.monte_carlo.seed)
-    sobol_points = sobol.random(n_init).flatten()
-    init_indices = np.unique(np.clip(
-        (sobol_points * len(feasible_azimuths)).astype(int),
-        0, len(feasible_azimuths) - 1,
-    ))
+    init_indices = np.unique(
+        np.linspace(0, len(feasible_azimuths) - 1, n_init, dtype=int)
+    )
 
     X_obs: list[float] = []
     Y_obs: list[float] = []
