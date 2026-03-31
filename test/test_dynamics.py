@@ -678,8 +678,8 @@ def test_descent_time_matches_terminal_velocity():
     V_terminal = math.sqrt(2.0 * m * g / (rho_sl * cda))
     expected_time = h0 / V_terminal
 
-    # 4-component state: [rN, rE, rD, vD] — initialise at terminal velocity
-    state0 = np.array([0.0, 0.0, -h0, V_terminal], dtype=np.float64)
+    # 6-component state: [rN, rE, rD, vN, vE, vD] — initialise at terminal velocity
+    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, V_terminal], dtype=np.float64)
     w_alt, w_east, w_north = _zero_wind()
 
     t_out, y_out, _, n = integrate_descent(
@@ -688,6 +688,7 @@ def test_descent_time_matches_terminal_velocity():
         m=m,
         drogue_cda=cda, main_cda=0.0, main_deploy_alt=0.0,
         scenario=SCENARIO_DROGUE_ONLY,
+        body_cda=0.0,
         site_elevation=0.0, t_offset=0.0,
         rtol=1e-8, atol=1e-8,
     )
@@ -708,8 +709,8 @@ def test_descent_lands_at_ground():
 
     rho_sl = density(0.0)
     V_terminal = math.sqrt(2.0 * 10.0 * 9.80665 / (rho_sl * cda))
-    # 4-component state: [rN, rE, rD, vD]
-    state0 = np.array([0.0, 0.0, -h0, V_terminal], dtype=np.float64)
+    # 6-component state: [rN, rE, rD, vN, vE, vD]
+    state0 = np.array([0.0, 0.0, -h0, 0.0, 0.0, V_terminal], dtype=np.float64)
     w_alt, w_east, w_north = _zero_wind()
 
     t_out, y_out, _, n = integrate_descent(
@@ -718,6 +719,7 @@ def test_descent_lands_at_ground():
         m=m,
         drogue_cda=cda, main_cda=0.0, main_deploy_alt=0.0,
         scenario=SCENARIO_DROGUE_ONLY,
+        body_cda=0.0,
         site_elevation=0.0, t_offset=0.0,
         rtol=1e-6, atol=1e-6,
     )
@@ -732,18 +734,22 @@ def test_descent_lands_at_ground():
 def test_descent_wind_displacement():
     """Constant east wind should displace the landing point eastward.
 
-    With the simplified descent model the vehicle drifts at exactly the
-    wind speed, so the east displacement should be wind_speed * descent_time.
+    When the vehicle is initialised at the wind velocity, it drifts at
+    exactly the wind speed (no relative horizontal motion, so no body
+    drag), giving east displacement = wind_speed * descent_time.
     """
     m = 10.0
     h0 = 300.0
     cda = 0.5
     wind_speed = 10.0  # m/s eastward
+    body_cda = 0.12     # representative body CdA (Cd=1.2, L*d=0.1 m²)
 
     rho_sl = density(0.0)
     V_terminal = math.sqrt(2.0 * m * 9.80665 / (rho_sl * cda))
-    # 4-component state: [rN, rE, rD, vD]
-    state0 = np.array([0.0, 0.0, -h0, V_terminal], dtype=np.float64)
+    # 6-component state: [rN, rE, rD, vN, vE, vD]
+    # Initialise horizontal velocity at wind speed — steady state
+    state0 = np.array([0.0, 0.0, -h0, 0.0, wind_speed, V_terminal],
+                       dtype=np.float64)
 
     # Constant east wind
     w_alt = np.array([0.0, 50000.0], dtype=np.float64)
@@ -755,7 +761,7 @@ def test_descent_wind_displacement():
         0.0, state0.copy(),
         w_alt, w_east, w_north,
         m, cda, 0.0, 0.0,
-        SCENARIO_DROGUE_ONLY, 0.0, 0.0, 1e-6, 1e-6,
+        SCENARIO_DROGUE_ONLY, body_cda, 0.0, 0.0, 1e-6, 1e-6,
     )
 
     descent_time = t_out[n_wind - 1]

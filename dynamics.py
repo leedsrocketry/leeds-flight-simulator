@@ -68,6 +68,7 @@ from integrator import (
 # Constants
 # ---------------------------------------------------------------------------
 _G0: float = 9.80665
+_CD_CYLINDER: float = 1.2  # crossflow drag coefficient for a circular cylinder
 _EPS_V: float = 1.0e-6   # minimum airspeed to avoid division by zero
 _RAD2DEG: float = 180.0 / 3.141592653589793
 
@@ -1201,16 +1202,19 @@ def _descent_deriv(
     drogue_cda: float, main_cda: float, main_deploy_alt: float,
     # Scenario
     scenario: int,
+    # Body horizontal drag
+    body_cda: float,
     # Atmosphere site corrections
     site_elevation: float, t_offset: float,
 ) -> None:
-    """4-component derivative for parachute descent: [rN, rE, rD, vD].
+    """6-component derivative for parachute descent: [rN, rE, rD, vN, vE, vD].
 
-    The vehicle drifts horizontally at the local wind speed.  Vertical
-    velocity is integrated dynamically so that parachute deployment
-    transients (deceleration under inertia) are captured.
+    Vertical velocity is decelerated by parachute drag.  Horizontal
+    velocity is decelerated toward the local wind by body cylinder
+    crossflow drag (CdA_body = Cd_cyl · L · d).
 
-        dvD/dt = g − (ρ · CdA · vD²) / (2m)
+        dvD/dt = g − (ρ · CdA_chute · vD²) / (2m)
+        dvH/dt = −(ρ · CdA_body · |v_h_rel| · v_h_rel) / (2m)
     """
     h = -state[2]
     if h < 0.0:
@@ -1218,19 +1222,37 @@ def _descent_deriv(
 
     vN_wind, vE_wind = interpolate_wind(wind_alt, wind_east, wind_north, h)
 
-    vD = state[3]
+    vN = state[3]
+    vE = state[4]
+    vD = state[5]
     cda = _parachute_cda(h, drogue_cda, main_cda, main_deploy_alt, scenario)
 
     _, _, rho, _, _ = isa_at_site(h, site_elevation, t_offset)
-    if cda > 1.0e-12 and rho > 0.0:
-        drag_accel = rho * cda * vD * vD / (2.0 * m)
-    else:
-        drag_accel = 0.0
 
-    dy[0] = vN_wind
-    dy[1] = vE_wind
+    # --- Vertical: parachute drag ---
+    if cda > 1.0e-12 and rho > 0.0:
+        drag_accel_D = rho * cda * vD * vD / (2.0 * m)
+    else:
+        drag_accel_D = 0.0
+
+    # --- Horizontal: body cylinder crossflow drag ---
+    vN_rel = vN - vN_wind
+    vE_rel = vE - vE_wind
+    v_h_rel = math.sqrt(vN_rel * vN_rel + vE_rel * vE_rel)
+    if body_cda > 1.0e-12 and rho > 0.0 and v_h_rel > 1.0e-12:
+        h_factor = rho * body_cda * v_h_rel / (2.0 * m)
+        drag_accel_N = h_factor * vN_rel
+        drag_accel_E = h_factor * vE_rel
+    else:
+        drag_accel_N = 0.0
+        drag_accel_E = 0.0
+
+    dy[0] = vN
+    dy[1] = vE
     dy[2] = vD
-    dy[3] = _G0 - drag_accel
+    dy[3] = -drag_accel_N
+    dy[4] = -drag_accel_E
+    dy[5] = _G0 - drag_accel_D
 
 
 @nb.njit(cache=True, fastmath=True)
@@ -1244,6 +1266,8 @@ def integrate_descent(
     drogue_cda: float, main_cda: float, main_deploy_alt: float,
     # Scenario
     scenario: int,
+    # Body horizontal drag
+    body_cda: float,
     # Atmosphere site corrections
     site_elevation: float, t_offset: float,
     # Tolerances
@@ -1253,15 +1277,15 @@ def integrate_descent(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Integrate parachute descent until altitude reaches *stop_alt* (rD >= -stop_alt).
 
-    The vehicle drifts horizontally at the local wind speed and
-    descends with dynamically integrated vertical velocity under
-    parachute drag.  State is [rN, rE, rD, vD].
+    State is [rN, rE, rD, vN, vE, vD].  Vertical velocity is
+    decelerated by parachute drag; horizontal velocity is decelerated
+    toward the local wind by body cylinder crossflow drag.
 
     Returns (t_out, y_out, sm_out, n_steps).  SM is zero throughout
     (no aerodynamic stability under parachute).
     """
     MAX_STEPS = 20000
-    NS = 4
+    NS = 6
     t_out = np.empty(MAX_STEPS)
     y_out = np.empty((MAX_STEPS, NS))
     sm_out = np.zeros(MAX_STEPS, dtype=np.float64)
@@ -1287,7 +1311,7 @@ def integrate_descent(
     _descent_deriv(
         t, y, k1, wind_alt, wind_east, wind_north,
         m, drogue_cda, main_cda, main_deploy_alt, scenario,
-        site_elevation, t_offset,
+        body_cda, site_elevation, t_offset,
     )
 
     for _ in range(MAX_STEPS * 2):
@@ -1300,7 +1324,7 @@ def integrate_descent(
             t + DP_C[1] * h_step, ys, k2,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
-            site_elevation, t_offset,
+            body_cda, site_elevation, t_offset,
         )
 
         # Stage 3
@@ -1310,7 +1334,7 @@ def integrate_descent(
             t + DP_C[2] * h_step, ys, k3,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
-            site_elevation, t_offset,
+            body_cda, site_elevation, t_offset,
         )
 
         # Stage 4
@@ -1322,7 +1346,7 @@ def integrate_descent(
             t + DP_C[3] * h_step, ys, k4,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
-            site_elevation, t_offset,
+            body_cda, site_elevation, t_offset,
         )
 
         # Stage 5
@@ -1335,7 +1359,7 @@ def integrate_descent(
             t + DP_C[4] * h_step, ys, k5,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
-            site_elevation, t_offset,
+            body_cda, site_elevation, t_offset,
         )
 
         # Stage 6
@@ -1349,7 +1373,7 @@ def integrate_descent(
             t + DP_C[5] * h_step, ys, k6,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
-            site_elevation, t_offset,
+            body_cda, site_elevation, t_offset,
         )
 
         # 5th-order solution
@@ -1364,7 +1388,7 @@ def integrate_descent(
             t + h_step, y_new, k7,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
-            site_elevation, t_offset,
+            body_cda, site_elevation, t_offset,
         )
 
         # Error
@@ -1408,7 +1432,7 @@ def _descent_mach(
     for i in range(n_desc):
         h = max(-float(y_desc[i, 2]), 0.0)
         _, _, _, a, _ = isa_at_site(h, site_elevation, t_offset)
-        vD = y_desc[i, 3]
+        vD = y_desc[i, 5]
         mach[i] = vD / a if a > 0.0 else 0.0
     return mach
 
@@ -1624,11 +1648,23 @@ def run_trajectory(
     if scenario == SCENARIO_NOMINAL and main_deploy_alt < 0.0:
         effective_scenario = SCENARIO_PREMATURE_MAIN
 
+    # Extract NED velocity at apogee from the 6DoF state.
+    # State layout: [rN, rE, rD, q0, q1, q2, q3, u, v, w, p, q, r]
+    C_nb = quat_to_dcm_nb(
+        apogee_state[3], apogee_state[4],
+        apogee_state[5], apogee_state[6],
+    )
+    u_ap, v_ap, w_ap = apogee_state[7], apogee_state[8], apogee_state[9]
+    vN_ap = C_nb[0, 0] * u_ap + C_nb[0, 1] * v_ap + C_nb[0, 2] * w_ap
+    vE_ap = C_nb[1, 0] * u_ap + C_nb[1, 1] * v_ap + C_nb[1, 2] * w_ap
+
     # vD starts at zero — the rocket is momentarily stationary at apogee.
-    # The integrator accelerates it under gravity until drogue drag balances.
+    # Horizontal velocity is preserved from the ascent phase.
     descent_state0 = np.array([
-        apogee_pos[0], apogee_pos[1], apogee_pos[2], 0.0,
+        apogee_pos[0], apogee_pos[1], apogee_pos[2],
+        vN_ap, vE_ap, 0.0,
     ], dtype=np.float64)
+    body_cda = _CD_CYLINDER * p.length * p.diameter
 
     # ---- Phase 3: parachute descent (dynamic vD) ----
     # For nominal dual-deploy, split into two smooth legs to avoid the
@@ -1643,7 +1679,7 @@ def run_trajectory(
             p.wind_alt, p.wind_east, p.wind_north,
             p.m_dry, drogue_cda, 0.0, 0.0,
             SCENARIO_DROGUE_ONLY,
-            p.site_elevation, p.t_offset,
+            body_cda, p.site_elevation, p.t_offset,
             p.rtol, p.atol,
             stop_alt=main_deploy_alt,
         )
@@ -1655,7 +1691,7 @@ def run_trajectory(
             p.wind_alt, p.wind_east, p.wind_north,
             p.m_dry, drogue_cda, main_cda, main_deploy_alt,
             SCENARIO_PREMATURE_MAIN,
-            p.site_elevation, p.t_offset,
+            body_cda, p.site_elevation, p.t_offset,
             p.rtol, p.atol,
         )
         # Stitch (skip duplicate point at join)
@@ -1669,7 +1705,7 @@ def run_trajectory(
             p.wind_alt, p.wind_east, p.wind_north,
             p.m_dry, drogue_cda, main_cda, main_deploy_alt,
             effective_scenario,
-            p.site_elevation, p.t_offset,
+            body_cda, p.site_elevation, p.t_offset,
             p.rtol, p.atol,
         )
 

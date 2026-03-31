@@ -42,6 +42,7 @@ from dynamics import (
     SCENARIO_NOMINAL,
     SCENARIO_PREMATURE_MAIN,
     SCENARIO_DROGUE_ONLY,
+    _CD_CYLINDER,
 )
 from montecarlo import build_sim_params
 from geography import (
@@ -441,11 +442,12 @@ def _run_descent_single(
     m_dry: float,
     drogue_cda: float, main_cda: float, main_deploy_alt: float,
     scenario: int,
+    body_cda: float,
     site_elevation: float = 0.0, t_offset: float = 0.0,
 ) -> tuple[float, float]:
     """Run a single parachute descent from apogee and return (landing_N, landing_E)."""
     state0 = np.array([
-        apogee_N, apogee_E, apogee_D,
+        apogee_N, apogee_E, apogee_D, 0.0, 0.0, 0.0,
     ], dtype=np.float64)
 
     t_desc, y_desc, _, n_desc = integrate_descent(
@@ -454,7 +456,7 @@ def _run_descent_single(
         m_dry,
         drogue_cda, main_cda, main_deploy_alt,
         scenario,
-        site_elevation, t_offset,
+        body_cda, site_elevation, t_offset,
         1.0e-6, 1.0e-6,
     )
     return float(y_desc[n_desc - 1, 0]), float(y_desc[n_desc - 1, 1])
@@ -488,6 +490,7 @@ def _run_descent_batch(
     main_deploy_alt = -1.0  # sentinel: deploy at apogee
     if recovery.main is not None and isinstance(recovery.main.threshold, float):
         main_deploy_alt = recovery.main.threshold
+    body_cda = _CD_CYLINDER * vehicle.geometry.length * vehicle.geometry.diameter
 
     n_profiles = wind_ensemble.wind_east_ms.shape[0]
 
@@ -502,6 +505,7 @@ def _run_descent_batch(
             m_dry,
             drogue_cda, main_cda, main_deploy_alt,
             scenario_int,
+            body_cda,
             site_elevation, t_offset,
         ))
 
