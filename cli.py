@@ -6,9 +6,7 @@ for progress bars, warning panels, and status output.
 from __future__ import annotations
 
 import os
-import platform
 import shutil
-import subprocess
 import sys
 import warnings
 from pathlib import Path
@@ -224,19 +222,6 @@ def _clear_results(results_root: Path, display: _RunDisplay) -> None:
             )
 
 
-def _open_figures(paths: list[Path]) -> None:
-    """Open figure files with the system's default image viewer."""
-    system = platform.system()
-    for p in paths:
-        if not p.exists():
-            continue
-        if system == "Windows":
-            os.startfile(str(p))  # noqa: S606
-        elif system == "Darwin":
-            subprocess.Popen(["open", str(p)])  # noqa: S603
-        else:
-            subprocess.Popen(["xdg-open", str(p)])  # noqa: S603
-
 
 def _generate_altitude_curves(
     sim_cfg,
@@ -300,6 +285,8 @@ def main():
 @click.option("-p", "--points", is_flag=True, help="Draw apogee and landing points on the dispersion plot.")
 def run(config_path: Path, no_popup: bool, points: bool) -> None:
     """Run a Monte Carlo flight safety analysis."""
+    import matplotlib.pyplot as plt
+
     config_path = Path(config_path).resolve()
     sim_cfg = load_simulation_config(config_path)
     all_warnings: list[str] = []
@@ -341,7 +328,8 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
     results_root.mkdir(parents=True, exist_ok=True)
 
     # --- Verification (runs once, before optimisation) ---
-    verification_figure_path: Path | None = None
+    figure_paths: list[Path] = []
+    verification_figure: plt.Figure | None = None
     progress = display.progress
     if sim_cfg.verification is not None:
         display.update_status("Running trajectory verification...")
@@ -350,9 +338,13 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
 
         ver_result = run_verification(sim_cfg, vehicle, propellant, aero_model)
         if ver_result.figure is not None:
-            ver_fig_path = results_root / "verification_plot.png"
-            ver_result.figure.savefig(ver_fig_path, dpi=150, bbox_inches="tight")
-            verification_figure_path = ver_fig_path
+            if no_popup:
+                ver_fig_path = results_root / "verification_plot.png"
+                ver_result.figure.savefig(ver_fig_path, dpi=150, bbox_inches="tight")
+                plt.close(ver_result.figure)
+                figure_paths.append(ver_fig_path)
+            else:
+                verification_figure = ver_result.figure
 
         if ver_result.passed:
             verdict = "[black on green] PASS [/]"
@@ -406,7 +398,6 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
     )
 
     # --- Per wind-profile analysis loop ---
-    figure_paths: list[Path] = []
     multi_wind = len(npz_files) > 1
 
     for npz_path in npz_files:
@@ -482,23 +473,28 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
             simulation_yaml_path=config_path,
             all_warnings=all_warnings,
         )
-        alt_path = save_altitude_plot(altitude_data, burnout_time, results_dir)
-        disp_path = save_dispersion_plot(
+
+        plot_dir = results_dir if no_popup else None
+        alt_result = save_altitude_plot(altitude_data, burnout_time, plot_dir)
+        disp_result = save_dispersion_plot(
             mc_result.all_results, sim_cfg,
             sim_cfg.monte_carlo.acceptance.compliance_threshold,
-            results_dir,
+            plot_dir,
             show_points=points,
         )
-        figure_paths.extend([alt_path, disp_path])
+        if isinstance(alt_result, Path):
+            figure_paths.append(alt_result)
+        if isinstance(disp_result, Path):
+            figure_paths.append(disp_result)
 
     display.stop()
     console.print(f"Results saved to: [bold]{results_dir}[/]\n")
 
-    # --- Open figures ---
-    if not no_popup:
-        if verification_figure_path is not None:
-            figure_paths.insert(0, verification_figure_path)
-        _open_figures(figure_paths)
+    if no_popup and figure_paths:
+        for p in figure_paths:
+            console.print(f"  Saved: {p}")
+    elif not no_popup:
+        plt.show()
 
 
 @main.command()
@@ -507,12 +503,14 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
 @click.option("--run", "run_index", type=int, default=None, help="Run (scenario) index.")
 @click.option("--sample", "sample_index", type=int, default=None, help="Sample index.")
 @click.option("--non-compliant", is_flag=True, help="Replay all non-compliant samples.")
+@click.option("-q", "--no-popup", is_flag=True, help="Save figures to disk instead of interactive display.")
 def replay(
     summary_path: Path,
     seed: int | None,
     run_index: int | None,
     sample_index: int | None,
     non_compliant: bool,
+    no_popup: bool,
 ) -> None:
     """Replay specific samples from a completed run."""
     summary_path = Path(summary_path).resolve()
@@ -589,6 +587,9 @@ def replay(
         )
 
     # --- Generate replay figures ---
+    import matplotlib.pyplot as plt
+
+    out_dir = summary_dir if no_popup else None
     figure_paths: list[Path] = []
     for save_fn, name in [
         (save_replay_3d, "3D isometric"),
@@ -596,13 +597,17 @@ def replay(
         (save_replay_altitude, "altitude-time"),
     ]:
         try:
-            fig_path = save_fn(results, summary_dir)
-            figure_paths.append(fig_path)
+            result = save_fn(results, sim_cfg, output_dir=out_dir)
+            if isinstance(result, Path):
+                figure_paths.append(result)
         except NotImplementedError:
             console.print(f"[yellow]Warning:[/yellow] {name} replay plot not yet implemented.")
 
-    if figure_paths:
-        _open_figures(figure_paths)
+    if no_popup and figure_paths:
+        for p in figure_paths:
+            console.print(f"  Saved: {p}")
+    elif not no_popup:
+        plt.show()
 
 
 @main.command()

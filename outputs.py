@@ -350,8 +350,8 @@ def _km_formatter(x: float, _: float) -> str:
 def save_altitude_plot(
     scenarios: dict[str, tuple[np.ndarray, np.ndarray]],
     burnout_time_s: float,
-    output_dir: Path,
-) -> Path:
+    output_dir: Path | None = None,
+) -> Path | plt.Figure:
     """Generate and save the altitude-time plot.
 
     Parameters
@@ -361,12 +361,13 @@ def save_altitude_plot(
         Only active scenarios need be present.
     burnout_time_s : float
         Motor burnout time in seconds.
-    output_dir : Path
-        Directory to save the plot into.
+    output_dir : Path or None
+        Directory to save the plot into.  If *None*, return the
+        ``Figure`` for interactive display.
 
     Returns
     -------
-    Path
+    Path or Figure
         Path to the saved ``altitude_plot.png``.
     """
     LEFT_FRAC = 0.70
@@ -558,11 +559,13 @@ def save_altitude_plot(
         loc="upper right", frameon=True, framealpha=0.9, edgecolor="gray",
     )
 
-    save_path = output_dir / "altitude_plot.png"
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    if output_dir is not None:
+        save_path = output_dir / "altitude_plot.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return save_path
 
-    return save_path
+    return fig
 
 
 # ===================================================================
@@ -645,10 +648,10 @@ def save_dispersion_plot(
     results: list[SampleResult],
     sim_cfg: SimulationConfig,
     compliance_threshold: float,
-    output_dir: Path,
+    output_dir: Path | None = None,
     *,
     show_points: bool = False,
-) -> Path:
+) -> Path | plt.Figure:
     """Generate and save the landing dispersion plot.
 
     Parameters
@@ -659,15 +662,16 @@ def save_dispersion_plot(
         Simulation configuration (for site data).
     compliance_threshold : float
         Fraction of samples the ellipse must contain (from acceptance config).
-    output_dir : Path
-        Directory to save the plot into.
+    output_dir : Path or None
+        Directory to save the plot into.  If *None*, return the
+        ``Figure`` for interactive display.
     show_points : bool
         If True, overlay individual apogee and landing points on the plot.
 
     Returns
     -------
-    Path
-        Path to the saved ``dispersion_plot.png``.
+    Path or Figure
+        Path to the saved ``dispersion_plot.png``, or the ``Figure``.
     """
     site = sim_cfg.site
     lat0, lon0 = site.latitude, site.longitude
@@ -1000,36 +1004,158 @@ def save_dispersion_plot(
     )
     ax.legend(handles=legend_handles, loc="upper right", fontsize=9).set_zorder(20)
 
-    save_path = output_dir / "dispersion_plot.png"
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    if output_dir is not None:
+        save_path = output_dir / "dispersion_plot.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return save_path
 
-    return save_path
+    return fig
 
 
 # ===================================================================
-# 6. Replay plot stubs (§16.4)
+# 6. Replay plots (§16.4)
 # ===================================================================
+
+
+def _extract_replay_trajectory(
+    sr: SampleResult,
+) -> dict | None:
+    """Extract full NED trajectory arrays from a replayed sample.
+
+    Returns a dict with keys ``north_km``, ``east_km``, ``alt_m``,
+    ``t_s``, ``colour``, ``label``, ``is_terminated``, or *None* if the
+    sample has no trajectory attached.
+    """
+    if sr.trajectory is None:
+        return None
+
+    traj = sr.trajectory
+
+    north_asc = traj.state_ascent[:, 0] / 1000.0
+    east_asc = traj.state_ascent[:, 1] / 1000.0
+    alt_asc = -traj.state_ascent[:, 2]
+    t_asc = traj.t_ascent
+
+    if traj.t_descent is not None and traj.n_descent > 0:
+        n = traj.n_descent
+        t_desc = traj.t_descent[:n]
+        north_desc = traj.state_descent[:n, 0] / 1000.0
+        east_desc = traj.state_descent[:n, 1] / 1000.0
+        alt_desc = -traj.state_descent[:n, 2]
+        # Skip overlapping apogee point in descent arrays
+        north_km = np.concatenate([north_asc, north_desc[1:]])
+        east_km = np.concatenate([east_asc, east_desc[1:]])
+        alt_m = np.concatenate([alt_asc, alt_desc[1:]])
+        t_s = np.concatenate([t_asc, t_desc[1:]])
+    else:
+        north_km = north_asc
+        east_km = east_asc
+        alt_m = alt_asc
+        t_s = t_asc
+
+    is_terminated = not sr.stability_compliant
+    colour = "deeppink" if is_terminated else SCENARIO_COLOURS.get(sr.scenario, "grey")
+    label = SCENARIO_LABELS.get(sr.scenario, sr.scenario)
+
+    return {
+        "north_km": north_km,
+        "east_km": east_km,
+        "alt_m": alt_m,
+        "t_s": t_s,
+        "colour": colour,
+        "label": label,
+        "is_terminated": is_terminated,
+    }
+
+
+def save_replay_altitude(
+    replayed: list[SampleResult],
+    sim_cfg: SimulationConfig,
+    *,
+    output_dir: Path | None = None,
+) -> Path | plt.Figure:
+    """Generate altitude-time replay plot.
+
+    Parameters
+    ----------
+    replayed : list[SampleResult]
+        Replayed samples with trajectory data attached.
+    sim_cfg : SimulationConfig
+        Simulation configuration.
+    output_dir : Path or None
+        If given, save the figure to ``replay_altitude.png`` in this
+        directory and return the path.  If *None*, return the
+        ``Figure`` for interactive display.
+    """
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    # Track which legend entries have been added
+    legend_seen: set[str] = set()
+    legend_handles: list = []
+
+    for sr in replayed:
+        t = _extract_replay_trajectory(sr)
+        if t is None:
+            continue
+
+        alt_ft = t["alt_m"] * M_TO_FT
+        t_min = t["t_s"] * S_TO_MIN
+
+        legend_key = "Terminated" if t["is_terminated"] else t["label"]
+        show_label = legend_key not in legend_seen
+        legend_seen.add(legend_key)
+
+        line, = ax.plot(
+            t_min, alt_ft,
+            color=t["colour"],
+            linewidth=1.8,
+            alpha=0.8,
+            label=legend_key if show_label else None,
+        )
+        if show_label:
+            legend_handles.append(line)
+
+    # Primary y-axis (feet)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_ft_formatter))
+    ax.set_ylabel("Altitude (ft)", fontsize=11)
+    ax.set_xlabel("Flight Time (min)", fontsize=11)
+
+    # Secondary y-axis (km)
+    ax_km = ax.twinx()
+    ax_km.set_ylim(ax.get_ylim())
+    ax_km.yaxis.set_major_formatter(mticker.FuncFormatter(_km_formatter))
+    ax_km.set_ylabel("Altitude (km)", fontsize=11)
+
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=9, framealpha=0.9, edgecolor="gray")
+
+    fig.tight_layout()
+
+    if output_dir is not None:
+        save_path = output_dir / "replay_altitude.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return save_path
+
+    return fig
+
 
 def save_replay_3d(
     replayed: list[SampleResult],
-    output_dir: Path,
-) -> Path:
+    sim_cfg: SimulationConfig,
+    *,
+    output_dir: Path | None = None,
+) -> Path | plt.Figure:
     """Generate 3D isometric replay plot. Not yet implemented."""
     raise NotImplementedError("Replay 3D isometric plot not yet implemented")
 
 
 def save_replay_plan_view(
     replayed: list[SampleResult],
-    output_dir: Path,
-) -> Path:
+    sim_cfg: SimulationConfig,
+    *,
+    output_dir: Path | None = None,
+) -> Path | plt.Figure:
     """Generate plan-view replay plot. Not yet implemented."""
     raise NotImplementedError("Replay plan view plot not yet implemented")
-
-
-def save_replay_altitude(
-    replayed: list[SampleResult],
-    output_dir: Path,
-) -> Path:
-    """Generate altitude-time replay plot. Not yet implemented."""
-    raise NotImplementedError("Replay altitude-time plot not yet implemented")

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import yaml
 
+from dynamics import TrajectoryResult
 from montecarlo import SampleResult, ScenarioStats, MonteCarloResult, SCENARIO_LABELS
 from optimisation import OptimisationResult
 from config import (
@@ -509,21 +510,116 @@ class TestFitEllipseThreshold:
 
 
 # ---------------------------------------------------------------------------
-# Replay stubs
+# Replay plots
 # ---------------------------------------------------------------------------
 
-class TestReplayStubs:
-    def test_replay_3d_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            save_replay_3d([], Path("."))
 
-    def test_replay_plan_view_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            save_replay_plan_view([], Path("."))
+def _make_parabolic_trajectory() -> TrajectoryResult:
+    """Create a simple parabolic trajectory for testing."""
+    n_asc = 50
+    t_asc = np.linspace(0, 60, n_asc)
+    # Parabolic altitude profile: peaks at ~15000 m
+    alt = 15000.0 * (1 - ((t_asc - 30) / 30) ** 2)
+    state_asc = np.zeros((n_asc, 13))
+    state_asc[:, 0] = np.linspace(0, 2000, n_asc)    # rN
+    state_asc[:, 1] = np.linspace(0, 500, n_asc)     # rE
+    state_asc[:, 2] = -alt                             # rD (negative altitude)
+    state_asc[:, 3] = 1.0                              # q0 (unit quaternion)
 
-    def test_replay_altitude_not_implemented(self):
+    n_desc = 30
+    t_desc = np.linspace(60, 300, n_desc)
+    state_desc = np.zeros((n_desc, 4))
+    state_desc[:, 0] = np.linspace(2000, 3000, n_desc)   # rN
+    state_desc[:, 1] = np.linspace(500, 800, n_desc)     # rE
+    state_desc[:, 2] = np.linspace(0, -15000, n_desc)    # rD (descending to 0, note: -alt)
+    # Correct: descent starts at apogee, goes to ground
+    desc_alt = 15000.0 * np.linspace(1, 0, n_desc)
+    state_desc[:, 2] = -desc_alt
+    state_desc[:, 3] = -5.0                               # vD
+
+    return TrajectoryResult(
+        apogee_altitude=15000.0,
+        apogee_time=60.0,
+        apogee_position=np.array([2000.0, 500.0, -15000.0]),
+        landing_position=np.array([3000.0, 800.0, 0.0]),
+        landing_time=300.0,
+        flight_time=300.0,
+        max_mach=2.1,
+        max_aoa_deg=3.5,
+        min_sm_subsonic=2.0,
+        min_sm_supersonic=1.5,
+        rail_exit_velocity=30.0,
+        peak_altitude_ft=15000.0 * 3.28084,
+        in_buffer=True,
+        below_ceiling=True,
+        compliant=True,
+        stability_compliant=True,
+        violation_reason="",
+        t_ascent=t_asc,
+        state_ascent=state_asc,
+        t_descent=t_desc,
+        state_descent=state_desc,
+        sm_descent=np.full(n_desc, 2.0),
+        mach_descent=np.full(n_desc, 0.3),
+        n_descent=n_desc,
+    )
+
+
+def _make_sample_with_trajectory(
+    sample_id: int = 0,
+    scenario: str = "nominal",
+    stability_compliant: bool = True,
+) -> SampleResult:
+    sr = _make_sample(sample_id=sample_id, scenario=scenario)
+    sr = SampleResult(
+        **{
+            **{f.name: getattr(sr, f.name) for f in sr.__dataclass_fields__.values()
+               if f.name != "trajectory"},
+            "stability_compliant": stability_compliant,
+            "trajectory": _make_parabolic_trajectory(),
+        }
+    )
+    return sr
+
+
+class TestReplayPlots:
+    def test_replay_3d_not_implemented(self, tmp_path):
+        sim_cfg = _make_sim_cfg(tmp_path)
         with pytest.raises(NotImplementedError):
-            save_replay_altitude([], Path("."))
+            save_replay_3d([], sim_cfg, output_dir=tmp_path)
+
+    def test_replay_plan_view_not_implemented(self, tmp_path):
+        sim_cfg = _make_sim_cfg(tmp_path)
+        with pytest.raises(NotImplementedError):
+            save_replay_plan_view([], sim_cfg, output_dir=tmp_path)
+
+    def test_replay_altitude_saves_png(self, tmp_path):
+        sim_cfg = _make_sim_cfg(tmp_path)
+        samples = [
+            _make_sample_with_trajectory(0, "nominal"),
+            _make_sample_with_trajectory(1, "ballistic"),
+        ]
+        result = save_replay_altitude(samples, sim_cfg, output_dir=tmp_path)
+        assert isinstance(result, Path)
+        assert result.exists()
+        assert result.name == "replay_altitude.png"
+
+    def test_replay_altitude_returns_figure_when_no_output_dir(self, tmp_path):
+        import matplotlib.pyplot as plt
+        sim_cfg = _make_sim_cfg(tmp_path)
+        samples = [_make_sample_with_trajectory(0, "nominal")]
+        result = save_replay_altitude(samples, sim_cfg)
+        assert isinstance(result, plt.Figure)
+        plt.close(result)
+
+    def test_replay_altitude_terminated_sample(self, tmp_path):
+        sim_cfg = _make_sim_cfg(tmp_path)
+        samples = [
+            _make_sample_with_trajectory(0, "nominal", stability_compliant=False),
+        ]
+        result = save_replay_altitude(samples, sim_cfg, output_dir=tmp_path)
+        assert isinstance(result, Path)
+        assert result.exists()
 
 
 # ---------------------------------------------------------------------------

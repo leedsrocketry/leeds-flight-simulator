@@ -81,7 +81,7 @@ python . run <simulation.yaml>
 
 | Flag | Effect |
 |------|--------|
-| `-q`, `--no-popup` | Suppress automatic opening of generated figures at the end of execution (figures are still saved) |
+| `-q`, `--no-popup` | Save figures to disk instead of displaying interactively |
 | `-p`, `--points` | Overlay individual apogee and landing scatter points on the dispersion plot |
 
 Example:
@@ -112,6 +112,7 @@ python . replay simulations/g2b2-safety-case/results/summary.yaml --non-complian
 | `--run INTEGER` | Scenario index |
 | `--sample INTEGER` | Sample index |
 | `--non-compliant` | Replay all non-compliant samples |
+| `-q`, `--no-popup` | Save figures to disk instead of displaying interactively |
 
 
 ## Key Concepts
@@ -302,9 +303,9 @@ Results are saved to `results/`, relative to the directory containing `simulatio
 |------|----------|
 | `summary.yaml` | Run metadata, warnings, per-scenario statistics (compliant/non-compliant counts, pass/fail, apogee and landing distance ranges), optimisation diagnostics (if applicable) |
 | `samples.csv` | One row per sample — stochastic inputs, flight time, per-check compliance flags, aerodynamic extremes, and landing/apogee coordinates |
-| `dispersion_plot.png` | Landing dispersion map (see below) |
-| `altitude_plot.png` | Mean altitude profile for each scenario (see below) |
-| `verification_plot.png` | Reference trajectory comparison (only when `verify -q` is used) |
+| `dispersion_plot.png` | Landing dispersion map (only when `-q` is used; see below) |
+| `altitude_plot.png` | Mean altitude profile for each scenario (only when `-q` is used; see below) |
+| `verification_plot.png` | Reference trajectory comparison (only when `-q` is used) |
 
 ### Dispersion Plot
 
@@ -323,7 +324,7 @@ Mean altitude profile vs. time for each active descent scenario.
 
 Every sample is deterministic given the master seed, run index, and sample index. No full trajectory data is stored — any sample can be replayed exactly from these three values.
 
-Replay outputs a detailed time history (position, velocity, attitude, Mach, AoA, stability margin, damping coefficients, forces, moments) as a `.csv`, and opens figures automatically. If multiple samples are replayed, all trajectories are overlaid on the same figures:
+Replay displays figures interactively by default. Pass `-q` to save them to disk instead. If multiple samples are replayed, all trajectories are overlaid on the same figures:
 
 1. **3D Isometric** — trajectory in NED space with the map overlaid on the ground plane, matching the dispersion plot style. Coloured by descent scenario; pink if terminated early due to a stability or AoA violation.
 2. **Plan View** — same as above, viewed from directly above.
