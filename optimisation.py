@@ -1,13 +1,15 @@
 """Automatic launch rail azimuth and inclination optimisation.
 
-Four-phase routine (specification §13) to select optimal integer launch
-azimuth and inclination, maximising the probability that all active descent
-scenarios remain within the buffered danger area.
+Selects optimal integer launch azimuth and inclination, maximising the
+probability that all active descent scenarios remain within the buffered
+danger area.
 
-Phase 1 — Inclination selection (deterministic 6DoF sweeps, zero wind)
-Phase 2 — Azimuth bound narrowing (analytical wind-drift filter)
-Phase 3 — Azimuth optimisation (1-D Bayesian optimisation, GP + UCB)
-Phase 4 — Candidate validation (full-uncertainty MC)
+Steps
+-----
+1. Inclination selection   — deterministic 6DoF sweeps, zero wind
+2. Azimuth narrowing       — analytical wind-drift filter
+3. Azimuth optimisation    — 1-D Bayesian optimisation, GP + UCB
+4. Candidate validation    — full-uncertainty MC
 
 Public API
 ----------
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import math
 import multiprocessing as mp
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -105,22 +108,22 @@ class OptimisationResult:
     selected_azimuth: int          # degrees
     selected_inclination: int      # degrees
 
-    # Phase 1 diagnostics
-    phase1_apogees: dict[int, tuple[float, float, float]]       # inc → (N, E, D)
-    phase1_ballistic_landings: dict[int, tuple[float, float]]   # inc → (N, E)
-    phase1_selected: int
+    # Inclination selection diagnostics
+    inclination_apogees: dict[int, tuple[float, float, float]]       # inc → (N, E, D)
+    inclination_ballistic_landings: dict[int, tuple[float, float]]   # inc → (N, E)
+    inclination_selected: int
 
-    # Phase 2 diagnostics
-    phase2_feasible: list[int]     # surviving azimuth candidates
-    phase2_total_candidates: int
+    # Azimuth narrowing diagnostics
+    narrowing_feasible: list[int]     # surviving azimuth candidates
+    narrowing_total_candidates: int
 
-    # Phase 3 diagnostics
-    phase3_observations: list[tuple[int, float]]  # (az, p_success) pairs
-    phase3_top_candidates: list[int]
+    # Azimuth optimisation diagnostics
+    azimuth_observations: list[tuple[int, float]]  # (az, p_success) pairs
+    azimuth_top_candidates: list[int]
 
-    # Phase 4 diagnostics
-    phase4_compliance: dict[int, float]    # az → compliance fraction
-    phase4_margins: dict[int, float]       # az → margin in metres
+    # Candidate validation diagnostics
+    validation_compliance: dict[int, float]    # az → compliance fraction
+    validation_margins: dict[int, float]       # az → margin in metres
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +217,7 @@ def _signed_distance_to_boundary(
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: wind drift calculation
+# Wind drift calculation
 # ---------------------------------------------------------------------------
 
 def _compute_wind_drift(
@@ -275,7 +278,7 @@ def _compute_wind_drift(
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Inclination selection
+# Inclination selection
 # ---------------------------------------------------------------------------
 
 def select_inclination(
@@ -287,7 +290,7 @@ def select_inclination(
     poly_n: np.ndarray,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> tuple[int, dict[int, tuple[float, float, float]], dict[int, tuple[float, float]], dict[int, float]]:
-    """Phase 1: select the steepest safe inclination.
+    """Select the steepest safe inclination.
 
     Returns
     -------
@@ -325,22 +328,26 @@ def select_inclination(
             valid.append(inc)
 
         if progress_callback is not None:
-            progress_callback("Phase 1: Inclination", idx + 1, len(candidates))
+            progress_callback("Inclination selection", idx + 1, len(candidates))
 
     if not valid:
-        raise ValueError(
+        # No inclination satisfies both constraints.  Fall back to the
+        # steepest candidate (least horizontal drift) so downstream phases
+        # can still evaluate and report honest compliance.
+        warnings.warn(
             f"No inclination in range [{inc_range[0]}, {inc_range[1]}] satisfies "
             f"both the ballistic exclusion radius ({exclusion_r} m) and the "
-            f"buffered danger area constraint. Consider widening the range or "
-            f"reducing the exclusion radius."
+            f"buffered danger area constraint. Continuing with the steepest "
+            f"candidate ({max(candidates)}°)."
         )
+        valid = candidates
 
     selected = max(valid)
     return selected, apogee_positions, ballistic_landings, apogee_times
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: Azimuth bound narrowing
+# Azimuth bound narrowing
 # ---------------------------------------------------------------------------
 
 def narrow_azimuth_bounds(
@@ -353,8 +360,8 @@ def narrow_azimuth_bounds(
     buffered_polygon: Polygon,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> list[int]:
-    """Phase 2: discard azimuths whose landing centroid falls outside the
-    buffered danger area.
+    """Discard azimuths whose landing centroid falls outside the buffered
+    danger area.
 
     Returns a list of feasible integer azimuth candidates.
     """
@@ -375,6 +382,10 @@ def narrow_azimuth_bounds(
     m_dry = vehicle.m_dry
 
     feasible: list[int] = []
+    # Track signed distance for every candidate so we can fall back to
+    # the closest ones when none are strictly inside the buffered area.
+    candidate_distances: list[tuple[int, float]] = []
+
     for idx, az in enumerate(candidates):
         # Rotate apogee from az=0 to this candidate
         rot_N, rot_E = _rotate_apogee(apN0, apE0, az * _DEG2RAD, 0.0)
@@ -391,24 +402,35 @@ def narrow_azimuth_bounds(
         centroid_N = rot_N + drift_N
         centroid_E = rot_E + drift_E
 
-        if buffered_polygon.contains(Point(centroid_E, centroid_N)):
+        dist = _signed_distance_to_boundary(centroid_N, centroid_E, buffered_polygon)
+        candidate_distances.append((az, dist))
+
+        if dist >= 0.0:
             feasible.append(az)
 
     if progress_callback is not None:
-        progress_callback("Phase 2: Narrowing", 1, 1)
+        progress_callback("Azimuth narrowing", 1, 1)
 
     if not feasible:
-        raise ValueError(
+        # No azimuth lands inside the buffered area.  Rather than aborting,
+        # return the candidates closest to the boundary so the downstream
+        # phases can evaluate them properly and report honest compliance.
+        candidate_distances.sort(key=lambda x: x[1], reverse=True)
+        n_fallback = min(len(candidate_distances), max(3, len(candidates) // 10))
+        feasible = [az for az, _ in candidate_distances[:n_fallback]]
+        best_dist = candidate_distances[0][1]
+        warnings.warn(
             f"No azimuth in range [{az_min}, {az_max}] produces a landing "
-            f"centroid inside the buffered danger area. Wind conditions may be "
-            f"too strong or the danger area too small."
+            f"centroid inside the buffered danger area (closest miss: "
+            f"{-best_dist:.0f} m outside). Continuing with the {n_fallback} "
+            f"least-infeasible candidates."
         )
 
     return feasible
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Bayesian optimisation helpers
+# Azimuth evaluation helpers
 # ---------------------------------------------------------------------------
 
 def _run_descent_single(
@@ -513,7 +535,7 @@ def _evaluate_azimuth(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Azimuth optimisation (GP + UCB)
+# Azimuth optimisation (GP + UCB)
 # ---------------------------------------------------------------------------
 
 def optimise_azimuth(
@@ -530,7 +552,7 @@ def optimise_azimuth(
     poly_n: np.ndarray,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> tuple[list[int], list[tuple[int, float]]]:
-    """Phase 3: Bayesian optimisation over feasible azimuths.
+    """Bayesian optimisation over feasible azimuths.
 
     Returns (top_candidates, observations) where observations is a list
     of (azimuth, p_success) pairs from all evaluations.
@@ -553,7 +575,7 @@ def optimise_azimuth(
                 )
                 observations.append((az, p))
                 if progress_callback:
-                    progress_callback("Phase 3: Evaluation", i + 1, len(feasible_azimuths))
+                    progress_callback("Azimuth evaluation", i + 1, len(feasible_azimuths))
 
         observations.sort(key=lambda x: x[1], reverse=True)
         return [az for az, _ in observations], observations
@@ -587,7 +609,7 @@ def optimise_azimuth(
                 continue
             p = _evaluate_azimuth(
                 az, apN0, apE0, apD0, t_apogee,
-                wind_ensemble, aero_model, vehicle, propellant,
+                wind_ensemble, vehicle,
                 poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
             )
             X_obs.append(float(az))
@@ -596,7 +618,7 @@ def optimise_azimuth(
             evaluated.add(az)
 
         if progress_callback:
-            progress_callback("Phase 3: BO init", len(evaluated), MAX_ITER + len(init_indices))
+            progress_callback("Azimuth optimisation", len(evaluated), MAX_ITER + len(init_indices))
 
         # BO loop
         for iteration in range(MAX_ITER):
@@ -645,7 +667,7 @@ def optimise_azimuth(
             # Evaluate next candidate
             p = _evaluate_azimuth(
                 next_az, apN0, apE0, apD0, t_apogee,
-                wind_ensemble, aero_model, vehicle, propellant,
+                wind_ensemble, vehicle,
                 poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
             )
             X_obs.append(float(next_az))
@@ -655,7 +677,7 @@ def optimise_azimuth(
 
             if progress_callback:
                 progress_callback(
-                    "Phase 3: BO iteration",
+                    "Azimuth optimisation",
                     len(init_indices) + iteration + 1,
                     MAX_ITER + len(init_indices),
                 )
@@ -685,7 +707,7 @@ def optimise_azimuth(
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Candidate validation
+# Candidate validation
 # ---------------------------------------------------------------------------
 
 def _validation_worker(args: tuple) -> tuple[int, list[tuple[float, float]]]:
@@ -741,7 +763,7 @@ def validate_candidates(
     poly_n: np.ndarray,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> tuple[int, dict[int, float], dict[int, float]]:
-    """Phase 4: validate top candidates with full-uncertainty MC.
+    """Validate top candidates with full-uncertainty MC.
 
     Returns (optimal_azimuth, compliance_fractions, margins).
     """
@@ -787,7 +809,7 @@ def validate_candidates(
         margins[az] = float(sorted_dists[pct_idx])
 
     if progress_callback:
-        progress_callback("Phase 4: Validation", 1, 1)
+        progress_callback("Candidate validation", 1, 1)
 
     # Select candidate with greatest margin
     optimal = max(top_candidates, key=lambda az: margins[az])
@@ -821,7 +843,7 @@ def run_optimisation(
     buffered_poly = buffer_danger_area(danger_poly, acc.buffer_distance)
     poly_e, poly_n = polygon_to_arrays(buffered_poly)
 
-    # --- Phase 1: Inclination ---
+    # --- Inclination selection ---
     if inc_is_auto:
         selected_inc, apogee_positions, ballistic_landings, apogee_times = (
             select_inclination(
@@ -831,7 +853,7 @@ def run_optimisation(
         )
     else:
         selected_inc = int(rail.inclination)
-        # Still need a 6DoF ascent at this inclination for Phases 2-4
+        # Still need a 6DoF ascent at this inclination for azimuth steps
         apN, apE, apD, t_ap = _run_6dof_apogee(
             float(selected_inc), sim_cfg, vehicle, propellant, aero_model,
         )
@@ -841,24 +863,24 @@ def run_optimisation(
 
     t_apogee = apogee_times[selected_inc]
 
-    # --- Phases 2-4: Azimuth ---
+    # --- Azimuth selection ---
     if az_is_auto:
-        # Phase 2
+        # Narrowing
         feasible = narrow_azimuth_bounds(
             selected_inc, apogee_positions,
             sim_cfg, vehicle, propellant, wind_ensemble,
             buffered_poly, progress_callback,
         )
 
-        # Phase 3
-        top_candidates, phase3_obs = optimise_azimuth(
+        # Optimisation
+        top_candidates, az_obs = optimise_azimuth(
             feasible, selected_inc, apogee_positions, t_apogee,
             sim_cfg, vehicle, propellant, aero_model,
             wind_ensemble, poly_e, poly_n, progress_callback,
         )
 
-        # Phase 4
-        optimal_az, phase4_compliance, phase4_margins = validate_candidates(
+        # Validation
+        optimal_az, val_compliance, val_margins = validate_candidates(
             top_candidates, selected_inc,
             sim_cfg, vehicle, propellant, aero_model,
             wind_ensemble, buffered_poly, poly_e, poly_n,
@@ -868,21 +890,21 @@ def run_optimisation(
     else:
         selected_az = int(rail.azimuth)
         feasible = []
-        phase3_obs = []
+        az_obs = []
         top_candidates = []
-        phase4_compliance = {}
-        phase4_margins = {}
+        val_compliance = {}
+        val_margins = {}
 
     return OptimisationResult(
         selected_azimuth=selected_az,
         selected_inclination=selected_inc,
-        phase1_apogees=apogee_positions,
-        phase1_ballistic_landings=ballistic_landings,
-        phase1_selected=selected_inc,
-        phase2_feasible=feasible,
-        phase2_total_candidates=len(feasible),
-        phase3_observations=phase3_obs,
-        phase3_top_candidates=top_candidates,
-        phase4_compliance=phase4_compliance,
-        phase4_margins=phase4_margins,
+        inclination_apogees=apogee_positions,
+        inclination_ballistic_landings=ballistic_landings,
+        inclination_selected=selected_inc,
+        narrowing_feasible=feasible,
+        narrowing_total_candidates=len(feasible),
+        azimuth_observations=az_obs,
+        azimuth_top_candidates=top_candidates,
+        validation_compliance=val_compliance,
+        validation_margins=val_margins,
     )

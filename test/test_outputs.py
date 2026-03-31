@@ -212,15 +212,15 @@ def _make_opt_result() -> OptimisationResult:
     return OptimisationResult(
         selected_azimuth=315,
         selected_inclination=85,
-        phase1_apogees={85: (100.0, 50.0, -15000.0)},
-        phase1_ballistic_landings={85: (2000.0, 1000.0)},
-        phase1_selected=85,
-        phase2_feasible=[310, 315, 320],
-        phase2_total_candidates=36,
-        phase3_observations=[(310, 0.95), (315, 0.99), (320, 0.92)],
-        phase3_top_candidates=[315, 310],
-        phase4_compliance={315: 0.998, 310: 0.995},
-        phase4_margins={315: 150.0, 310: 80.0},
+        inclination_apogees={85: (100.0, 50.0, -15000.0)},
+        inclination_ballistic_landings={85: (2000.0, 1000.0)},
+        inclination_selected=85,
+        narrowing_feasible=[310, 315, 320],
+        narrowing_total_candidates=36,
+        azimuth_observations=[(310, 0.95), (315, 0.99), (320, 0.92)],
+        azimuth_top_candidates=[315, 310],
+        validation_compliance={315: 0.998, 310: 0.995},
+        validation_margins={315: 150.0, 310: 80.0},
     )
 
 
@@ -372,7 +372,7 @@ class TestWriteSummaryYaml:
         opt_data = data["optimisation"]
         assert opt_data["selected_azimuth"] == 315
         assert opt_data["selected_inclination"] == 85
-        assert len(opt_data["phase2_feasible_azimuths"]) == 3
+        assert len(opt_data["feasible_azimuths"]) == 3
         assert "azimuth_mean" in opt_data
         assert "inclination_mean" in opt_data
 

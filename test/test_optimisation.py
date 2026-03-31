@@ -6,8 +6,8 @@ Scope
 - Apogee rotation geometry
 - Wind drift calculation (constant wind / constant density)
 - Signed distance to boundary
-- Phase 1 inclination selection (against example data)
-- Phase 2 azimuth narrowing (basic geometry)
+- Inclination selection (against example data)
+- Azimuth narrowing (basic geometry)
 """
 
 from __future__ import annotations
@@ -269,14 +269,14 @@ class TestWindDrift:
 
 
 # ===========================================================================
-# 5. Phase 1 — Inclination selection (integration test)
+# 5. Inclination selection (integration test)
 # ===========================================================================
 
 class TestSelectInclination:
     def test_selects_valid_inclination(
         self, sim_cfg, vehicle, propellant, aero_model, poly_arrays,
     ):
-        """Phase 1 selects an inclination within the configured range."""
+        """Selects an inclination within the configured range."""
         poly_e, poly_n = poly_arrays
         inc_range = sim_cfg.launch.rail.inclination_range
         selected, apogees, landings, times = select_inclination(
@@ -332,7 +332,7 @@ class TestSelectInclination:
     def test_selects_maximum_valid(
         self, sim_cfg, vehicle, propellant, aero_model, poly_arrays,
     ):
-        """Phase 1 selects the maximum valid inclination (to maximise apogee)."""
+        """Selects the maximum valid inclination (to maximise apogee)."""
         poly_e, poly_n = poly_arrays
         selected, apogees, landings, times = select_inclination(
             sim_cfg, vehicle, propellant, aero_model,
@@ -368,16 +368,16 @@ class TestSelectInclination:
 
 
 # ===========================================================================
-# 6. Phase 2 — Azimuth narrowing (basic checks)
+# 6. Azimuth narrowing (basic checks)
 # ===========================================================================
 
 class TestNarrowAzimuthBounds:
     @pytest.fixture()
-    def phase2_feasible(
+    def narrowing_feasible(
         self, sim_cfg, vehicle, propellant, aero_model,
         wind_ensemble, buffered_poly, poly_arrays,
     ):
-        """Run Phase 1 + 2 and return feasible azimuths.
+        """Run inclination selection + azimuth narrowing and return feasible azimuths.
 
         Skips if the scenario produces no feasible azimuths (can happen
         when the 6DoF apogee altitude differs enough to push wind-drift
@@ -396,20 +396,20 @@ class TestNarrowAzimuthBounds:
         except ValueError:
             pytest.skip("No feasible azimuth for this scenario/wind combination")
 
-    def test_returns_nonempty(self, phase2_feasible):
-        """Phase 2 returns at least one feasible azimuth for the example config."""
-        assert len(phase2_feasible) > 0
+    def test_returns_nonempty(self, narrowing_feasible):
+        """Returns at least one feasible azimuth for the example config."""
+        assert len(narrowing_feasible) > 0
 
-    def test_all_feasible_are_integers(self, phase2_feasible):
+    def test_all_feasible_are_integers(self, narrowing_feasible):
         """All returned azimuths are integers."""
-        for az in phase2_feasible:
+        for az in narrowing_feasible:
             assert isinstance(az, int)
 
-    def test_feasible_within_range(self, sim_cfg, phase2_feasible):
+    def test_feasible_within_range(self, sim_cfg, narrowing_feasible):
         """All feasible azimuths are within the configured range."""
         az_range = sim_cfg.launch.rail.azimuth_range
         az_min, az_max = int(az_range[0]), int(az_range[1])
-        for az in phase2_feasible:
+        for az in narrowing_feasible:
             if az_min <= az_max:
                 assert az_min <= az <= az_max
             else:

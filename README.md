@@ -278,7 +278,7 @@ A run passes if ≥ `compliance_threshold` fraction of samples are compliant. Al
 
 ## Optimisation
 
-When `azimuth` and/or `inclination` are set to `"auto"`, a four-phase optimisation routine runs before the main Monte Carlo analysis:
+When `azimuth` and/or `inclination` are set to `"auto"`, the optimisation routine runs before the main Monte Carlo analysis:
 
 1. **Inclination Selection.** Deterministic 6DoF simulations at each integer inclination in `inclination_range` (no wind). Selects the steepest inclination (maximising apogee) whose ballistic landing is both outside `ballistic_exclusion_radius` from the launch site and inside the buffered danger area.
 
@@ -288,7 +288,7 @@ When `azimuth` and/or `inclination` are set to `"auto"`, a four-phase optimisati
 
 4. **Candidate Validation.** Top candidate azimuths validated with the full uncertainty set (wind, impulse, launch angles, fin cant). Selects the azimuth with the greatest containment margin.
 
-If only inclination is `"auto"`, only Phase 1 runs. If only azimuth is `"auto"`, Phases 2–4 run with the provided inclination.
+If only inclination is `"auto"`, only step 1 runs. If only azimuth is `"auto"`, steps 2–4 run with the provided inclination.
 
 ### Tolerance Auto-Calibration
 
@@ -364,7 +364,7 @@ python . verify <simulation.yaml>
 
 Azimuth is always zero for verification (wind is zero, so heading is irrelevant). The inclination can be set at three levels, with later entries taking precedence:
 
-1. `launch.rail.inclination` in the simulation config (falls back to `0` if set to `"auto"`)
+1. `launch.rail.inclination` in the simulation config (uses the midpoint of `inclination_range` if set to `"auto"`)
 2. `verification.inclination` in the simulation config (optional)
 3. `-i` CLI flag (highest priority)
 

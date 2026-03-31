@@ -637,7 +637,7 @@ def run_verification(
     elif ver_cfg.inclination is not None:
         inclination = ver_cfg.inclination
     else:
-        inclination = 0.0 if rail.inclination == "auto" else float(rail.inclination)
+        inclination = _resolve_rail_angle(rail.inclination, rail.inclination_range)
 
     geom = vehicle.geometry
     zero_wind = _zero_wind_ensemble()

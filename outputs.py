@@ -264,19 +264,19 @@ def write_summary_yaml(
             "inclination_mean": float(mc_result.inclination_mean),
             "selected_azimuth": opt_result.selected_azimuth,
             "selected_inclination": opt_result.selected_inclination,
-            "phase1_selected_inclination": opt_result.phase1_selected,
-            "phase2_feasible_azimuths": opt_result.phase2_feasible,
-            "phase3_observations": [
-                [az, float(p)] for az, p in opt_result.phase3_observations
+            "inclination_selected": opt_result.inclination_selected,
+            "feasible_azimuths": opt_result.narrowing_feasible,
+            "azimuth_observations": [
+                [az, float(p)] for az, p in opt_result.azimuth_observations
             ],
-            "phase3_top_candidates": opt_result.phase3_top_candidates,
-            "phase4_compliance": {
+            "top_candidates": opt_result.azimuth_top_candidates,
+            "validation_compliance": {
                 int(k): float(v)
-                for k, v in opt_result.phase4_compliance.items()
+                for k, v in opt_result.validation_compliance.items()
             },
-            "phase4_margins": {
+            "validation_margins": {
                 int(k): float(v)
-                for k, v in opt_result.phase4_margins.items()
+                for k, v in opt_result.validation_margins.items()
             },
         }
 
