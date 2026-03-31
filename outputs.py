@@ -1191,10 +1191,13 @@ def save_replay_3d(
 ) -> Path | plt.Figure:
     """Generate 3D isometric replay plot (§16.4).
 
-    Trajectories in NED km with altitude in metres, danger area on the
-    z=0 ground plane, and an OS Maps basemap texture.  Coloured by
-    descent scenario; pink if terminated early.
+    Trajectories in NED km with altitude in metres.  Danger area, buffer
+    ring, monitor coverage, and markers drawn on the z=0 ground plane,
+    matching the dispersion/plan-view plot features.  Coloured by descent
+    scenario; pink if terminated early.
     """
+    from shapely.ops import unary_union
+
     site = sim_cfg.site
     lat0, lon0 = site.latitude, site.longitude
 
@@ -1214,91 +1217,51 @@ def save_replay_3d(
             return save_path
         return fig
 
-    # --- Collect all points for extent ---
-    all_north = np.concatenate([t["north_km"] for t in trajectories])
-    all_east = np.concatenate([t["east_km"] for t in trajectories])
-    all_alt = np.concatenate([t["alt_m"] for t in trajectories])
-
-    margin = 2.0
-    extent_n = float(np.max(all_north)) + margin
-    extent_s = float(np.min(all_north)) - margin
-    extent_e = float(np.max(all_east)) + margin
-    extent_w = float(np.min(all_east)) - margin
-
-    # Ensure launch site is visible
-    extent_n = max(extent_n, margin)
-    extent_s = min(extent_s, -margin)
-    extent_e = max(extent_e, margin)
-    extent_w = min(extent_w, -margin)
-
-    # Expand to include danger area
-    danger_poly = load_polygon_ned(site.danger_area, lat0, lon0)
-    da_e, da_n = polygon_to_arrays(danger_poly)
-    extent_n = max(extent_n, np.max(da_n) / 1000.0 + margin)
-    extent_s = min(extent_s, np.min(da_n) / 1000.0 - margin)
-    extent_e = max(extent_e, np.max(da_e) / 1000.0 + margin)
-    extent_w = min(extent_w, np.min(da_e) / 1000.0 - margin)
-
     # --- Figure ---
     fig = plt.figure(figsize=(12, 10))
     ax = fig.add_subplot(111, projection="3d")
     ax.view_init(elev=30, azim=-60)
 
-    # --- Basemap on ground plane ---
-    def km_to_wm(n_km: float, e_km: float) -> tuple[float, float]:
-        return _ned_km_to_wm(n_km, e_km, lat0, lon0)
-
-    xmin_wm, ymin_wm = km_to_wm(extent_s, extent_w)
-    xmax_wm, ymax_wm = km_to_wm(extent_n, extent_e)
-
-    tile_cache = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), ".map_cache",
-    )
-    os.makedirs(tile_cache, exist_ok=True)
-    cx.set_cache_dir(tile_cache)
-
-    try:
-        img, img_extent = cx.bounds2img(
-            xmin_wm, ymin_wm, xmax_wm, ymax_wm,
-            source=_OS_TILE_URL,
-        )
-        # img_extent: (left, right, bottom, top) in Web Mercator
-        # Convert WM pixel grid back to NED km for the 3D ground plane
-        origin_x, origin_y = km_to_wm(0.0, 0.0)
-        wm_per_km_e = km_to_wm(0.0, 1.0)[0] - origin_x
-        wm_per_km_n = km_to_wm(1.0, 0.0)[1] - origin_y
-
-        img_e_min = (img_extent[0] - origin_x) / wm_per_km_e
-        img_e_max = (img_extent[1] - origin_x) / wm_per_km_e
-        img_n_min = (img_extent[2] - origin_y) / wm_per_km_n
-        img_n_max = (img_extent[3] - origin_y) / wm_per_km_n
-
-        # Subsample for performance
-        stride = max(1, max(img.shape[0], img.shape[1]) // 200)
-        img_sub = img[::stride, ::stride]
-        x_grid = np.linspace(img_e_min, img_e_max, img_sub.shape[1])
-        y_grid = np.linspace(img_n_min, img_n_max, img_sub.shape[0])
-        X, Y = np.meshgrid(x_grid, y_grid)
-        Z = np.zeros_like(X)
-
-        facecolors = img_sub[:, :, :3].astype(float) / 255.0
-        ax.plot_surface(
-            X, Y, Z, facecolors=facecolors,
-            shade=False, zorder=0, rasterized=True,
-        )
-    except Exception:
-        warnings.warn(
-            "Could not fetch OS Maps basemap tiles for 3D plot.",
-            stacklevel=2,
-        )
-
-    # --- Danger area on ground plane ---
+    # --- Danger area + buffer on ground plane ---
+    danger_poly = load_polygon_ned(site.danger_area, lat0, lon0)
+    da_e, da_n = polygon_to_arrays(danger_poly)
     da_e_km = da_e / 1000.0
     da_n_km = da_n / 1000.0
     ax.plot(
         da_e_km, da_n_km, zs=0, zdir="z",
         color="red", linewidth=1.0, linestyle="-", zorder=5,
     )
+
+    buffer_dist = sim_cfg.monte_carlo.acceptance.buffer_distance
+    smooth_m = _MIN_BUFFER_RADIUS_KM * 1000.0
+    inner_ned = danger_poly.buffer(-buffer_dist)
+    inner_ned = inner_ned.buffer(-smooth_m).buffer(+smooth_m)
+    if not inner_ned.is_empty:
+        inner_e, inner_n = polygon_to_arrays(inner_ned)
+        ax.plot(
+            inner_e / 1000.0, inner_n / 1000.0, zs=0, zdir="z",
+            color="red", linewidth=0.6, linestyle="--", alpha=0.5, zorder=5,
+        )
+
+    # --- Monitor circles on ground plane ---
+    n_circle_pts = 360
+    bearings = np.linspace(0, 2 * math.pi, n_circle_pts, endpoint=True)
+
+    def _plot_circle_3d(
+        center_n_km: float, center_e_km: float, radius_km: float,
+    ) -> None:
+        cn = center_n_km + radius_km * np.cos(bearings)
+        ce = center_e_km + radius_km * np.sin(bearings)
+        ax.plot(
+            ce, cn, zs=0, zdir="z",
+            color="black", linewidth=0.5, alpha=0.2, zorder=3,
+        )
+
+    _plot_circle_3d(0.0, 0.0, site.launch_monitor_radius / 1000.0)
+    for obs in site.monitor_stations:
+        ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
+        obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
+        _plot_circle_3d(obs_n_km, obs_e_km, obs.radius / 1000.0)
 
     # --- Launch site marker on ground ---
     ax.plot(
@@ -1308,9 +1271,58 @@ def save_replay_3d(
         linestyle="None", zorder=10,
     )
 
+    # --- Monitor station and map markers on ground ---
+    _marker_pool = ["s", "D", "^", "v", "p", "h", "8", "*"]
+    _marker_idx = 0
+
+    legend_handles: list = []
+    legend_handles.append(mlines.Line2D(
+        [], [], marker="x", color="none",
+        markerfacecolor="none", markeredgecolor="black",
+        markeredgewidth=2.5, markersize=8,
+        linestyle="None", label="Launch Site",
+    ))
+
+    for obs in site.monitor_stations:
+        ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
+        obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
+        mk_symbol = _marker_pool[_marker_idx % len(_marker_pool)]
+        _marker_idx += 1
+        ax.plot(
+            [obs_e_km], [obs_n_km], [0.0],
+            marker=mk_symbol, color="black",
+            markerfacecolor="black", markeredgecolor="black",
+            markersize=5, markeredgewidth=2.5,
+            linestyle="None", zorder=10,
+        )
+        legend_handles.append(mlines.Line2D(
+            [], [], marker=mk_symbol, color="none",
+            markerfacecolor="black", markeredgecolor="black",
+            markeredgewidth=2.5, markersize=5,
+            linestyle="None", label=obs.name,
+        ))
+
+    for mk in site.map_markers:
+        ned = _lonlat_to_ned([(mk.longitude, mk.latitude)], lat0, lon0)
+        mk_e_km, mk_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
+        mk_symbol = _marker_pool[_marker_idx % len(_marker_pool)]
+        _marker_idx += 1
+        ax.plot(
+            [mk_e_km], [mk_n_km], [0.0],
+            marker=mk_symbol, color="black",
+            markerfacecolor="black", markeredgecolor="black",
+            markersize=5, markeredgewidth=2.5,
+            linestyle="None", zorder=10,
+        )
+        legend_handles.append(mlines.Line2D(
+            [], [], marker=mk_symbol, color="none",
+            markerfacecolor="black", markeredgecolor="black",
+            markeredgewidth=2.5, markersize=5,
+            linestyle="None", label=mk.name,
+        ))
+
     # --- Plot trajectories ---
     legend_seen: set[str] = set()
-    legend_handles: list = []
     for t in trajectories:
         legend_key = "Terminated" if t["is_terminated"] else t["label"]
         show_label = legend_key not in legend_seen
