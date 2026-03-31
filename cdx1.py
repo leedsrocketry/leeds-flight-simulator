@@ -295,12 +295,40 @@ def build_comparison(cdx1: dict, yaml_cfg: dict,
         force_key="recovery.main.cd", force_file="vehicle")
     num("Main diameter (m)", "main_diameter_m", "main_diameter_m",
         force_key="recovery.main.diameter", force_file="vehicle")
-    num("Main deploy alt (m)", "main_deploy_alt_m", "main_deploy_alt_m",
-        force_key="recovery.main.threshold", force_file="vehicle")
-
     # --- Strings (informational) ---
     string("Drogue deployment", cdx1["drogue_deploy"], yaml_cfg["drogue_deploy"])
-    string("Main deployment", cdx1["main_deploy"], yaml_cfg["main_deploy"])
+
+    # Main deployment: diff the altitude value, not just the trigger type.
+    # Show "Altitude (NNN m)" so the actual value is visible; do a numeric
+    # diff when both sides are altitude-triggered (allows --force update).
+    cdx1_main_style = cdx1["main_deploy"]      # "Altitude" or "Apogee"
+    yaml_main_style = yaml_cfg["main_deploy"]  # "Altitude" or "Apogee"
+    cdx1_main_alt = cdx1.get("main_deploy_alt_m")
+    yaml_main_alt = yaml_cfg.get("main_deploy_alt_m")
+
+    def _fmt_main(style: str, alt_m: float | None) -> str:
+        if style == "Altitude" and alt_m is not None:
+            return f"Altitude ({alt_m:.0f} m)"
+        return style
+
+    if cdx1_main_style == "Altitude" and yaml_main_style == "Altitude" \
+            and cdx1_main_alt is not None and yaml_main_alt is not None:
+        pct = _pct(cdx1_main_alt, yaml_main_alt)
+        rows.append(ComparisonRow(
+            label="Main deployment",
+            cdx1_val=_fmt_main(cdx1_main_style, cdx1_main_alt),
+            yaml_val=_fmt_main(yaml_main_style, yaml_main_alt),
+            diff_pct=pct, passed=pct <= thr_pct,
+            yaml_key="recovery.main.threshold", yaml_file="vehicle",
+        ))
+    else:
+        rows.append(ComparisonRow(
+            label="Main deployment",
+            cdx1_val=_fmt_main(cdx1_main_style, cdx1_main_alt),
+            yaml_val=_fmt_main(yaml_main_style, yaml_main_alt),
+            diff_pct=None,
+            passed=cdx1_main_style == yaml_main_style,
+        ))
     rows.append(ComparisonRow(
         label="Motor", cdx1_val=cdx1["motor_name"],
         yaml_val=yaml_cfg["motor_file"],
