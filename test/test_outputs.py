@@ -583,16 +583,6 @@ def _make_sample_with_trajectory(
 
 
 class TestReplayPlots:
-    def test_replay_3d_not_implemented(self, tmp_path):
-        sim_cfg = _make_sim_cfg(tmp_path)
-        with pytest.raises(NotImplementedError):
-            save_replay_3d([], sim_cfg, output_dir=tmp_path)
-
-    def test_replay_plan_view_not_implemented(self, tmp_path):
-        sim_cfg = _make_sim_cfg(tmp_path)
-        with pytest.raises(NotImplementedError):
-            save_replay_plan_view([], sim_cfg, output_dir=tmp_path)
-
     def test_replay_altitude_saves_png(self, tmp_path):
         sim_cfg = _make_sim_cfg(tmp_path)
         samples = [
@@ -620,6 +610,50 @@ class TestReplayPlots:
         result = save_replay_altitude(samples, sim_cfg, output_dir=tmp_path)
         assert isinstance(result, Path)
         assert result.exists()
+
+    def test_replay_3d_saves_png(self, tmp_path):
+        sim_cfg = _make_sim_cfg(tmp_path)
+        samples = [
+            _make_sample_with_trajectory(0, "nominal"),
+            _make_sample_with_trajectory(1, "ballistic"),
+        ]
+        result = save_replay_3d(samples, sim_cfg, output_dir=tmp_path)
+        assert isinstance(result, Path)
+        assert result.exists()
+        assert result.name == "replay_3d.png"
+
+    def test_replay_3d_returns_figure_when_no_output_dir(self, tmp_path):
+        import matplotlib.pyplot as plt
+        sim_cfg = _make_sim_cfg(tmp_path)
+        samples = [_make_sample_with_trajectory(0, "nominal")]
+        result = save_replay_3d(samples, sim_cfg)
+        assert isinstance(result, plt.Figure)
+        plt.close(result)
+
+    def test_replay_3d_empty(self, tmp_path):
+        sim_cfg = _make_sim_cfg(tmp_path)
+        result = save_replay_3d([], sim_cfg, output_dir=tmp_path)
+        assert isinstance(result, Path)
+        assert result.exists()
+
+    def test_replay_plan_view_saves_png(self, tmp_path):
+        sim_cfg = _make_sim_cfg(tmp_path)
+        samples = [
+            _make_sample_with_trajectory(0, "nominal"),
+            _make_sample_with_trajectory(1, "ballistic"),
+        ]
+        result = save_replay_plan_view(samples, sim_cfg, output_dir=tmp_path)
+        assert isinstance(result, Path)
+        assert result.exists()
+        assert result.name == "replay_plan_view.png"
+
+    def test_replay_plan_view_returns_figure_when_no_output_dir(self, tmp_path):
+        import matplotlib.pyplot as plt
+        sim_cfg = _make_sim_cfg(tmp_path)
+        samples = [_make_sample_with_trajectory(0, "nominal")]
+        result = save_replay_plan_view(samples, sim_cfg)
+        assert isinstance(result, plt.Figure)
+        plt.close(result)
 
 
 # ---------------------------------------------------------------------------

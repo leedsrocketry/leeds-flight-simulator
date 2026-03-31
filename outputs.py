@@ -7,9 +7,9 @@ write_samples_csv       — per-sample CSV (§16.1)
 write_summary_yaml      — run summary YAML (§16.2)
 save_altitude_plot      — altitude-time plot (§16.5)
 save_dispersion_plot    — landing dispersion plot (§16.5)
-save_replay_3d          — [stub] 3D isometric replay plot (§16.4)
-save_replay_plan_view   — [stub] plan-view replay plot (§16.4)
-save_replay_altitude    — [stub] altitude-time replay plot (§16.4)
+save_replay_3d          — 3D isometric replay plot (§16.4)
+save_replay_plan_view   — plan-view replay plot (§16.4)
+save_replay_altitude    — altitude-time replay plot (§16.4)
 """
 
 from __future__ import annotations
@@ -644,52 +644,65 @@ def _fit_ellipse_threshold(
     )
 
 
-def save_dispersion_plot(
-    results: list[SampleResult],
+def _build_map_axes(
+    ax: plt.Axes,
     sim_cfg: SimulationConfig,
-    compliance_threshold: float,
-    output_dir: Path | None = None,
     *,
-    show_points: bool = False,
-) -> Path | plt.Figure:
-    """Generate and save the landing dispersion plot.
+    extra_north_km: np.ndarray | None = None,
+    extra_east_km: np.ndarray | None = None,
+    show_buffer: bool = True,
+    grid_spacing_km: float = 5.0,
+) -> tuple:
+    """Set up a 2D map axes with danger area, monitors, markers, basemap.
+
+    Draws the danger area boundary (with optional buffer ring), monitor
+    coverage circles, launch site cross, monitor station markers, map
+    markers, OS Maps basemap tiles, km-labelled grid, and axis labels.
 
     Parameters
     ----------
-    results : list[SampleResult]
-        All sample results from the Monte Carlo run.
+    ax : Axes
+        A matplotlib 2D axes.
     sim_cfg : SimulationConfig
-        Simulation configuration (for site data).
-    compliance_threshold : float
-        Fraction of samples the ellipse must contain (from acceptance config).
-    output_dir : Path or None
-        Directory to save the plot into.  If *None*, return the
-        ``Figure`` for interactive display.
-    show_points : bool
-        If True, overlay individual apogee and landing points on the plot.
+        Simulation configuration (provides site data and buffer distance).
+    extra_north_km, extra_east_km : array-like or None
+        Additional points (in km from launch site) to include when
+        computing the map extent.
+    show_buffer : bool
+        If True, draw the hatched buffer ring inside the danger area.
+    grid_spacing_km : float
+        Grid-line spacing in km.
 
     Returns
     -------
-    Path or Figure
-        Path to the saved ``dispersion_plot.png``, or the ``Figure``.
+    (km_to_wm, legend_handles)
+        ``km_to_wm(north_km, east_km)`` converts NED km to Web Mercator,
+        ``legend_handles`` is a list of artists for the legend.
     """
+    from shapely.ops import unary_union
+
     site = sim_cfg.site
     lat0, lon0 = site.latitude, site.longitude
 
-    # --- Group landing points by scenario ---
-    scenario_points: dict[str, list[tuple[float, float]]] = {}
-    for r in results:
-        pts = scenario_points.setdefault(r.scenario, [])
-        pts.append((r.landing_north / 1000.0, r.landing_east / 1000.0))
+    def km_to_wm(n_km: float, e_km: float) -> tuple[float, float]:
+        return _ned_km_to_wm(n_km, e_km, lat0, lon0)
 
-    # --- Determine map extent ---
-    all_north_km = [r.landing_north / 1000.0 for r in results]
-    all_east_km = [r.landing_east / 1000.0 for r in results]
-    margin = 2.0  # km padding
-    extent_n = max(all_north_km) + margin
-    extent_s = min(all_north_km) - margin
-    extent_e = max(all_east_km) + margin
-    extent_w = min(all_east_km) - margin
+    # --- Compute map extent ---
+    margin = 2.0
+
+    if extra_north_km is not None and len(extra_north_km) > 0:
+        extent_n = float(np.max(extra_north_km)) + margin
+        extent_s = float(np.min(extra_north_km)) - margin
+    else:
+        extent_n = margin
+        extent_s = -margin
+
+    if extra_east_km is not None and len(extra_east_km) > 0:
+        extent_e = float(np.max(extra_east_km)) + margin
+        extent_w = float(np.min(extra_east_km)) - margin
+    else:
+        extent_e = margin
+        extent_w = -margin
 
     # Ensure launch site is visible
     extent_n = max(extent_n, margin)
@@ -698,12 +711,12 @@ def save_dispersion_plot(
     extent_w = min(extent_w, -margin)
 
     # Expand to include full danger area boundary
-    danger_poly_extent = load_polygon_ned(site.danger_area, lat0, lon0)
-    da_ext_e, da_ext_n = polygon_to_arrays(danger_poly_extent)
-    extent_n = max(extent_n, np.max(da_ext_n) / 1000.0 + margin)
-    extent_s = min(extent_s, np.min(da_ext_n) / 1000.0 - margin)
-    extent_e = max(extent_e, np.max(da_ext_e) / 1000.0 + margin)
-    extent_w = min(extent_w, np.min(da_ext_e) / 1000.0 - margin)
+    danger_poly = load_polygon_ned(site.danger_area, lat0, lon0)
+    da_e, da_n = polygon_to_arrays(danger_poly)
+    extent_n = max(extent_n, np.max(da_n) / 1000.0 + margin)
+    extent_s = min(extent_s, np.min(da_n) / 1000.0 - margin)
+    extent_e = max(extent_e, np.max(da_e) / 1000.0 + margin)
+    extent_w = min(extent_w, np.min(da_e) / 1000.0 - margin)
 
     # Expand to include monitor stations
     for obs in site.monitor_stations:
@@ -722,73 +735,56 @@ def save_dispersion_plot(
     extent_e = max(extent_e, ls_obs_r_km + margin)
     extent_w = min(extent_w, -ls_obs_r_km - margin)
 
-    grid_spacing_km = 5.0
-
-    # --- Web Mercator helpers ---
-    def km_to_wm(n_km: float, e_km: float) -> tuple[float, float]:
-        return _ned_km_to_wm(n_km, e_km, lat0, lon0)
-
     origin_x, origin_y = km_to_wm(0.0, 0.0)
     xmin, ymin = km_to_wm(extent_s, extent_w)
     xmax, ymax = km_to_wm(extent_n, extent_e)
 
-    # --- Figure ---
-    ar = (extent_e - extent_w) / (extent_n - extent_s)
-    base = 9
-    figsize = (base, base / ar) if ar >= 1 else (base * ar, base)
-    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
     ax.set_aspect("equal")
     legend_handles: list = []
 
     # --- Danger area + buffer ---
-    danger_poly = load_polygon_ned(site.danger_area, lat0, lon0)
     buffer_dist = sim_cfg.monte_carlo.acceptance.buffer_distance
 
-    # Convert danger area to Web Mercator for plotting
-    da_e, da_n = polygon_to_arrays(danger_poly)
     da_wm = np.array([km_to_wm(n / 1000.0, e / 1000.0) for e, n in zip(da_e, da_n)])
     ax.plot(da_wm[:, 0], da_wm[:, 1], color="red", linewidth=1.0, linestyle="-", zorder=5)
 
-    # Buffer ring — computed in NED, converted to WM only for rendering.
-    # Fresh inward buffer without simplification (avoids the distortion that
-    # buffer_danger_area's simplify() introduces for the acceptance check).
-    smooth_m = _MIN_BUFFER_RADIUS_KM * 1000.0
-    inner_ned = danger_poly.buffer(-buffer_dist)
-    inner_ned = inner_ned.buffer(-smooth_m).buffer(+smooth_m)
+    if show_buffer:
+        smooth_m = _MIN_BUFFER_RADIUS_KM * 1000.0
+        inner_ned = danger_poly.buffer(-buffer_dist)
+        inner_ned = inner_ned.buffer(-smooth_m).buffer(+smooth_m)
 
-    if not inner_ned.is_empty:
-        ring_ned = danger_poly.difference(inner_ned)
-        ring_parts = [ring_ned] if ring_ned.geom_type == "Polygon" else list(ring_ned.geoms)
-        for part in ring_parts:
-            # Convert exterior and interior rings from NED metres to WM
-            outer_c = np.array([
-                km_to_wm(n / 1000.0, e / 1000.0)
-                for e, n in part.exterior.coords
-            ])
-            interiors = list(part.interiors)
-            if interiors:
-                inner_c = np.array([
+        if not inner_ned.is_empty:
+            ring_ned = danger_poly.difference(inner_ned)
+            ring_parts = [ring_ned] if ring_ned.geom_type == "Polygon" else list(ring_ned.geoms)
+            for part in ring_parts:
+                outer_c = np.array([
                     km_to_wm(n / 1000.0, e / 1000.0)
-                    for e, n in interiors[0].coords
+                    for e, n in part.exterior.coords
                 ])
-                verts = np.concatenate([outer_c, inner_c])
-                codes = np.concatenate([
-                    [MplPath.MOVETO] + [MplPath.LINETO] * (len(outer_c) - 2) + [MplPath.CLOSEPOLY],
-                    [MplPath.MOVETO] + [MplPath.LINETO] * (len(inner_c) - 2) + [MplPath.CLOSEPOLY],
-                ])
-            else:
-                verts = outer_c
-                codes = [MplPath.MOVETO] + [MplPath.LINETO] * (len(outer_c) - 2) + [MplPath.CLOSEPOLY]
-            ax.add_patch(PathPatch(
-                MplPath(verts, codes),
-                facecolor="none", edgecolor="red", linewidth=0, zorder=6,
-                hatch="....",
-            ))
+                interiors = list(part.interiors)
+                if interiors:
+                    inner_c = np.array([
+                        km_to_wm(n / 1000.0, e / 1000.0)
+                        for e, n in interiors[0].coords
+                    ])
+                    verts = np.concatenate([outer_c, inner_c])
+                    codes = np.concatenate([
+                        [MplPath.MOVETO] + [MplPath.LINETO] * (len(outer_c) - 2) + [MplPath.CLOSEPOLY],
+                        [MplPath.MOVETO] + [MplPath.LINETO] * (len(inner_c) - 2) + [MplPath.CLOSEPOLY],
+                    ])
+                else:
+                    verts = outer_c
+                    codes = [MplPath.MOVETO] + [MplPath.LINETO] * (len(outer_c) - 2) + [MplPath.CLOSEPOLY]
+                ax.add_patch(PathPatch(
+                    MplPath(verts, codes),
+                    facecolor="none", edgecolor="red", linewidth=0, zorder=6,
+                    hatch="....",
+                ))
 
-    legend_handles.append(mpatches.Patch(
-        facecolor="none", edgecolor="red", linewidth=0,
-        hatch="....", label=f"Buffer Zone ({buffer_dist / 1000.0:.0f} km)",
-    ))
+        legend_handles.append(mpatches.Patch(
+            facecolor="none", edgecolor="red", linewidth=0,
+            hatch="....", label=f"Buffer Zone ({buffer_dist / 1000.0:.0f} km)",
+        ))
 
     # --- Monitor circles (unified into single shape, no edge) ---
     n_circle_pts = 360
@@ -806,20 +802,13 @@ def save_dispersion_plot(
         ]
         return ShapelyPolygon(wm_pts)
 
-    # Collect all monitor circles as Shapely polygons
     obs_polys: list[ShapelyPolygon] = []
-
-    # Launch site monitor circle
     obs_polys.append(_obs_circle_wm(0.0, 0.0, site.launch_monitor_radius / 1000.0))
-
-    # Configured monitor stations
     for obs in site.monitor_stations:
         ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
         obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
         obs_polys.append(_obs_circle_wm(obs_n_km, obs_e_km, obs.radius / 1000.0))
 
-    # Union all circles into a single shape so overlapping areas don't stack
-    from shapely.ops import unary_union
     obs_union = unary_union(obs_polys)
     obs_parts = [obs_union] if obs_union.geom_type == "Polygon" else list(obs_union.geoms)
     for part in obs_parts:
@@ -831,73 +820,7 @@ def save_dispersion_plot(
         label="Monitored Area", alpha=0.1,
     ))
 
-    # --- Landing point ellipses per scenario ---
-    ellipse_styles = ["-", "--", "-.", ":"]
-    ellipse_colours = {
-        "nominal": "green", "ballistic": "black",
-        "drogue_only": "orange", "premature_main": "red",
-    }
-
-    for i, (key, pts_list) in enumerate(scenario_points.items()):
-        pts_arr = np.array(pts_list)  # (N, 2): [north_km, east_km]
-        if len(pts_arr) < 3:
-            continue
-
-        el = _fit_ellipse_threshold(pts_arr, compliance_threshold)
-        colour = ellipse_colours.get(key, "grey")
-        style = ellipse_styles[i % len(ellipse_styles)]
-        label = SCENARIO_LABELS.get(key, key)
-
-        ec_wm, nc_wm = km_to_wm(el["center_n"], el["center_e"])
-        wm_a = abs(km_to_wm(el["center_n"], el["center_e"] + el["semi_a"])[0] - ec_wm)
-        wm_b = abs(km_to_wm(el["center_n"] + el["semi_b"], el["center_e"])[1] - nc_wm)
-
-        ax.add_patch(Ellipse(
-            xy=(ec_wm, nc_wm), width=2 * wm_a, height=2 * wm_b,
-            angle=el["angle_deg"], edgecolor=colour, facecolor="none",
-            linewidth=2, alpha=0.6, zorder=7, linestyle=style,
-        ))
-        legend_handles.append(mpatches.Patch(
-            facecolor="none", edgecolor=colour, alpha=0.6,
-            linestyle=style, linewidth=2, label=label,
-        ))
-
-    # --- Scatter points (apogee + landing, when --points is set) ---
-    if show_points:
-        # Landing points — coloured per scenario
-        for key, pts_list in scenario_points.items():
-            pts_arr = np.array(pts_list)
-            colour = ellipse_colours.get(key, "grey")
-            wm_pts = np.array([
-                km_to_wm(n, e) for n, e in pts_arr
-            ])
-            ax.scatter(
-                wm_pts[:, 0], wm_pts[:, 1],
-                s=1, c=colour, alpha=0.4, zorder=8, linewidths=0,
-            )
-        legend_handles.append(mlines.Line2D(
-            [], [], marker="o", color="none",
-            markerfacecolor="grey", markeredgecolor="none",
-            markersize=3, linestyle="None", label="Landing Points",
-        ))
-
-        # Apogee points — uniform grey
-        apogee_wm = np.array([
-            km_to_wm(r.apogee_north / 1000.0, r.apogee_east / 1000.0)
-            for r in results
-        ])
-        ax.scatter(
-            apogee_wm[:, 0], apogee_wm[:, 1],
-            s=1, c="blue", alpha=0.3, zorder=8, linewidths=0,
-        )
-        legend_handles.append(mlines.Line2D(
-            [], [], marker="o", color="none",
-            markerfacecolor="blue", markeredgecolor="none",
-            markersize=3, linestyle="None", label="Apogee Points",
-        ))
-
-    # --- Map markers (unique per location) ---
-    # Marker pool for monitor stations and map markers
+    # --- Map markers ---
     _marker_pool = ["s", "D", "^", "v", "p", "h", "8", "*"]
     _marker_idx = 0
 
@@ -916,7 +839,7 @@ def save_dispersion_plot(
         linestyle="None", label="Launch Site",
     ))
 
-    # Monitor station markers (each gets a unique symbol)
+    # Monitor station markers
     for obs in site.monitor_stations:
         ned = _lonlat_to_ned([(obs.longitude, obs.latitude)], lat0, lon0)
         obs_e_km, obs_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
@@ -936,7 +859,7 @@ def save_dispersion_plot(
             linestyle="None", label=obs.name,
         ))
 
-    # Configured map markers (each gets a unique symbol)
+    # Configured map markers
     for mk in site.map_markers:
         ned = _lonlat_to_ned([(mk.longitude, mk.latitude)], lat0, lon0)
         mk_e_km, mk_n_km = ned[0][0] / 1000.0, ned[0][1] / 1000.0
@@ -966,7 +889,7 @@ def save_dispersion_plot(
     os.makedirs(tile_cache, exist_ok=True)
     cx.set_cache_dir(tile_cache)
 
-    fig.canvas.draw()
+    ax.figure.canvas.draw()
     try:
         cx.add_basemap(ax, crs="EPSG:3857", source=_OS_TILE_URL, zorder=1, zoom_adjust=0)
     except Exception:
@@ -1002,6 +925,125 @@ def save_dispersion_plot(
         True, which="major", linestyle="--",
         linewidth=0.5, alpha=0.7, zorder=2,
     )
+
+    return km_to_wm, legend_handles
+
+
+def save_dispersion_plot(
+    results: list[SampleResult],
+    sim_cfg: SimulationConfig,
+    compliance_threshold: float,
+    output_dir: Path | None = None,
+    *,
+    show_points: bool = False,
+) -> Path | plt.Figure:
+    """Generate and save the landing dispersion plot.
+
+    Parameters
+    ----------
+    results : list[SampleResult]
+        All sample results from the Monte Carlo run.
+    sim_cfg : SimulationConfig
+        Simulation configuration (for site data).
+    compliance_threshold : float
+        Fraction of samples the ellipse must contain (from acceptance config).
+    output_dir : Path or None
+        Directory to save the plot into.  If *None*, return the
+        ``Figure`` for interactive display.
+    show_points : bool
+        If True, overlay individual apogee and landing points on the plot.
+
+    Returns
+    -------
+    Path or Figure
+        Path to the saved ``dispersion_plot.png``, or the ``Figure``.
+    """
+    # --- Group landing points by scenario ---
+    scenario_points: dict[str, list[tuple[float, float]]] = {}
+    for r in results:
+        pts = scenario_points.setdefault(r.scenario, [])
+        pts.append((r.landing_north / 1000.0, r.landing_east / 1000.0))
+
+    all_north_km = np.array([r.landing_north / 1000.0 for r in results])
+    all_east_km = np.array([r.landing_east / 1000.0 for r in results])
+
+    # --- Build map ---
+    ar_n = float(np.ptp(all_north_km)) + 4.0 if len(all_north_km) > 0 else 4.0
+    ar_e = float(np.ptp(all_east_km)) + 4.0 if len(all_east_km) > 0 else 4.0
+    ar = ar_e / ar_n if ar_n > 0 else 1.0
+    base = 9
+    figsize = (base, base / ar) if ar >= 1 else (base * ar, base)
+    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
+
+    km_to_wm, legend_handles = _build_map_axes(
+        ax, sim_cfg,
+        extra_north_km=all_north_km,
+        extra_east_km=all_east_km,
+    )
+
+    # --- Landing point ellipses per scenario ---
+    ellipse_styles = ["-", "--", "-.", ":"]
+    ellipse_colours = {
+        "nominal": "green", "ballistic": "black",
+        "drogue_only": "orange", "premature_main": "red",
+    }
+
+    for i, (key, pts_list) in enumerate(scenario_points.items()):
+        pts_arr = np.array(pts_list)  # (N, 2): [north_km, east_km]
+        if len(pts_arr) < 3:
+            continue
+
+        el = _fit_ellipse_threshold(pts_arr, compliance_threshold)
+        colour = ellipse_colours.get(key, "grey")
+        style = ellipse_styles[i % len(ellipse_styles)]
+        label = SCENARIO_LABELS.get(key, key)
+
+        ec_wm, nc_wm = km_to_wm(el["center_n"], el["center_e"])
+        wm_a = abs(km_to_wm(el["center_n"], el["center_e"] + el["semi_a"])[0] - ec_wm)
+        wm_b = abs(km_to_wm(el["center_n"] + el["semi_b"], el["center_e"])[1] - nc_wm)
+
+        ax.add_patch(Ellipse(
+            xy=(ec_wm, nc_wm), width=2 * wm_a, height=2 * wm_b,
+            angle=el["angle_deg"], edgecolor=colour, facecolor="none",
+            linewidth=2, alpha=0.6, zorder=7, linestyle=style,
+        ))
+        legend_handles.append(mpatches.Patch(
+            facecolor="none", edgecolor=colour, alpha=0.6,
+            linestyle=style, linewidth=2, label=label,
+        ))
+
+    # --- Scatter points (apogee + landing, when --points is set) ---
+    if show_points:
+        for key, pts_list in scenario_points.items():
+            pts_arr = np.array(pts_list)
+            colour = ellipse_colours.get(key, "grey")
+            wm_pts = np.array([
+                km_to_wm(n, e) for n, e in pts_arr
+            ])
+            ax.scatter(
+                wm_pts[:, 0], wm_pts[:, 1],
+                s=1, c=colour, alpha=0.4, zorder=8, linewidths=0,
+            )
+        legend_handles.append(mlines.Line2D(
+            [], [], marker="o", color="none",
+            markerfacecolor="grey", markeredgecolor="none",
+            markersize=3, linestyle="None", label="Landing Points",
+        ))
+
+        apogee_wm = np.array([
+            km_to_wm(r.apogee_north / 1000.0, r.apogee_east / 1000.0)
+            for r in results
+        ])
+        ax.scatter(
+            apogee_wm[:, 0], apogee_wm[:, 1],
+            s=1, c="blue", alpha=0.3, zorder=8, linewidths=0,
+        )
+        legend_handles.append(mlines.Line2D(
+            [], [], marker="o", color="none",
+            markerfacecolor="blue", markeredgecolor="none",
+            markersize=3, linestyle="None", label="Apogee Points",
+        ))
+
     ax.legend(handles=legend_handles, loc="upper right", fontsize=9).set_zorder(20)
 
     if output_dir is not None:
@@ -1147,8 +1189,155 @@ def save_replay_3d(
     *,
     output_dir: Path | None = None,
 ) -> Path | plt.Figure:
-    """Generate 3D isometric replay plot. Not yet implemented."""
-    raise NotImplementedError("Replay 3D isometric plot not yet implemented")
+    """Generate 3D isometric replay plot (§16.4).
+
+    Trajectories in NED km with altitude in metres, danger area on the
+    z=0 ground plane, and an OS Maps basemap texture.  Coloured by
+    descent scenario; pink if terminated early.
+    """
+    site = sim_cfg.site
+    lat0, lon0 = site.latitude, site.longitude
+
+    # --- Extract trajectories ---
+    trajectories: list[dict] = []
+    for sr in replayed:
+        t = _extract_replay_trajectory(sr)
+        if t is not None:
+            trajectories.append(t)
+
+    if not trajectories:
+        fig = plt.figure(figsize=(10, 8))
+        if output_dir is not None:
+            save_path = output_dir / "replay_3d.png"
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            return save_path
+        return fig
+
+    # --- Collect all points for extent ---
+    all_north = np.concatenate([t["north_km"] for t in trajectories])
+    all_east = np.concatenate([t["east_km"] for t in trajectories])
+    all_alt = np.concatenate([t["alt_m"] for t in trajectories])
+
+    margin = 2.0
+    extent_n = float(np.max(all_north)) + margin
+    extent_s = float(np.min(all_north)) - margin
+    extent_e = float(np.max(all_east)) + margin
+    extent_w = float(np.min(all_east)) - margin
+
+    # Ensure launch site is visible
+    extent_n = max(extent_n, margin)
+    extent_s = min(extent_s, -margin)
+    extent_e = max(extent_e, margin)
+    extent_w = min(extent_w, -margin)
+
+    # Expand to include danger area
+    danger_poly = load_polygon_ned(site.danger_area, lat0, lon0)
+    da_e, da_n = polygon_to_arrays(danger_poly)
+    extent_n = max(extent_n, np.max(da_n) / 1000.0 + margin)
+    extent_s = min(extent_s, np.min(da_n) / 1000.0 - margin)
+    extent_e = max(extent_e, np.max(da_e) / 1000.0 + margin)
+    extent_w = min(extent_w, np.min(da_e) / 1000.0 - margin)
+
+    # --- Figure ---
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.view_init(elev=30, azim=-60)
+
+    # --- Basemap on ground plane ---
+    def km_to_wm(n_km: float, e_km: float) -> tuple[float, float]:
+        return _ned_km_to_wm(n_km, e_km, lat0, lon0)
+
+    xmin_wm, ymin_wm = km_to_wm(extent_s, extent_w)
+    xmax_wm, ymax_wm = km_to_wm(extent_n, extent_e)
+
+    tile_cache = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), ".map_cache",
+    )
+    os.makedirs(tile_cache, exist_ok=True)
+    cx.set_cache_dir(tile_cache)
+
+    try:
+        img, img_extent = cx.bounds2img(
+            xmin_wm, ymin_wm, xmax_wm, ymax_wm,
+            source=_OS_TILE_URL,
+        )
+        # img_extent: (left, right, bottom, top) in Web Mercator
+        # Convert WM pixel grid back to NED km for the 3D ground plane
+        origin_x, origin_y = km_to_wm(0.0, 0.0)
+        wm_per_km_e = km_to_wm(0.0, 1.0)[0] - origin_x
+        wm_per_km_n = km_to_wm(1.0, 0.0)[1] - origin_y
+
+        img_e_min = (img_extent[0] - origin_x) / wm_per_km_e
+        img_e_max = (img_extent[1] - origin_x) / wm_per_km_e
+        img_n_min = (img_extent[2] - origin_y) / wm_per_km_n
+        img_n_max = (img_extent[3] - origin_y) / wm_per_km_n
+
+        # Subsample for performance
+        stride = max(1, max(img.shape[0], img.shape[1]) // 200)
+        img_sub = img[::stride, ::stride]
+        x_grid = np.linspace(img_e_min, img_e_max, img_sub.shape[1])
+        y_grid = np.linspace(img_n_min, img_n_max, img_sub.shape[0])
+        X, Y = np.meshgrid(x_grid, y_grid)
+        Z = np.zeros_like(X)
+
+        facecolors = img_sub[:, :, :3].astype(float) / 255.0
+        ax.plot_surface(
+            X, Y, Z, facecolors=facecolors,
+            shade=False, zorder=0, rasterized=True,
+        )
+    except Exception:
+        warnings.warn(
+            "Could not fetch OS Maps basemap tiles for 3D plot.",
+            stacklevel=2,
+        )
+
+    # --- Danger area on ground plane ---
+    da_e_km = da_e / 1000.0
+    da_n_km = da_n / 1000.0
+    ax.plot(
+        da_e_km, da_n_km, zs=0, zdir="z",
+        color="red", linewidth=1.0, linestyle="-", zorder=5,
+    )
+
+    # --- Launch site marker on ground ---
+    ax.plot(
+        [0.0], [0.0], [0.0], marker="x", color="black",
+        markerfacecolor="none", markeredgecolor="black",
+        markersize=8, markeredgewidth=2.5,
+        linestyle="None", zorder=10,
+    )
+
+    # --- Plot trajectories ---
+    legend_seen: set[str] = set()
+    legend_handles: list = []
+    for t in trajectories:
+        legend_key = "Terminated" if t["is_terminated"] else t["label"]
+        show_label = legend_key not in legend_seen
+        legend_seen.add(legend_key)
+
+        line, = ax.plot(
+            t["east_km"], t["north_km"], t["alt_m"],
+            color=t["colour"], linewidth=1.5, alpha=0.8,
+            label=legend_key if show_label else None,
+        )
+        if show_label:
+            legend_handles.append(line)
+
+    ax.set_xlabel("East (km)", fontsize=10, labelpad=10)
+    ax.set_ylabel("North (km)", fontsize=10, labelpad=10)
+    ax.set_zlabel("Altitude (m)", fontsize=10, labelpad=10)
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=9)
+
+    fig.tight_layout()
+
+    if output_dir is not None:
+        save_path = output_dir / "replay_3d.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return save_path
+
+    return fig
 
 
 def save_replay_plan_view(
@@ -1157,5 +1346,62 @@ def save_replay_plan_view(
     *,
     output_dir: Path | None = None,
 ) -> Path | plt.Figure:
-    """Generate plan-view replay plot. Not yet implemented."""
-    raise NotImplementedError("Replay plan view plot not yet implemented")
+    """Generate plan-view replay plot (§16.4).
+
+    2D map with trajectories overlaid, using the same map, danger area,
+    monitor zones, and markers as the dispersion plot.  Coloured by
+    descent scenario; pink if terminated early.
+    """
+    # --- Extract trajectories ---
+    trajectories: list[dict] = []
+    for sr in replayed:
+        t = _extract_replay_trajectory(sr)
+        if t is not None:
+            trajectories.append(t)
+
+    # Collect all trajectory points for extent computation
+    if trajectories:
+        all_north = np.concatenate([t["north_km"] for t in trajectories])
+        all_east = np.concatenate([t["east_km"] for t in trajectories])
+    else:
+        all_north = np.array([0.0])
+        all_east = np.array([0.0])
+
+    # --- Build map ---
+    fig, ax = plt.subplots(figsize=(9, 9), constrained_layout=True)
+
+    km_to_wm, legend_handles = _build_map_axes(
+        ax, sim_cfg,
+        extra_north_km=all_north,
+        extra_east_km=all_east,
+        show_buffer=False,
+    )
+
+    # --- Plot trajectories ---
+    legend_seen: set[str] = set()
+    for t in trajectories:
+        wm_pts = np.array([
+            km_to_wm(n, e) for n, e in zip(t["north_km"], t["east_km"])
+        ])
+
+        legend_key = "Terminated" if t["is_terminated"] else t["label"]
+        show_label = legend_key not in legend_seen
+        legend_seen.add(legend_key)
+
+        line, = ax.plot(
+            wm_pts[:, 0], wm_pts[:, 1],
+            color=t["colour"], linewidth=1.2, alpha=0.8, zorder=8,
+            label=legend_key if show_label else None,
+        )
+        if show_label:
+            legend_handles.append(line)
+
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=9).set_zorder(20)
+
+    if output_dir is not None:
+        save_path = output_dir / "replay_plan_view.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return save_path
+
+    return fig
