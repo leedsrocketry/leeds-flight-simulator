@@ -171,10 +171,12 @@ def write_samples_csv(
         header.append("monitor_compliant")
     header.extend([
         "stability_compliant",
-        "min_SM_subsonic", "min_SM_supersonic_cal",
-        "max_AoA_deg", "max_mach", "apogee_m",
-        "landing_lat", "landing_lon",
-        "apogee_lat", "apogee_lon",
+        "min_sm_subsonic_cal", "min_sm_supersonic_cal",
+        "max_aoa_deg", "max_mach", "apogee_m",
+        "landing_lat_deg", "landing_lon_deg",
+        "landing_north_m", "landing_east_m",
+        "apogee_lat_deg", "apogee_lon_deg",
+        "apogee_north_m", "apogee_east_m",
     ])
 
     csv_path = output_dir / "samples.csv"
@@ -198,7 +200,9 @@ def write_samples_csv(
                 r.min_sm_subsonic, r.min_sm_supersonic,
                 r.max_aoa_deg, r.peak_mach, r.apogee_m,
                 r.landing_lat, r.landing_lon,
+                r.landing_north, r.landing_east,
                 r.apogee_lat, r.apogee_lon,
+                r.apogee_north, r.apogee_east,
             ])
             writer.writerow(row)
 

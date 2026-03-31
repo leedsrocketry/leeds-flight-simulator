@@ -326,7 +326,7 @@ class TestWriteSamplesCsv:
         stab_idx = header.index("stability_compliant")
         assert ft_idx < stab_idx
         # Locations last
-        assert header[-1] == "apogee_lon"
+        assert header[-1] == "apogee_east_m"
 
     def test_bool_values_written(self, tmp_path: Path):
         results = [_make_sample(0, compliant=True)]
