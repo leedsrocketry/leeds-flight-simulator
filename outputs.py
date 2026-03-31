@@ -1060,6 +1060,99 @@ def save_dispersion_plot(
 # ===================================================================
 
 
+def _adaptive_resample_trajectory(
+    north_km: np.ndarray,
+    east_km: np.ndarray,
+    alt_m: np.ndarray,
+    t_s: np.ndarray,
+    max_points: int,
+    curvature_weight: float = 10.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Resample trajectory with curvature-biased density.
+
+    Computes a weighted arc-length where each segment's weight is
+    proportional to ``1 + curvature_weight * kappa``, then samples
+    uniformly in that weighted space.  This concentrates points in
+    high-curvature regions (e.g. apogee) where the trajectory direction
+    changes rapidly, avoiding visual jumps.
+
+    Parameters
+    ----------
+    north_km, east_km, alt_m, t_s
+        Full-resolution trajectory arrays (must all be the same length).
+    max_points
+        Target number of output points.
+    curvature_weight
+        Scale factor applied to local curvature when computing the
+        weighted arc-length.  Higher values push more points towards
+        the apex.
+
+    Returns
+    -------
+    Tuple of (north_km, east_km, alt_m, t_s) downsampled to at most
+    *max_points* points, always including the first and last points.
+    """
+    n = len(north_km)
+    if n <= max_points:
+        return north_km, east_km, alt_m, t_s
+
+    # Work in consistent units (km) for curvature calculation
+    alt_km = alt_m / 1000.0
+
+    # Segment vectors and arc-lengths
+    dn = np.diff(north_km)
+    de = np.diff(east_km)
+    da = np.diff(alt_km)
+    seg_len = np.sqrt(dn ** 2 + de ** 2 + da ** 2)
+    seg_len = np.maximum(seg_len, 1e-15)  # guard against zero-length segments
+
+    # Unit tangent for each segment
+    un = dn / seg_len
+    ue = de / seg_len
+    ua = da / seg_len
+
+    # Turning angle between consecutive segments → proxy for curvature
+    dot = un[:-1] * un[1:] + ue[:-1] * ue[1:] + ua[:-1] * ua[1:]
+    dot = np.clip(dot, -1.0, 1.0)
+    angles = np.arccos(dot)  # shape (n-2,)
+
+    # Curvature at interior points = angle / mean adjacent segment length
+    mean_seg = 0.5 * (seg_len[:-1] + seg_len[1:])
+    kappa = angles / np.maximum(mean_seg, 1e-15)  # shape (n-2,)
+
+    # Assign curvature to each segment by averaging its two endpoint values
+    # (endpoints of the polyline get curvature 0)
+    kappa_seg = 0.5 * (
+        np.concatenate([[0.0], kappa]) + np.concatenate([kappa, [0.0]])
+    )  # shape (n-1,)
+
+    # Weighted arc-length element
+    ds_weighted = seg_len * (1.0 + curvature_weight * kappa_seg)
+
+    # Cumulative weighted arc-length (including s=0 at the first point)
+    s = np.empty(n)
+    s[0] = 0.0
+    np.cumsum(ds_weighted, out=s[1:])
+
+    # Sample uniformly in weighted arc-length space
+    s_targets = np.linspace(0.0, s[-1], max_points)
+    idx_float = np.interp(s_targets, s, np.arange(n, dtype=float))
+    idx = np.round(idx_float).astype(int)
+    np.clip(idx, 0, n - 1, out=idx)
+
+    # Ensure endpoints are exactly included
+    idx[0] = 0
+    idx[-1] = n - 1
+
+    # Remove duplicates while preserving order (idx is non-decreasing)
+    mask = np.empty(len(idx), dtype=bool)
+    mask[0] = True
+    mask[1:] = idx[1:] != idx[:-1]
+    idx = idx[mask]
+
+    return north_km[idx], east_km[idx], alt_m[idx], t_s[idx]
+
+
 def _extract_replay_trajectory(
     sr: SampleResult,
     max_points: int = 50,
@@ -1071,8 +1164,9 @@ def _extract_replay_trajectory(
     sample has no trajectory attached.
 
     When the trajectory has more than *max_points* data points it is
-    uniformly downsampled, always keeping the first and last points.
-    This significantly speeds up interactive 3-D rendering.
+    downsampled using curvature-biased arc-length resampling, which
+    concentrates points near apogee where the path curves sharply.
+    First and last points are always kept.
     """
     if sr.trajectory is None:
         return None
@@ -1101,13 +1195,10 @@ def _extract_replay_trajectory(
         alt_m = alt_asc
         t_s = t_asc
 
-    # Downsample for interactive rendering performance
-    if len(north_km) > max_points:
-        idx = np.linspace(0, len(north_km) - 1, max_points, dtype=int)
-        north_km = north_km[idx]
-        east_km = east_km[idx]
-        alt_m = alt_m[idx]
-        t_s = t_s[idx]
+    # Curvature-biased adaptive downsample for smooth rendering
+    north_km, east_km, alt_m, t_s = _adaptive_resample_trajectory(
+        north_km, east_km, alt_m, t_s, max_points
+    )
 
     is_terminated = not sr.stability_compliant
     colour = "deeppink" if is_terminated else SCENARIO_COLOURS.get(sr.scenario, "grey")
