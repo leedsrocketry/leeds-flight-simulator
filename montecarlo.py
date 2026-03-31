@@ -18,6 +18,7 @@ Orchestration:
 Replay:
     replay_sample          — reconstruct and re-run a single sample
     replay_non_compliant   — replay all non-compliant samples from a results directory
+    REASON_COLS            — mapping of reason keyword → CSV compliance column name
 """
 
 from __future__ import annotations
@@ -829,6 +830,17 @@ def replay_sample(
     )
 
 
+# Maps --reason keyword → samples.csv compliance column name.
+# Used by replay_non_compliant and exposed for CLI validation.
+REASON_COLS: dict[str, str] = {
+    "footprint":  "danger_area_footprint_compliant",
+    "ceiling":    "danger_area_ceiling_compliant",
+    "stability":  "stability_compliant",
+    "coastline":  "coastline_compliant",
+    "monitor":    "monitor_compliant",
+}
+
+
 def replay_non_compliant(
     sim_cfg: SimulationConfig,
     vehicle: Vehicle,
@@ -839,36 +851,54 @@ def replay_non_compliant(
     azimuth_mean: float,
     inclination_mean: float,
     samples_csv_path: Path,
+    reasons: tuple[str, ...] = (),
 ) -> list[SampleResult]:
     """Replay all non-compliant samples from a previous run.
 
     Reads the samples CSV to find non-compliant (sample_id, run_index) pairs,
     then replays each one with full trajectory data.
+
+    Parameters
+    ----------
+    reasons
+        Optional filter: only replay samples whose non-compliance matches at
+        least one of the given reason keywords.  Valid keywords are the keys
+        of :data:`REASON_COLS`.  When empty (default) all non-compliant
+        samples are replayed.
     """
     import csv
+
+    def _is_false(val: str) -> bool:
+        return val.strip().lower() in ("false", "0", "no")
 
     non_compliant: list[tuple[int, int]] = []
     with open(samples_csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             # A sample is non-compliant if any _compliant column is False
-            compliance_cols = [
-                c for c in row if c.endswith("_compliant")
-            ]
-            is_non_compliant = any(
-                row[c].strip().lower() in ("false", "0", "no")
-                for c in compliance_cols
-            )
-            if is_non_compliant:
-                sid = int(row["sample_id"])
-                # Derive run_index from scenario name
-                scenario = row["scenario"].strip()
-                active = vehicle.recovery.active_scenarios
-                if scenario in active:
-                    ridx = active.index(scenario)
-                else:
+            compliance_cols = [c for c in row if c.endswith("_compliant")]
+            is_non_compliant = any(_is_false(row[c]) for c in compliance_cols)
+            if not is_non_compliant:
+                continue
+
+            # Optional reason filter: at least one requested column must be False
+            if reasons:
+                matched = any(
+                    _is_false(row[REASON_COLS[r]])
+                    for r in reasons
+                    if REASON_COLS[r] in row
+                )
+                if not matched:
                     continue
-                non_compliant.append((ridx, sid))
+
+            sid = int(row["sample_id"])
+            scenario = row["scenario"].strip()
+            active = vehicle.recovery.active_scenarios
+            if scenario in active:
+                ridx = active.index(scenario)
+            else:
+                continue
+            non_compliant.append((ridx, sid))
 
     results: list[SampleResult] = []
     for run_idx, sample_idx in non_compliant:

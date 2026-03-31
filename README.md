@@ -105,6 +105,23 @@ Replay all non-compliant samples from a completed run:
 python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant
 ```
 
+Replay only samples that failed a specific check — multiple `--reason` flags may be combined:
+
+```
+python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --reason stability
+python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --reason footprint --reason ceiling
+```
+
+Valid reason keywords:
+
+| Keyword | Violation |
+|---------|-----------|
+| `footprint` | Trajectory exited the buffered danger area |
+| `ceiling` | Apogee above the buffered altitude ceiling |
+| `stability` | AoA exceeded maximum or static margin below minimum |
+| `coastline` | Landing point is at sea |
+| `monitor` | Landing outside the monitored area |
+
 **Flags:**
 
 | Flag | Effect |
@@ -113,6 +130,8 @@ python . replay simulations/g2b2-safety-case/results/summary.yaml --non-complian
 | `--run INTEGER` | Scenario index |
 | `--sample INTEGER` | Sample index |
 | `--non-compliant` | Replay all non-compliant samples |
+| `--reason KEYWORD` | Filter `--non-compliant` by violation type; repeatable (see above) |
+| `--compliant` | Replay all compliant samples |
 | `-q`, `--no-popup` | Save figures to disk instead of displaying interactively |
 
 

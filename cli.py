@@ -31,6 +31,7 @@ from rich.text import Text
 
 from config import load_simulation_config
 from montecarlo import (
+    REASON_COLS,
     SCENARIO_LABELS,
     build_sim_params,
     load_all_models,
@@ -526,6 +527,19 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
                    + ".")
 @click.option("--sample", "sample_index", type=int, default=None, help="Sample index.")
 @click.option("--non-compliant", is_flag=True, help="Replay all non-compliant samples.")
+@click.option(
+    "--reason", "reasons", multiple=True,
+    type=click.Choice(list(REASON_COLS), case_sensitive=False),
+    help=(
+        "Filter --non-compliant to a specific violation type; may be repeated. "
+        "footprint: trajectory exited danger area; "
+        "ceiling: apogee above altitude ceiling; "
+        "stability: AoA or static margin violation; "
+        "coastline: landing at sea; "
+        "monitor: outside monitored area. "
+        "Default: all non-compliant reasons."
+    ),
+)
 @click.option("--compliant", is_flag=True, help="Replay all compliant samples.")
 @click.option("-q", "--no-popup", is_flag=True, help="Save figures to disk instead of interactive display.")
 def replay(
@@ -534,6 +548,7 @@ def replay(
     run_index: int | None,
     sample_index: int | None,
     non_compliant: bool,
+    reasons: tuple[str, ...],
     compliant: bool,
     no_popup: bool,
 ) -> None:
@@ -558,6 +573,11 @@ def replay(
     if non_compliant and compliant:
         console.print(
             "[red]Error:[/] --non-compliant and --compliant are mutually exclusive."
+        )
+        sys.exit(1)
+    if reasons and not non_compliant:
+        console.print(
+            "[red]Error:[/] --reason requires --non-compliant."
         )
         sys.exit(1)
 
@@ -613,17 +633,25 @@ def replay(
             samples_csv = summary_dir / "samples.csv"
             if not samples_csv.exists():
                 display.abort(f"samples.csv not found in {summary_dir}")
-            mode = "compliant" if compliant else "non-compliant"
-            display.update_status(f"Replaying all {mode} samples...")
             if compliant:
+                display.update_status("Replaying all compliant samples...")
                 results = replay_compliant(
                     sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
                     master_seed, azimuth_mean, inclination_mean, samples_csv,
                 )
             else:
+                if reasons:
+                    reason_str = ", ".join(reasons)
+                    display.update_status(
+                        f"Replaying non-compliant samples "
+                        f"(filter: {reason_str})..."
+                    )
+                else:
+                    display.update_status("Replaying all non-compliant samples...")
                 results = replay_non_compliant(
                     sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
                     master_seed, azimuth_mean, inclination_mean, samples_csv,
+                    reasons=reasons,
                 )
 
         if not results:
