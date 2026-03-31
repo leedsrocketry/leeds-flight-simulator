@@ -154,9 +154,14 @@ def load_yaml_for_diff(sim_path: Path, veh_path: Path) -> dict:
 
     main_deploy_alt = float(main_deploy) if main_deploy not in ("apogee", "") else None
 
-    # Prefer verification inclination (matches verify command precedence)
+    # Prefer verification inclination (matches verify command precedence).
+    # Rail inclination may be "auto" — treat as None so the comparison is skipped.
     ver_incl = ver.get("inclination")
-    rail_inclination = ver_incl if ver_incl is not None else rail["inclination"]
+    if ver_incl is not None:
+        rail_inclination = ver_incl
+    else:
+        raw = rail["inclination"]
+        rail_inclination = None if raw == "auto" else raw
 
     return {
         "total_length_m": geom["length"],
@@ -220,8 +225,8 @@ def build_comparison(cdx1: dict, yaml_cfg: dict,
             cdx1_val: float | None = None, yaml_val: float | None = None,
             force_key: str | None = None,
             force_file: Literal["vehicle", "sim"] | None = None) -> None:
-        c = cdx1_val if cdx1_val is not None else cdx1[cdx1_key]
-        y = yaml_val if yaml_val is not None else yaml_cfg[yaml_key]
+        c = cdx1_val if cdx1_val is not None else cdx1.get(cdx1_key)
+        y = yaml_val if yaml_val is not None else yaml_cfg.get(yaml_key)
         if c is None or y is None:
             return
         c, y = float(c), float(y)
