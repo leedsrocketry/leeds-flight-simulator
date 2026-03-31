@@ -1062,12 +1062,17 @@ def save_dispersion_plot(
 
 def _extract_replay_trajectory(
     sr: SampleResult,
+    max_points: int = 50,
 ) -> dict | None:
     """Extract full NED trajectory arrays from a replayed sample.
 
     Returns a dict with keys ``north_km``, ``east_km``, ``alt_m``,
     ``t_s``, ``colour``, ``label``, ``is_terminated``, or *None* if the
     sample has no trajectory attached.
+
+    When the trajectory has more than *max_points* data points it is
+    uniformly downsampled, always keeping the first and last points.
+    This significantly speeds up interactive 3-D rendering.
     """
     if sr.trajectory is None:
         return None
@@ -1096,6 +1101,14 @@ def _extract_replay_trajectory(
         alt_m = alt_asc
         t_s = t_asc
 
+    # Downsample for interactive rendering performance
+    if len(north_km) > max_points:
+        idx = np.linspace(0, len(north_km) - 1, max_points, dtype=int)
+        north_km = north_km[idx]
+        east_km = east_km[idx]
+        alt_m = alt_m[idx]
+        t_s = t_s[idx]
+
     is_terminated = not sr.stability_compliant
     colour = "deeppink" if is_terminated else SCENARIO_COLOURS.get(sr.scenario, "grey")
     label = SCENARIO_LABELS.get(sr.scenario, sr.scenario)
@@ -1109,6 +1122,25 @@ def _extract_replay_trajectory(
         "label": label,
         "is_terminated": is_terminated,
     }
+
+
+def _replay_line_style(n_lines: int) -> tuple[float, float]:
+    """Return (linewidth, alpha) scaled to the number of trajectories.
+
+    For ~50 lines use the old style (lw=1.8, alpha=0.8).
+    For ~1000 lines use thin, transparent lines (lw=0.3, alpha=0.08).
+    Interpolates log-linearly between those anchors, clamped at both ends.
+    """
+    import math
+    if n_lines <= 50:
+        return 1.8, 0.8
+    if n_lines >= 1000:
+        return 0.3, 0.08
+    # Log-linear interpolation between the two anchors
+    t = (math.log(n_lines) - math.log(50)) / (math.log(1000) - math.log(50))
+    lw = 1.8 + t * (0.3 - 1.8)
+    alpha = 0.8 + t * (0.08 - 0.8)
+    return lw, alpha
 
 
 def save_replay_altitude(
@@ -1132,15 +1164,23 @@ def save_replay_altitude(
     """
     fig, ax = plt.subplots(figsize=(12, 7))
 
-    # Track which legend entries have been added
+    # Extract trajectories and count per legend group
+    trajectories: list[dict] = []
+    for sr in replayed:
+        t = _extract_replay_trajectory(sr)
+        if t is not None:
+            trajectories.append(t)
+
+    legend_counts: dict[str, int] = {}
+    for t in trajectories:
+        key = "Terminated" if t["is_terminated"] else t["label"]
+        legend_counts[key] = legend_counts.get(key, 0) + 1
+
+    lw, alpha = _replay_line_style(len(trajectories))
     legend_seen: set[str] = set()
     legend_handles: list = []
 
-    for sr in replayed:
-        t = _extract_replay_trajectory(sr)
-        if t is None:
-            continue
-
+    for t in trajectories:
         alt_ft = t["alt_m"] * M_TO_FT
         t_min = t["t_s"] * S_TO_MIN
 
@@ -1148,15 +1188,17 @@ def save_replay_altitude(
         show_label = legend_key not in legend_seen
         legend_seen.add(legend_key)
 
-        line, = ax.plot(
+        ax.plot(
             t_min, alt_ft,
             color=t["colour"],
-            linewidth=1.8,
-            alpha=0.8,
-            label=legend_key if show_label else None,
+            linewidth=lw,
+            alpha=alpha,
         )
         if show_label:
-            legend_handles.append(line)
+            legend_handles.append(mlines.Line2D(
+                [], [], color=t["colour"], linewidth=2.0,
+                label=f"{legend_key} (n={legend_counts[legend_key]})",
+            ))
 
     # Primary y-axis (feet)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(_ft_formatter))
@@ -1358,6 +1400,14 @@ def save_replay_3d(
             linestyle="None", label=mk.name,
         ))
 
+    # --- Count trajectories per legend group ---
+    legend_counts: dict[str, int] = {}
+    for t in trajectories:
+        key = "Terminated" if t["is_terminated"] else t["label"]
+        legend_counts[key] = legend_counts.get(key, 0) + 1
+
+    lw, alpha = _replay_line_style(len(trajectories))
+
     # --- Plot trajectories ---
     legend_seen: set[str] = set()
     for t in trajectories:
@@ -1365,13 +1415,15 @@ def save_replay_3d(
         show_label = legend_key not in legend_seen
         legend_seen.add(legend_key)
 
-        line, = ax.plot(
+        ax.plot(
             t["east_km"], t["north_km"], t["alt_m"] / 1000.0,
-            color=t["colour"], linewidth=1.5, alpha=0.8,
-            label=legend_key if show_label else None,
+            color=t["colour"], linewidth=lw, alpha=alpha,
         )
         if show_label:
-            legend_handles.append(line)
+            legend_handles.append(mlines.Line2D(
+                [], [], color=t["colour"], linewidth=2.0,
+                label=f"{legend_key} (n={legend_counts[legend_key]})",
+            ))
 
     # Equal scale on all three axes (altitude may extend further)
     x_range = ax.get_xlim()[1] - ax.get_xlim()[0]
@@ -1437,6 +1489,14 @@ def save_replay_plan_view(
         show_buffer=False,
     )
 
+    # --- Count trajectories per legend group ---
+    legend_counts: dict[str, int] = {}
+    for t in trajectories:
+        key = "Terminated" if t["is_terminated"] else t["label"]
+        legend_counts[key] = legend_counts.get(key, 0) + 1
+
+    lw, alpha = _replay_line_style(len(trajectories))
+
     # --- Plot trajectories ---
     legend_seen: set[str] = set()
     for t in trajectories:
@@ -1448,13 +1508,15 @@ def save_replay_plan_view(
         show_label = legend_key not in legend_seen
         legend_seen.add(legend_key)
 
-        line, = ax.plot(
+        ax.plot(
             wm_pts[:, 0], wm_pts[:, 1],
-            color=t["colour"], linewidth=1.2, alpha=0.8, zorder=8,
-            label=legend_key if show_label else None,
+            color=t["colour"], linewidth=lw, alpha=alpha, zorder=8,
         )
         if show_label:
-            legend_handles.append(line)
+            legend_handles.append(mlines.Line2D(
+                [], [], color=t["colour"], linewidth=2.0,
+                label=f"{legend_key} (n={legend_counts[legend_key]})",
+            ))
 
     ax.legend(handles=legend_handles, loc="upper right", fontsize=9).set_zorder(20)
 
