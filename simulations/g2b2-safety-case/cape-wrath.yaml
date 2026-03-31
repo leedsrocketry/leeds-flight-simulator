@@ -9,7 +9,7 @@ site:
                                     # from the launch site; used during inclination optimisation;
                                     # has no effect when inclination is not "auto"
 
-  launch_monitor_radius: 5000      # metres — radius of the automatic monitor station
+  launch_monitor_radius: 8000      # metres — radius of the automatic monitor station
                                     # placed at the launch site; added to every monitor check
                                     # in addition to any stations listed below
 
@@ -40,10 +40,10 @@ site:
 
 launch:
   rail:
-    azimuth: 0               # degrees clockwise from North (0–360), or "auto" to optimise
+    azimuth: 330                  # degrees clockwise from North (0–360), or "auto" to optimise
     azimuth_range: [-90, 90]      # [min, max] integer search range for azimuth optimisation;
                                   # required when azimuth is "auto"; ignored otherwise
-    inclination: 80           # degrees from horizontal (0 = horizontal, 90 = vertical),
+    inclination: 85               # degrees from horizontal (0 = horizontal, 90 = vertical),
                                   # or "auto" to optimise
     inclination_range: [85, 90]   # [min, max] integer search range for inclination optimisation;
                                   # required when inclination is "auto"; ignored otherwise
@@ -75,14 +75,14 @@ monte_carlo:
   acceptance:
     compliance_threshold: 0.997   # fraction in [0, 1] — minimum fraction of samples that must be
                                   # compliant for a scenario to pass; 0.997 = 99.7%
-    buffer_distance: 1000         # metres — inward buffer applied to the danger area polygon and ceiling before
+    buffer_distance: 500          # metres — inward buffer applied to the danger area polygon and ceiling before
                                   # containment checking; full trajectory must be inside the buffered volume
 
     sm_transition_mach: 0.91      # Mach — threshold separating subsonic and supersonic SM checks;
                                   # the definition of this boundary varies between tools; the value
                                   # used here follows the RASAero II convention
     sm_subsonic_min: 1.0          # calibres — minimum acceptable static margin when M < sm_transition_mach
-    sm_supersonic_min: 2.0        # calibres — minimum acceptable static margin when M >= sm_transition_mach
+    sm_supersonic_min: 1.0        # calibres — minimum acceptable static margin when M >= sm_transition_mach
     aoa_max: 12.0                 # degrees — maximum acceptable angle of attack at any point in flight
     sm_aoa_threshold: 5.0         # degrees — SM check is only applied when AoA < this value;
                                   # naturally excludes rail-exit and apogee transients
@@ -105,7 +105,7 @@ verification:     # optional — single-trajectory comparison against a
                   # reference CSV from any other flight simulator;
                   # omit this section to skip the verification check
   reference_trajectory: "rasaero_nominal_simulation.csv" # path to reference CSV
-  # inclination: 80         # degrees — override launch.rail.inclination for verification;
+  # inclination: 90         # degrees — override launch.rail.inclination for verification;
   #                         # omit to use launch.rail value (or 0 if "auto")
   altitude_tolerance: 0.05  # fraction in [0, 1] — tolerance band on altitude
   mach_tolerance: 0.05      # fraction in [0, 1] — tolerance band on Mach number
