@@ -40,10 +40,10 @@ site:
 
 launch:
   rail:
-    azimuth: 330                  # degrees clockwise from North (0–360), or "auto" to optimise
+    azimuth: "auto"                  # degrees clockwise from North (0–360), or "auto" to optimise
     azimuth_range: [-90, 90]      # [min, max] integer search range for azimuth optimisation;
                                   # required when azimuth is "auto"; ignored otherwise
-    inclination: 85               # degrees from horizontal (0 = horizontal, 90 = vertical),
+    inclination: "auto"               # degrees from horizontal (0 = horizontal, 90 = vertical),
                                   # or "auto" to optimise
     inclination_range: [85, 90]   # [min, max] integer search range for inclination optimisation;
                                   # required when inclination is "auto"; ignored otherwise
@@ -83,7 +83,7 @@ monte_carlo:
                                   # used here follows the RASAero II convention
     sm_subsonic_min: 1.0          # calibres — minimum acceptable static margin when M < sm_transition_mach
     sm_supersonic_min: 1.0        # calibres — minimum acceptable static margin when M >= sm_transition_mach
-    aoa_max: 12.0                 # degrees — maximum acceptable angle of attack at any point in flight
+    aoa_max: 15.0                 # degrees — maximum acceptable angle of attack at any point in flight
     sm_aoa_threshold: 5.0         # degrees — SM check is only applied when AoA < this value;
                                   # naturally excludes rail-exit and apogee transients
 
