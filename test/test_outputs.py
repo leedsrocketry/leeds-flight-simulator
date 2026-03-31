@@ -154,6 +154,8 @@ def _make_sim_cfg(tmp_path: Path) -> SimulationConfig:
         site=SiteConfig(
             latitude=58.6105,
             longitude=-4.9435,
+            elevation=0.0,
+            temperature=None,
             ballistic_exclusion_radius=500.0,
             launch_monitor_radius=200.0,
             altitude_ceiling=16764.0,

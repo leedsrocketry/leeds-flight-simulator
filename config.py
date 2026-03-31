@@ -54,6 +54,8 @@ class MapMarker:
 class SiteConfig:
     latitude: float                                # degrees
     longitude: float                               # degrees
+    elevation: float                               # metres MSL — launch site elevation
+    temperature: float | None                      # K — launch site temperature; None → ISA at elevation
     ballistic_exclusion_radius: float              # metres — minimum ballistic landing distance
                                                    # from launch site; used during inclination
                                                    # optimisation (§13.2)
@@ -300,9 +302,18 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             f"coastline_mode must be 'sea' or 'land', got: {coastline_mode_raw!r}"
         )
 
+    # -- site elevation & temperature (optional)
+    site_elevation = float(site_raw.get("elevation", 0.0))
+    temp_raw = site_raw.get("temperature")
+    site_temperature_k: float | None = None
+    if temp_raw is not None:
+        site_temperature_k = float(temp_raw) + 273.15  # °C → K
+
     site = SiteConfig(
         latitude=float(site_raw["latitude"]),
         longitude=float(site_raw["longitude"]),
+        elevation=site_elevation,
+        temperature=site_temperature_k,
         ballistic_exclusion_radius=float(site_raw["ballistic_exclusion_radius"]),
         launch_monitor_radius=float(site_raw["launch_monitor_radius"]),
         altitude_ceiling=float(site_raw["altitude_ceiling"]),

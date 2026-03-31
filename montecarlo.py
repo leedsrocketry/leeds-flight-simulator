@@ -35,6 +35,7 @@ from config import (
     load_simulation_config,
     load_vehicle,
 )
+from atmosphere import compute_t_offset, temperature as _isa_temperature
 from motor import PropellantModel
 from aerodynamics import AeroModel, build_aero_model
 from wind import WindEnsemble, load_wind_ensemble
@@ -217,6 +218,13 @@ def build_sim_params(
         sm_supersonic_min=acc.sm_supersonic_min,
         aoa_max_rad=acc.aoa_max * _DEG2RAD,
         sm_aoa_threshold_rad=acc.sm_aoa_threshold * _DEG2RAD,
+        # Atmosphere site corrections
+        site_elevation=sim_cfg.site.elevation,
+        t_offset=(
+            compute_t_offset(sim_cfg.site.elevation, sim_cfg.site.temperature)
+            if sim_cfg.site.temperature is not None
+            else 0.0
+        ),
     )
 
 

@@ -5,11 +5,18 @@ site:
   latitude: 58.6104700    # degrees — WGS-84 latitude of launch site
   longitude: -4.9434804   # degrees — WGS-84 longitude of launch site
 
+  elevation: 0.0          # metres MSL — launch site elevation above mean sea level;
+                          # determines ambient pressure at the pad via ISA;
+                          # default 0.0 (sea level)
+  # temperature: 15.0     # °C — actual temperature at the launch site;
+                          # omit to use ISA temperature at the site elevation;
+                          # the ISA lapse rate is maintained above the site
+
   ballistic_exclusion_radius: 500   # metres — minimum acceptable ballistic landing distance
                                     # from the launch site; used during inclination optimisation;
                                     # has no effect when inclination is not "auto"
 
-  launch_monitor_radius: 8000      # metres — radius of the automatic monitor station
+  launch_monitor_radius: 5000      # metres — radius of the automatic monitor station
                                     # placed at the launch site; added to every monitor check
                                     # in addition to any stations listed below
 

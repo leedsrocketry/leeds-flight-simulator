@@ -32,7 +32,7 @@ import matplotlib.figure
 from config import SimulationConfig, Vehicle, VerificationConfig
 from motor import PropellantModel
 from aerodynamics import AeroModel, aero_forces_moments, ca_at, cn_cp_at
-from atmosphere import isa
+from atmosphere import isa_at_site, compute_t_offset
 from wind import WindEnsemble
 from dynamics import (
     TrajectoryResult,
@@ -208,6 +208,8 @@ def _quantities_from_rail_hist(
     geometry: "VehicleGeometry",
     m_dry: float,
     cg_dry: float,
+    site_elevation: float = 0.0,
+    t_offset: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute comparison quantities from the actual simulate_rail() history.
 
@@ -236,12 +238,12 @@ def _quantities_from_rail_hist(
         hi = float(alt_hist[i])
         Vi = float(V_hist[i])
 
-        _, _, rho, a_sound, mu = isa(hi)
+        _, _, rho, a_sound, mu = isa_at_site(hi, site_elevation, t_offset)
         M = Vi / a_sound if a_sound > 0.0 else 0.0
         mach_arr[i] = M
 
         thrust_arr[i] = thrust_corrected_at(
-            mm.times, mm.thrusts, mm.nozzle_area, hi, ti,
+            mm.times, mm.thrusts, mm.nozzle_area, hi, site_elevation, ti,
         )
         mass_arr[i] = mass_at(
             mm.times, mm.thrusts, mm.m_prop_0,
@@ -286,6 +288,8 @@ def _extract_trajectory_quantities_6dof(
     rail_t_hist: np.ndarray | None = None,
     rail_V_hist: np.ndarray | None = None,
     rail_alt_hist: np.ndarray | None = None,
+    site_elevation: float = 0.0,
+    t_offset: float = 0.0,
 ) -> dict[str, np.ndarray]:
     """Extract altitude, Mach, SM, thrust, mass, and CD from a 6DoF trajectory.
 
@@ -320,7 +324,7 @@ def _extract_trajectory_quantities_6dof(
         ti = float(t_asc[i])
         h = max(float(alt_asc[i]), 0.0)
 
-        T, p, rho, a, mu = isa(h)
+        T, p, rho, a, mu = isa_at_site(h, site_elevation, t_offset)
 
         u = float(state_asc[i, 7])
         v = float(state_asc[i, 8])
@@ -331,7 +335,7 @@ def _extract_trajectory_quantities_6dof(
         mach_asc[i] = M
 
         thrust_asc[i] = thrust_corrected_at(
-            mm.times, mm.thrusts, mm.nozzle_area, h, ti,
+            mm.times, mm.thrusts, mm.nozzle_area, h, site_elevation, ti,
         )
 
         mass_asc[i] = mass_at(
@@ -410,7 +414,7 @@ def _extract_trajectory_quantities_6dof(
     if rail_t_hist is not None and len(rail_t_hist) > 0:
         t_r, alt_r, mach_r, thrust_r, mass_r, sm_r, cd_r = _quantities_from_rail_hist(
             rail_t_hist, rail_V_hist, rail_alt_hist, mm, am, geom,
-            m_dry, cg_dry,
+            m_dry, cg_dry, site_elevation, t_offset,
         )
         t_full      = np.concatenate([t_r,      t_full])
         alt_full    = np.concatenate([alt_r,    alt_full])
@@ -643,6 +647,12 @@ def run_verification(
     zero_wind = _zero_wind_ensemble()
     mm = propellant
     m_dry = vehicle.m_dry
+    _site_elev = sim_cfg.site.elevation
+    _site_t_offset = (
+        compute_t_offset(_site_elev, sim_cfg.site.temperature)
+        if sim_cfg.site.temperature is not None
+        else 0.0
+    )
 
     # Run the rail phase once to capture the trajectory history.
     # This uses the same simulate_rail() called inside run_trajectory(),
@@ -654,6 +664,7 @@ def run_verification(
         aero_model.mach_grid, aero_model.re_grid,
         aero_model.alpha_grid, aero_model.ca_table,
         geom.reference_area, geom.length,
+        _site_elev, _site_t_offset,
         1.0e-6, 1.0e-6,
     )
     rail_t = rt_hist[:rn]
@@ -675,6 +686,7 @@ def run_verification(
     sim_data = _extract_trajectory_quantities_6dof(
         traj, propellant, aero_model, vehicle,
         rail_t, rail_V, rail_alt,
+        _site_elev, _site_t_offset,
     )
 
     # --- Load reference CSV ---

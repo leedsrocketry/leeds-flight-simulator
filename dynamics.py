@@ -45,7 +45,7 @@ from dataclasses import dataclass
 import numpy as np
 import numba as nb
 
-from atmosphere import isa, pressure as _atm_pressure
+from atmosphere import isa_at_site, pressure_at_site
 from wind import interpolate_wind
 from aerodynamics import (
     aero_forces_moments,
@@ -98,6 +98,7 @@ def thrust_corrected_at(
     thrusts: np.ndarray,
     nozzle_area: float,
     altitude_m: float,
+    site_elevation: float,
     t: float,
 ) -> float:
     """Altitude-corrected thrust [N] at time *t* and altitude *altitude_m*.
@@ -105,12 +106,12 @@ def thrust_corrected_at(
     The .eng thrust curve is assumed to be measured at sea level.  Thrust
     increases as ambient back-pressure falls:
 
-        F(h) = F₀ + Aₑ · (p₀ − p_ISA(h))
+        F(h) = F₀ + Aₑ · (p₀ − p_ISA(h + site_elevation))
     """
     F0 = _motor_interp(times, thrusts, t)
     if F0 <= 0.0:
         return 0.0
-    delta_p = 101325.0 - _atm_pressure(altitude_m)
+    delta_p = 101325.0 - pressure_at_site(altitude_m, site_elevation)
     return F0 + nozzle_area * delta_p
 
 
@@ -283,6 +284,10 @@ class SimParams:
     aoa_max_rad: float
     sm_aoa_threshold_rad: float
 
+    # Atmosphere site corrections
+    site_elevation: float             # metres MSL
+    t_offset: float                   # K — uniform temperature offset from ISA
+
     # Integration tolerances
     rtol: float = 1.0e-6
     atol: float = 1.0e-6
@@ -433,12 +438,13 @@ def _rail_deriv(
     mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
     ca_tbl: np.ndarray,
     A_ref: float, length: float,
+    site_elevation: float, t_offset: float,
 ) -> tuple[float, float]:
     """Derivatives for launch rail: ds/dt = V, dV/dt = F_along / m."""
-    _, _, rho, a_sound, mu = isa(altitude)
+    _, _, rho, a_sound, mu = isa_at_site(altitude, site_elevation, t_offset)
 
     F_thrust = thrust_corrected_at(
-        motor_times, motor_thrusts, nozzle_area, altitude, t
+        motor_times, motor_thrusts, nozzle_area, altitude, site_elevation, t
     ) * impulse_factor
 
     m = mass_at(motor_times, motor_thrusts, m_prop_0, total_impulse, m_dry, t)
@@ -475,6 +481,8 @@ def simulate_rail(
     ca_tbl: np.ndarray,
     A_ref: float,
     length: float,
+    site_elevation: float,
+    t_offset: float,
     rtol: float,
     atol: float,
 ) -> tuple[float, float, float, float, float,
@@ -534,6 +542,7 @@ def simulate_rail(
         motor_times, motor_thrusts, nozzle_area, altitude,
         impulse_factor, m_prop_0, total_impulse, m_dry,
         mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+        site_elevation, t_offset,
     )
     k1[0] = ds; k1[1] = dV
 
@@ -548,6 +557,7 @@ def simulate_rail(
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
             mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            site_elevation, t_offset,
         )
         k2[0] = ds; k2[1] = dV
 
@@ -559,6 +569,7 @@ def simulate_rail(
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
             mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            site_elevation, t_offset,
         )
         k3[0] = ds; k3[1] = dV
 
@@ -571,6 +582,7 @@ def simulate_rail(
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
             mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            site_elevation, t_offset,
         )
         k4[0] = ds; k4[1] = dV
 
@@ -583,6 +595,7 @@ def simulate_rail(
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
             mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            site_elevation, t_offset,
         )
         k5[0] = ds; k5[1] = dV
 
@@ -596,6 +609,7 @@ def simulate_rail(
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
             mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            site_elevation, t_offset,
         )
         k6[0] = ds; k6[1] = dV
 
@@ -613,6 +627,7 @@ def simulate_rail(
             motor_times, motor_thrusts, nozzle_area, alt_new,
             impulse_factor, m_prop_0, total_impulse, m_dry,
             mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            site_elevation, t_offset,
         )
         k7[0] = ds; k7[1] = dV
 
@@ -698,6 +713,8 @@ def _sixdof_deriv(
     wind_alt: np.ndarray, wind_east: np.ndarray, wind_north: np.ndarray,
     # Roll
     fin_cant_rad: float,
+    # Atmosphere site corrections
+    site_elevation: float, t_offset: float,
 ) -> tuple[float, float, float]:
     """13-component derivative for the 6DoF state vector.
 
@@ -717,7 +734,7 @@ def _sixdof_deriv(
         h = 0.0
 
     # --- Atmosphere ---
-    _, _, rho, a_sound, mu = isa(h)
+    _, _, rho, a_sound, mu = isa_at_site(h, site_elevation, t_offset)
 
     # --- DCM as 9 scalars (no array allocation) ---
     q0q0 = q0 * q0; q1q1 = q1 * q1; q2q2 = q2 * q2; q3q3 = q3 * q3
@@ -758,7 +775,7 @@ def _sixdof_deriv(
 
     # --- Motor properties ---
     F_thrust = thrust_corrected_at(
-        motor_times, motor_thrusts, nozzle_area, h, t
+        motor_times, motor_thrusts, nozzle_area, h, site_elevation, t
     ) * impulse_factor
     m = mass_at(motor_times, motor_thrusts, m_prop_0, total_impulse, m_dry, t)
     cg = cg_at(
@@ -876,6 +893,8 @@ def integrate_sixdof(
     wind_alt: np.ndarray, wind_east: np.ndarray, wind_north: np.ndarray,
     # Roll
     fin_cant_rad: float,
+    # Atmosphere site corrections
+    site_elevation: float, t_offset: float,
     # Acceptance
     sm_transition_mach: float,
     sm_subsonic_min: float, sm_supersonic_min: float,
@@ -951,6 +970,7 @@ def integrate_sixdof(
     _d = diameter; _rl = ref_length; _ar = A_ref; _fr = fin_cp_radius
     _wa = wind_alt; _we = wind_east; _wn = wind_north
     _fc = fin_cant_rad
+    _se = site_elevation; _to = t_offset
 
     # Initial k1
     _sixdof_deriv(
@@ -959,6 +979,7 @@ def integrate_sixdof(
         _ird, _ild, _pro, _pri, _pl, _if,
         _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
         _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
+        _se, _to,
     )
 
     for _ in range(MAX_STEPS * 2):
@@ -976,6 +997,7 @@ def integrate_sixdof(
             _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
+            _se, _to,
         )
 
         # Stage 3
@@ -987,6 +1009,7 @@ def integrate_sixdof(
             _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
+            _se, _to,
         )
 
         # Stage 4
@@ -1000,6 +1023,7 @@ def integrate_sixdof(
             _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
+            _se, _to,
         )
 
         # Stage 5
@@ -1014,6 +1038,7 @@ def integrate_sixdof(
             _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
+            _se, _to,
         )
 
         # Stage 6
@@ -1029,6 +1054,7 @@ def integrate_sixdof(
             _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
+            _se, _to,
         )
 
         # 5th-order solution
@@ -1045,6 +1071,7 @@ def integrate_sixdof(
             _ird, _ild, _pro, _pri, _pl, _if,
             _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
+            _se, _to,
         )
 
         # Error estimate
@@ -1174,6 +1201,8 @@ def _descent_deriv(
     drogue_cda: float, main_cda: float, main_deploy_alt: float,
     # Scenario
     scenario: int,
+    # Atmosphere site corrections
+    site_elevation: float, t_offset: float,
 ) -> None:
     """4-component derivative for parachute descent: [rN, rE, rD, vD].
 
@@ -1192,7 +1221,7 @@ def _descent_deriv(
     vD = state[3]
     cda = _parachute_cda(h, drogue_cda, main_cda, main_deploy_alt, scenario)
 
-    _, _, rho, _, _ = isa(h)
+    _, _, rho, _, _ = isa_at_site(h, site_elevation, t_offset)
     if cda > 1.0e-12 and rho > 0.0:
         drag_accel = rho * cda * vD * vD / (2.0 * m)
     else:
@@ -1215,6 +1244,8 @@ def integrate_descent(
     drogue_cda: float, main_cda: float, main_deploy_alt: float,
     # Scenario
     scenario: int,
+    # Atmosphere site corrections
+    site_elevation: float, t_offset: float,
     # Tolerances
     rtol: float, atol: float,
     # Optional early stop altitude (m AGL); 0.0 = ground
@@ -1256,6 +1287,7 @@ def integrate_descent(
     _descent_deriv(
         t, y, k1, wind_alt, wind_east, wind_north,
         m, drogue_cda, main_cda, main_deploy_alt, scenario,
+        site_elevation, t_offset,
     )
 
     for _ in range(MAX_STEPS * 2):
@@ -1268,6 +1300,7 @@ def integrate_descent(
             t + DP_C[1] * h_step, ys, k2,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
+            site_elevation, t_offset,
         )
 
         # Stage 3
@@ -1277,6 +1310,7 @@ def integrate_descent(
             t + DP_C[2] * h_step, ys, k3,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
+            site_elevation, t_offset,
         )
 
         # Stage 4
@@ -1288,6 +1322,7 @@ def integrate_descent(
             t + DP_C[3] * h_step, ys, k4,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
+            site_elevation, t_offset,
         )
 
         # Stage 5
@@ -1300,6 +1335,7 @@ def integrate_descent(
             t + DP_C[4] * h_step, ys, k5,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
+            site_elevation, t_offset,
         )
 
         # Stage 6
@@ -1313,6 +1349,7 @@ def integrate_descent(
             t + DP_C[5] * h_step, ys, k6,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
+            site_elevation, t_offset,
         )
 
         # 5th-order solution
@@ -1327,6 +1364,7 @@ def integrate_descent(
             t + h_step, y_new, k7,
             wind_alt, wind_east, wind_north,
             m, drogue_cda, main_cda, main_deploy_alt, scenario,
+            site_elevation, t_offset,
         )
 
         # Error
@@ -1362,12 +1400,14 @@ def integrate_descent(
 def _descent_mach(
     y_desc: np.ndarray,
     n_desc: int,
+    site_elevation: float,
+    t_offset: float,
 ) -> np.ndarray:
     """Compute Mach at each descent step from the integrated vD."""
     mach = np.empty(n_desc, dtype=np.float64)
     for i in range(n_desc):
         h = max(-float(y_desc[i, 2]), 0.0)
-        _, _, _, a, _ = isa(h)
+        _, _, _, a, _ = isa_at_site(h, site_elevation, t_offset)
         vD = y_desc[i, 3]
         mach[i] = vD / a if a > 0.0 else 0.0
     return mach
@@ -1417,6 +1457,7 @@ def run_trajectory(
         p.m_prop_0, p.total_impulse, p.m_dry,
         p.mach_g, p.re_g, p.alpha_g, p.ca_tbl,
         p.A_ref, p.length,
+        p.site_elevation, p.t_offset,
         p.rtol, p.atol,
     )
 
@@ -1449,6 +1490,7 @@ def run_trajectory(
         p.diameter, p.length, p.A_ref, p.fin_cp_radius,
         p.wind_alt, p.wind_east, p.wind_north,
         p.fin_cant_rad,
+        p.site_elevation, p.t_offset,
         p.sm_transition_mach,
         p.sm_subsonic_min, p.sm_supersonic_min,
         p.aoa_max_rad, p.sm_aoa_threshold_rad,
@@ -1601,6 +1643,7 @@ def run_trajectory(
             p.wind_alt, p.wind_east, p.wind_north,
             p.m_dry, drogue_cda, 0.0, 0.0,
             SCENARIO_DROGUE_ONLY,
+            p.site_elevation, p.t_offset,
             p.rtol, p.atol,
             stop_alt=main_deploy_alt,
         )
@@ -1612,6 +1655,7 @@ def run_trajectory(
             p.wind_alt, p.wind_east, p.wind_north,
             p.m_dry, drogue_cda, main_cda, main_deploy_alt,
             SCENARIO_PREMATURE_MAIN,
+            p.site_elevation, p.t_offset,
             p.rtol, p.atol,
         )
         # Stitch (skip duplicate point at join)
@@ -1625,11 +1669,12 @@ def run_trajectory(
             p.wind_alt, p.wind_east, p.wind_north,
             p.m_dry, drogue_cda, main_cda, main_deploy_alt,
             effective_scenario,
+            p.site_elevation, p.t_offset,
             p.rtol, p.atol,
         )
 
     # Mach from the integrated descent velocity
-    mach_desc = _descent_mach(y_desc, n_desc)
+    mach_desc = _descent_mach(y_desc, n_desc, p.site_elevation, p.t_offset)
 
     land_idx = n_desc - 1
     landing_pos = y_desc[land_idx, :3].copy()

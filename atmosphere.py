@@ -144,3 +144,79 @@ def isa(h: float) -> tuple[float, float, float, float, float]:
         / (T + _S_SUTH)
     )
     return T, p, rho, a, mu
+
+
+# ---------------------------------------------------------------------------
+# Site-aware variants (launch-site elevation + temperature offset)
+# ---------------------------------------------------------------------------
+
+def compute_t_offset(site_elevation: float, site_temperature_k: float) -> float:
+    """Compute the uniform temperature offset for a non-standard launch site.
+
+    Parameters
+    ----------
+    site_elevation : float
+        Launch site elevation above mean sea level [m].
+    site_temperature_k : float
+        Actual temperature at the launch site [K].
+
+    Returns
+    -------
+    float
+        Temperature offset [K] to add to ISA temperature at any altitude.
+    """
+    t_isa_at_site = temperature(site_elevation)
+    return site_temperature_k - t_isa_at_site
+
+
+@nb.njit(cache=True, fastmath=True)
+def temperature_at_site(h: float, site_elevation: float, t_offset: float) -> float:
+    """Static temperature [K] at AGL altitude *h* with site corrections."""
+    return temperature(h + site_elevation) + t_offset
+
+
+@nb.njit(cache=True, fastmath=True)
+def pressure_at_site(h: float, site_elevation: float) -> float:
+    """Static pressure [Pa] at AGL altitude *h*, accounting for site elevation.
+
+    Temperature offset does not affect the pressure profile — pressure is
+    determined solely by geometric altitude in the ISA barometric model.
+    """
+    return pressure(h + site_elevation)
+
+
+@nb.njit(cache=True, fastmath=True)
+def isa_at_site(
+    h: float, site_elevation: float, t_offset: float,
+) -> tuple[float, float, float, float, float]:
+    """Return (T, p, rho, a, mu) at AGL altitude *h* with site corrections.
+
+    Pressure is looked up at ISA altitude ``h + site_elevation``.
+    Temperature is the ISA value at that altitude plus a uniform offset.
+    Density, speed of sound, and viscosity are derived from the adjusted
+    T and p.
+    """
+    h_msl = h + site_elevation
+    i = _layer_index(h_msl)
+    T_b = _T_BASE[i]
+    L = _L_BASE[i]
+    p_b = _P_BASE[i]
+    dh = h_msl - _H_BASE[i]
+
+    T_isa = T_b + L * dh
+    T = T_isa + t_offset
+
+    if L != 0.0:
+        p = p_b * (T_isa / T_b) ** (-G0 * M_AIR / (R_STAR * L))
+    else:
+        p = p_b * np.exp(-G0 * M_AIR * dh / (R_STAR * T_b))
+
+    rho = p * M_AIR / (R_STAR * T)
+    a = (GAMMA * R_STAR * T / M_AIR) ** 0.5
+    mu = (
+        _MU_REF_SUTH
+        * (T / _T_REF_SUTH) ** 1.5
+        * (_T_REF_SUTH + _S_SUTH)
+        / (T + _S_SUTH)
+    )
+    return T, p, rho, a, mu

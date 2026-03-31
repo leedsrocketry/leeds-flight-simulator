@@ -312,6 +312,8 @@ def test_rail_no_drag_no_gravity():
         ca_tbl=ca_tbl,
         A_ref=0.01,               # irrelevant with zero C_A
         length=1.0,
+        site_elevation=0.0,
+        t_offset=0.0,
         rtol=1e-9,
         atol=1e-9,
     )
@@ -361,6 +363,8 @@ def test_rail_vertical_with_gravity():
         ca_tbl=ca_tbl,
         A_ref=0.01,
         length=1.0,
+        site_elevation=0.0,
+        t_offset=0.0,
         rtol=1e-9,
         atol=1e-9,
     )
@@ -400,7 +404,7 @@ def test_rail_exit_position_direction(az_deg, inc_deg):
         times, thrusts, 0.0, 1.0,
         m_prop_0, total_impulse, m_dry,
         mach_g, re_g, alpha_g, ca_tbl,
-        0.01, 1.0, 1e-9, 1e-9,
+        0.01, 1.0, 0.0, 0.0, 1e-9, 1e-9,
     )
 
     eN, eE, eD = _rail_direction(az, inc)
@@ -439,7 +443,9 @@ def test_rail_impulse_factor():
         nozzle_area=0.0,
         m_prop_0=m_prop_0, total_impulse=total_impulse, m_dry=m_dry,
         mach_g=mach_g, re_g=re_g, alpha_g=alpha_g, ca_tbl=ca_tbl,
-        A_ref=0.01, length=1.0, rtol=1e-9, atol=1e-9,
+        A_ref=0.01, length=1.0,
+        site_elevation=0.0, t_offset=0.0,
+        rtol=1e-9, atol=1e-9,
     )
 
     V1, *_ = simulate_rail(impulse_factor=1.0, **common)
@@ -489,6 +495,7 @@ def test_sixdof_gravity_only_apogee():
         0.1, 1.0, 0.01, 0.05, # diameter, length, A_ref, fin_cp_radius
         wa, we, wn,
         0.0,                   # fin_cant
+        0.0, 0.0,             # site_elevation, t_offset
         1.0,                   # sm_transition_mach
         -1e6, -1e6,           # sm_min (permissive — no check)
         math.pi, math.pi,     # aoa_max, sm_aoa_threshold (permissive)
@@ -538,6 +545,7 @@ def test_integrator_convergence():
         diameter=0.1, ref_length=1.0, A_ref=0.01, fin_cp_radius=0.05,
         wind_alt=wa, wind_east=we, wind_north=wn,
         fin_cant_rad=0.0,
+        site_elevation=0.0, t_offset=0.0,
         sm_transition_mach=1.0,
         sm_subsonic_min=-1e6, sm_supersonic_min=-1e6,
         aoa_max_rad=math.pi, sm_aoa_threshold_rad=math.pi,
@@ -632,6 +640,7 @@ def test_sixdof_deriv_gravity_direction():
         0.1, 1.0, 0.01, 0.05,
         wa, we, wn,
         0.0,
+        0.0, 0.0,
     )
 
     g = 9.80665
@@ -679,6 +688,7 @@ def test_descent_time_matches_terminal_velocity():
         m=m,
         drogue_cda=cda, main_cda=0.0, main_deploy_alt=0.0,
         scenario=SCENARIO_DROGUE_ONLY,
+        site_elevation=0.0, t_offset=0.0,
         rtol=1e-8, atol=1e-8,
     )
 
@@ -708,6 +718,7 @@ def test_descent_lands_at_ground():
         m=m,
         drogue_cda=cda, main_cda=0.0, main_deploy_alt=0.0,
         scenario=SCENARIO_DROGUE_ONLY,
+        site_elevation=0.0, t_offset=0.0,
         rtol=1e-6, atol=1e-6,
     )
 
@@ -744,7 +755,7 @@ def test_descent_wind_displacement():
         0.0, state0.copy(),
         w_alt, w_east, w_north,
         m, cda, 0.0, 0.0,
-        SCENARIO_DROGUE_ONLY, 1e-6, 1e-6,
+        SCENARIO_DROGUE_ONLY, 0.0, 0.0, 1e-6, 1e-6,
     )
 
     descent_time = t_out[n_wind - 1]

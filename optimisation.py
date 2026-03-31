@@ -28,7 +28,7 @@ from typing import Callable
 import numpy as np
 from shapely.geometry import Point, Polygon
 
-from atmosphere import isa
+from atmosphere import isa_at_site, compute_t_offset
 from config import SimulationConfig, Vehicle
 from motor import PropellantModel
 from aerodynamics import AeroModel
@@ -56,6 +56,13 @@ from geography import (
 # Constants
 # ---------------------------------------------------------------------------
 _G0: float = 9.80665
+
+
+def _site_t_offset(sim_cfg: SimulationConfig) -> float:
+    """Compute the temperature offset from the simulation config."""
+    if sim_cfg.site.temperature is not None:
+        return compute_t_offset(sim_cfg.site.elevation, sim_cfg.site.temperature)
+    return 0.0
 _DEG2RAD: float = math.pi / 180.0
 _RAD2DEG: float = 180.0 / math.pi
 
@@ -227,6 +234,8 @@ def _compute_wind_drift(
     wind_north: np.ndarray,
     cda: float,
     m_dry: float,
+    site_elevation: float = 0.0,
+    t_offset: float = 0.0,
     dz: float = 50.0,
 ) -> tuple[float, float]:
     """Compute analytical wind drift from apogee to ground.
@@ -265,7 +274,7 @@ def _compute_wind_drift(
         if z < 0.0:
             z = 0.0
 
-        _, _, rho, _, _ = isa(z)
+        _, _, rho, _, _ = isa_at_site(z, site_elevation, t_offset)
         v_descent = math.sqrt(2.0 * m_dry * _G0 / (rho * cda))
 
         v_wn, v_we = interpolate_wind(wind_alt, wind_east, wind_north, z)
@@ -392,6 +401,7 @@ def narrow_azimuth_bounds(
             wind_ensemble.mean_east_ms,
             wind_ensemble.mean_north_ms,
             cda, m_dry,
+            sim_cfg.site.elevation, _site_t_offset(sim_cfg),
         )
 
         centroid_N = rot_N + drift_N
@@ -431,6 +441,7 @@ def _run_descent_single(
     m_dry: float,
     drogue_cda: float, main_cda: float, main_deploy_alt: float,
     scenario: int,
+    site_elevation: float = 0.0, t_offset: float = 0.0,
 ) -> tuple[float, float]:
     """Run a single parachute descent from apogee and return (landing_N, landing_E)."""
     state0 = np.array([
@@ -443,6 +454,7 @@ def _run_descent_single(
         m_dry,
         drogue_cda, main_cda, main_deploy_alt,
         scenario,
+        site_elevation, t_offset,
         1.0e-6, 1.0e-6,
     )
     return float(y_desc[n_desc - 1, 0]), float(y_desc[n_desc - 1, 1])
@@ -459,6 +471,8 @@ def _run_descent_batch(
     vehicle: Vehicle,
     scenario_int: int,
     n_sims: int,
+    site_elevation: float = 0.0,
+    t_offset: float = 0.0,
     pool: mp.pool.Pool | None = None,
 ) -> np.ndarray:
     """Run *n_sims* parachute descent sims from a known apogee, varying wind.
@@ -488,6 +502,7 @@ def _run_descent_batch(
             m_dry,
             drogue_cda, main_cda, main_deploy_alt,
             scenario_int,
+            site_elevation, t_offset,
         ))
 
     if pool is not None:
@@ -507,6 +522,8 @@ def _evaluate_azimuth(
     poly_n: np.ndarray,
     scenario_int: int,
     n_sims: int,
+    site_elevation: float = 0.0,
+    t_offset: float = 0.0,
     pool: mp.pool.Pool | None = None,
 ) -> float:
     """Evaluate a single azimuth: run descent batch, return p_success."""
@@ -515,7 +532,8 @@ def _evaluate_azimuth(
     landings = _run_descent_batch(
         rot_N, rot_E, apogee_D, t_apogee,
         wind_ensemble, vehicle,
-        scenario_int, n_sims, pool,
+        scenario_int, n_sims,
+        site_elevation, t_offset, pool,
     )
 
     n_inside = 0
@@ -562,7 +580,8 @@ def optimise_azimuth(
                 p = _evaluate_azimuth(
                     az, apN0, apE0, apD0, t_apogee,
                     wind_ensemble, vehicle,
-                    poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
+                    poly_e, poly_n, scenario_int, SIMS_PER_ITER,
+                    sim_cfg.site.elevation, _site_t_offset(sim_cfg), pool,
                 )
                 observations.append((az, p))
 
@@ -594,7 +613,8 @@ def optimise_azimuth(
             p = _evaluate_azimuth(
                 az, apN0, apE0, apD0, t_apogee,
                 wind_ensemble, vehicle,
-                poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
+                poly_e, poly_n, scenario_int, SIMS_PER_ITER,
+                sim_cfg.site.elevation, _site_t_offset(sim_cfg), pool,
             )
             X_obs.append(float(az))
             Y_obs.append(p)
@@ -649,7 +669,8 @@ def optimise_azimuth(
             p = _evaluate_azimuth(
                 next_az, apN0, apE0, apD0, t_apogee,
                 wind_ensemble, vehicle,
-                poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
+                poly_e, poly_n, scenario_int, SIMS_PER_ITER,
+                sim_cfg.site.elevation, _site_t_offset(sim_cfg), pool,
             )
             X_obs.append(float(next_az))
             Y_obs.append(p)

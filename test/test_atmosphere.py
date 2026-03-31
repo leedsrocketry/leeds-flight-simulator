@@ -10,7 +10,10 @@ Tolerances are tight (0.1 %) to catch any constant or formula regressions.
 
 import pytest
 import numpy as np
-from atmosphere import isa, temperature, pressure, density, speed_of_sound, dynamic_viscosity
+from atmosphere import (
+    isa, temperature, pressure, density, speed_of_sound, dynamic_viscosity,
+    isa_at_site, temperature_at_site, pressure_at_site, compute_t_offset,
+)
 
 # ---------------------------------------------------------------------------
 # Reference values at selected altitudes
@@ -96,3 +99,75 @@ def test_sea_level_density():
 def test_mach_number_sea_level():
     """Mach 1 at sea level ≈ 340.3 m/s."""
     assert speed_of_sound(0.0) == pytest.approx(340.294, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Site-aware atmosphere functions
+# ---------------------------------------------------------------------------
+
+def test_site_zero_offset_matches_isa():
+    """With elevation=0 and t_offset=0, site functions must equal isa()."""
+    for h in [0.0, 1000.0, 5000.0, 11000.0, 20000.0]:
+        T_s, p_s, rho_s, a_s, mu_s = isa_at_site(h, 0.0, 0.0)
+        T_i, p_i, rho_i, a_i, mu_i = isa(h)
+        assert T_s == pytest.approx(T_i, rel=1e-12)
+        assert p_s == pytest.approx(p_i, rel=1e-12)
+        assert rho_s == pytest.approx(rho_i, rel=1e-12)
+        assert a_s == pytest.approx(a_i, rel=1e-12)
+        assert mu_s == pytest.approx(mu_i, rel=1e-12)
+
+
+def test_site_elevation_equals_isa_shifted():
+    """isa_at_site(0, elev, 0) must equal isa(elev) — pad is at MSL elevation."""
+    for elev in [100.0, 500.0, 1000.0, 2000.0]:
+        T_s, p_s, rho_s, a_s, mu_s = isa_at_site(0.0, elev, 0.0)
+        T_i, p_i, rho_i, a_i, mu_i = isa(elev)
+        assert T_s == pytest.approx(T_i, rel=1e-12)
+        assert p_s == pytest.approx(p_i, rel=1e-12)
+        assert rho_s == pytest.approx(rho_i, rel=1e-12)
+
+
+def test_temperature_offset_applied():
+    """Temperature offset should shift T without affecting pressure."""
+    elev = 500.0
+    t_offset = 10.0  # 10 K warmer than ISA
+    T_s, p_s, *_ = isa_at_site(0.0, elev, t_offset)
+    T_i = temperature(elev)
+    p_i = pressure(elev)
+    assert T_s == pytest.approx(T_i + t_offset, rel=1e-12)
+    assert p_s == pytest.approx(p_i, rel=1e-12)
+
+
+def test_compute_t_offset():
+    """compute_t_offset should return T_user - T_ISA(elevation)."""
+    elev = 1000.0
+    T_user = 290.0  # K
+    T_isa_at_elev = temperature(elev)
+    expected = T_user - T_isa_at_elev
+    assert compute_t_offset(elev, T_user) == pytest.approx(expected, rel=1e-12)
+
+
+def test_compute_t_offset_standard_day():
+    """At sea level with ISA temperature, offset is zero."""
+    assert compute_t_offset(0.0, 288.15) == pytest.approx(0.0, abs=1e-10)
+
+
+def test_pressure_at_site_helper():
+    """pressure_at_site(h, elev) must equal pressure(h + elev)."""
+    for h, elev in [(0.0, 500.0), (1000.0, 500.0), (5000.0, 0.0)]:
+        assert pressure_at_site(h, elev) == pytest.approx(pressure(h + elev), rel=1e-12)
+
+
+def test_temperature_at_site_helper():
+    """temperature_at_site(h, elev, t_off) must equal temperature(h + elev) + t_off."""
+    for h, elev, t_off in [(0.0, 500.0, 5.0), (1000.0, 0.0, -3.0)]:
+        expected = temperature(h + elev) + t_off
+        assert temperature_at_site(h, elev, t_off) == pytest.approx(expected, rel=1e-12)
+
+
+def test_density_adjusted_for_temperature():
+    """Warmer temperature at same pressure should give lower density."""
+    elev = 500.0
+    _, _, rho_std, _, _ = isa_at_site(0.0, elev, 0.0)
+    _, _, rho_warm, _, _ = isa_at_site(0.0, elev, 10.0)
+    assert rho_warm < rho_std

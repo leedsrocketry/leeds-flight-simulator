@@ -16,7 +16,11 @@ from typing import Literal
 
 import yaml
 
-from atmosphere import temperature as _isa_temperature, pressure as _isa_pressure
+from atmosphere import (
+    temperature_at_site as _temperature_at_site,
+    pressure_at_site as _pressure_at_site,
+    compute_t_offset,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -269,12 +273,18 @@ def build_comparison(cdx1: dict, yaml_cfg: dict,
         force_key="launch.rail.length", force_file="sim")
 
     # --- Atmosphere (informational — ISA-derived, not updateable) ---
+    site_elev = cdx1["altitude_m"]
+    site_t_offset = (
+        compute_t_offset(site_elev, cdx1["temperature_K"])
+        if cdx1.get("temperature_K") is not None
+        else 0.0
+    )
     num("Temperature (K)", "", "",
         cdx1_val=cdx1["temperature_K"],
-        yaml_val=float(_isa_temperature(cdx1["altitude_m"])))
+        yaml_val=float(_temperature_at_site(0.0, site_elev, site_t_offset)))
     num("Pressure (Pa)", "", "",
         cdx1_val=cdx1["pressure_Pa"],
-        yaml_val=float(_isa_pressure(cdx1["altitude_m"])))
+        yaml_val=float(_pressure_at_site(0.0, site_elev)))
 
     # --- Recovery ---
     num("Drogue Cd", "drogue_cd", "drogue_cd",

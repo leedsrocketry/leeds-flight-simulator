@@ -232,7 +232,7 @@ def test_thrust_corrected_at_sea_level(tmp_path):
     prop, *_ = _make_model(tmp_path)
     F_base = thrust_at(prop.times, prop.thrusts, 0.5)
     F_corr = thrust_corrected_at(prop.times, prop.thrusts,
-                                  prop.nozzle_area, 0.0, 0.5)
+                                  prop.nozzle_area, 0.0, 0.0, 0.5)
     assert F_corr == pytest.approx(F_base)
 
 
@@ -240,9 +240,9 @@ def test_thrust_corrected_increases_with_altitude(tmp_path):
     """Higher altitude → lower ambient pressure → higher thrust."""
     prop, *_ = _make_model(tmp_path)
     F_sea = thrust_corrected_at(prop.times, prop.thrusts,
-                                 prop.nozzle_area, 0.0, 0.5)
+                                 prop.nozzle_area, 0.0, 0.0, 0.5)
     F_high = thrust_corrected_at(prop.times, prop.thrusts,
-                                  prop.nozzle_area, 5000.0, 0.5)
+                                  prop.nozzle_area, 5000.0, 0.0, 0.5)
     assert F_high > F_sea
 
 
@@ -250,7 +250,7 @@ def test_thrust_corrected_zero_area_no_change(tmp_path):
     """With nozzle_area=0, correction is zero regardless of altitude."""
     prop, *_ = _make_model(tmp_path)
     F_base = thrust_at(prop.times, prop.thrusts, 0.5)
-    F_corr = thrust_corrected_at(prop.times, prop.thrusts, 0.0, 8000.0, 0.5)
+    F_corr = thrust_corrected_at(prop.times, prop.thrusts, 0.0, 8000.0, 0.0, 0.5)
     assert F_corr == pytest.approx(F_base)
 
 
