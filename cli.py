@@ -182,11 +182,9 @@ class _RunDisplay:
                 title="WARNINGS",
                 title_align="left",
             ))
-            parts.append(Text())
         if self._progress.tasks:
             parts.append(Text())
             parts.append(self._progress)
-            parts.append(Text())
         return Group(*parts)
 
     def _refresh(self) -> None:
@@ -365,12 +363,11 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
 
     if az_is_auto or inc_is_auto:
         display.update_status("Running optimisation...")
-        opt_task = progress.add_task("Optimisation", total=100)
+        opt_task = progress.add_task("Optimisation", total=4)
         display.start_task(opt_task)
 
-        def _opt_callback(phase_name: str, completed: int, total: int) -> None:
-            progress.update(opt_task, description=f"{phase_name:<30}",
-                            completed=completed, total=total)
+        def _opt_callback(step: int) -> None:
+            progress.update(opt_task, completed=step)
 
         try:
             opt_result = run_optimisation(
@@ -491,12 +488,21 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
             figure_paths.append(disp_result)
 
     display.stop()
-    console.print(f"Results saved to: [bold]{results_dir}[/]\n")
+    console.print()
 
-    if no_popup and figure_paths:
-        for p in figure_paths:
-            console.print(f"  Saved: {p}")
-    elif not no_popup:
+    if opt_result is not None:
+        console.print(
+            f"Optimised azimuth:     [white]{opt_result.selected_azimuth}°[/]"
+        )
+        console.print(
+            f"Optimised inclination: [white]{opt_result.selected_inclination}°[/]"
+        )
+        console.print()
+
+    console.print(f"Results saved to: [bold]{results_dir}[/]")
+    console.print()
+
+    if not no_popup:
         plt.show()
 
 

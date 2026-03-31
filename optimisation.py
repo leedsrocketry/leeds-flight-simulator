@@ -288,7 +288,6 @@ def select_inclination(
     aero_model: AeroModel,
     poly_e: np.ndarray,
     poly_n: np.ndarray,
-    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> tuple[int, dict[int, tuple[float, float, float]], dict[int, tuple[float, float]], dict[int, float]]:
     """Select the steepest safe inclination.
 
@@ -327,9 +326,6 @@ def select_inclination(
         if dist >= exclusion_r and inside:
             valid.append(inc)
 
-        if progress_callback is not None:
-            progress_callback("Inclination selection", idx + 1, len(candidates))
-
     if not valid:
         # No inclination satisfies both constraints.  Fall back to the
         # steepest candidate (least horizontal drift) so downstream phases
@@ -358,7 +354,6 @@ def narrow_azimuth_bounds(
     propellant: PropellantModel,
     wind_ensemble: WindEnsemble,
     buffered_polygon: Polygon,
-    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> list[int]:
     """Discard azimuths whose landing centroid falls outside the buffered
     danger area.
@@ -407,9 +402,6 @@ def narrow_azimuth_bounds(
 
         if dist >= 0.0:
             feasible.append(az)
-
-    if progress_callback is not None:
-        progress_callback("Azimuth narrowing", 1, 1)
 
     if not feasible:
         # No azimuth lands inside the buffered area.  Rather than aborting,
@@ -550,7 +542,6 @@ def optimise_azimuth(
     wind_ensemble: WindEnsemble,
     poly_e: np.ndarray,
     poly_n: np.ndarray,
-    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> tuple[list[int], list[tuple[int, float]]]:
     """Bayesian optimisation over feasible azimuths.
 
@@ -574,8 +565,6 @@ def optimise_azimuth(
                     poly_e, poly_n, scenario_int, SIMS_PER_ITER, pool,
                 )
                 observations.append((az, p))
-                if progress_callback:
-                    progress_callback("Azimuth evaluation", i + 1, len(feasible_azimuths))
 
         observations.sort(key=lambda x: x[1], reverse=True)
         return [az for az, _ in observations], observations
@@ -616,9 +605,6 @@ def optimise_azimuth(
             Y_obs.append(p)
             observations.append((az, p))
             evaluated.add(az)
-
-        if progress_callback:
-            progress_callback("Azimuth optimisation", len(evaluated), MAX_ITER + len(init_indices))
 
         # BO loop
         for iteration in range(MAX_ITER):
@@ -674,13 +660,6 @@ def optimise_azimuth(
             Y_obs.append(p)
             observations.append((next_az, p))
             evaluated.add(next_az)
-
-            if progress_callback:
-                progress_callback(
-                    "Azimuth optimisation",
-                    len(init_indices) + iteration + 1,
-                    MAX_ITER + len(init_indices),
-                )
 
     # Select top 3 by GP posterior mean (or raw observations if GP not fitted)
     if len(X_obs) >= 2:
@@ -761,7 +740,6 @@ def validate_candidates(
     buffered_polygon: Polygon,
     poly_e: np.ndarray,
     poly_n: np.ndarray,
-    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> tuple[int, dict[int, float], dict[int, float]]:
     """Validate top candidates with full-uncertainty MC.
 
@@ -808,9 +786,6 @@ def validate_candidates(
         pct_idx = max(0, int(math.ceil((1.0 - compliance_threshold) * n_total)) - 1)
         margins[az] = float(sorted_dists[pct_idx])
 
-    if progress_callback:
-        progress_callback("Candidate validation", 1, 1)
-
     # Select candidate with greatest margin
     optimal = max(top_candidates, key=lambda az: margins[az])
     return optimal, compliance, margins
@@ -826,15 +801,20 @@ def run_optimisation(
     propellant: PropellantModel,
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
-    progress_callback: Callable[[str, int, int], None] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
 ) -> OptimisationResult:
     """Run the full optimisation routine.
 
-    Checks which parameters are ``"auto"`` and runs only the required phases.
+    *progress_callback(step)* is called after each of the four stages
+    completes (step 1–4).  The caller should set up a bar with total=4.
     """
     rail = sim_cfg.launch.rail
     inc_is_auto = rail.inclination == "auto"
     az_is_auto = rail.azimuth == "auto"
+
+    def _notify(step: int) -> None:
+        if progress_callback is not None:
+            progress_callback(step)
 
     # Load and buffer the danger area
     site = sim_cfg.site
@@ -848,7 +828,7 @@ def run_optimisation(
         selected_inc, apogee_positions, ballistic_landings, apogee_times = (
             select_inclination(
                 sim_cfg, vehicle, propellant, aero_model,
-                poly_e, poly_n, progress_callback,
+                poly_e, poly_n,
             )
         )
     else:
@@ -860,6 +840,7 @@ def run_optimisation(
         apogee_positions = {selected_inc: (apN, apE, apD)}
         apogee_times = {selected_inc: t_ap}
         ballistic_landings = {}
+    _notify(1)
 
     t_apogee = apogee_times[selected_inc]
 
@@ -869,23 +850,25 @@ def run_optimisation(
         feasible = narrow_azimuth_bounds(
             selected_inc, apogee_positions,
             sim_cfg, vehicle, propellant, wind_ensemble,
-            buffered_poly, progress_callback,
+            buffered_poly,
         )
+        _notify(2)
 
         # Optimisation
         top_candidates, az_obs = optimise_azimuth(
             feasible, selected_inc, apogee_positions, t_apogee,
             sim_cfg, vehicle, propellant, aero_model,
-            wind_ensemble, poly_e, poly_n, progress_callback,
+            wind_ensemble, poly_e, poly_n,
         )
+        _notify(3)
 
         # Validation
         optimal_az, val_compliance, val_margins = validate_candidates(
             top_candidates, selected_inc,
             sim_cfg, vehicle, propellant, aero_model,
             wind_ensemble, buffered_poly, poly_e, poly_n,
-            progress_callback,
         )
+        _notify(4)
         selected_az = optimal_az
     else:
         selected_az = int(rail.azimuth)
