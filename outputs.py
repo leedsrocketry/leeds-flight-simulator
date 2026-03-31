@@ -1060,102 +1060,70 @@ def save_dispersion_plot(
 # ===================================================================
 
 
-def _adaptive_resample_trajectory(
-    north_km: np.ndarray,
-    east_km: np.ndarray,
-    alt_m: np.ndarray,
-    t_s: np.ndarray,
-    max_points: int,
-    curvature_weight: float = 10.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Resample trajectory with curvature-biased density.
-
-    Computes a weighted arc-length where each segment's weight is
-    proportional to ``1 + curvature_weight * kappa``, then samples
-    uniformly in that weighted space.  This concentrates points in
-    high-curvature regions (e.g. apogee) where the trajectory direction
-    changes rapidly, avoiding visual jumps.
+def _rdp_simplify_3d(
+    points: np.ndarray,
+    epsilon_km: float,
+) -> np.ndarray:
+    """Ramer-Douglas-Peucker polyline simplification in 3D.
 
     Parameters
     ----------
-    north_km, east_km, alt_m, t_s
-        Full-resolution trajectory arrays (must all be the same length).
-    max_points
-        Target number of output points.
-    curvature_weight
-        Scale factor applied to local curvature when computing the
-        weighted arc-length.  Higher values push more points towards
-        the apex.
+    points
+        Shape ``(n, 3)`` array of (north_km, east_km, alt_km) coordinates.
+    epsilon_km
+        Maximum permitted perpendicular deviation in km.  Points whose
+        removal would introduce less than this error are discarded.
 
     Returns
     -------
-    Tuple of (north_km, east_km, alt_m, t_s) downsampled to at most
-    *max_points* points, always including the first and last points.
+    Boolean mask of shape ``(n,)``; ``True`` where a point is kept.
+    First and last points are always kept.
     """
-    n = len(north_km)
-    if n <= max_points:
-        return north_km, east_km, alt_m, t_s
+    n = len(points)
+    keep = np.zeros(n, dtype=bool)
+    keep[0] = True
+    keep[-1] = True
 
-    # Work in consistent units (km) for curvature calculation
-    alt_km = alt_m / 1000.0
+    if n <= 2:
+        return keep
 
-    # Segment vectors and arc-lengths
-    dn = np.diff(north_km)
-    de = np.diff(east_km)
-    da = np.diff(alt_km)
-    seg_len = np.sqrt(dn ** 2 + de ** 2 + da ** 2)
-    seg_len = np.maximum(seg_len, 1e-15)  # guard against zero-length segments
+    # Iterative stack-based RDP (avoids Python recursion limit on long runs)
+    stack = [(0, n - 1)]
+    while stack:
+        start, end = stack.pop()
+        if end - start <= 1:
+            continue
 
-    # Unit tangent for each segment
-    un = dn / seg_len
-    ue = de / seg_len
-    ua = da / seg_len
+        p0 = points[start]
+        p1 = points[end]
+        seg = p1 - p0
+        seg_len = np.linalg.norm(seg)
 
-    # Turning angle between consecutive segments → proxy for curvature
-    dot = un[:-1] * un[1:] + ue[:-1] * ue[1:] + ua[:-1] * ua[1:]
-    dot = np.clip(dot, -1.0, 1.0)
-    angles = np.arccos(dot)  # shape (n-2,)
+        interior = points[start + 1 : end]  # shape (m, 3)
+        if seg_len < 1e-15:
+            # Degenerate: all points collapse to p0
+            dists = np.linalg.norm(interior - p0, axis=1)
+        else:
+            seg_unit = seg / seg_len
+            vecs = interior - p0
+            proj = vecs @ seg_unit
+            perp = vecs - np.outer(proj, seg_unit)
+            dists = np.linalg.norm(perp, axis=1)
 
-    # Curvature at interior points = angle / mean adjacent segment length
-    mean_seg = 0.5 * (seg_len[:-1] + seg_len[1:])
-    kappa = angles / np.maximum(mean_seg, 1e-15)  # shape (n-2,)
+        max_idx = int(np.argmax(dists))
+        if dists[max_idx] > epsilon_km:
+            mid = start + 1 + max_idx
+            keep[mid] = True
+            stack.append((start, mid))
+            stack.append((mid, end))
 
-    # Assign curvature to each segment by averaging its two endpoint values
-    # (endpoints of the polyline get curvature 0)
-    kappa_seg = 0.5 * (
-        np.concatenate([[0.0], kappa]) + np.concatenate([kappa, [0.0]])
-    )  # shape (n-1,)
-
-    # Weighted arc-length element
-    ds_weighted = seg_len * (1.0 + curvature_weight * kappa_seg)
-
-    # Cumulative weighted arc-length (including s=0 at the first point)
-    s = np.empty(n)
-    s[0] = 0.0
-    np.cumsum(ds_weighted, out=s[1:])
-
-    # Sample uniformly in weighted arc-length space
-    s_targets = np.linspace(0.0, s[-1], max_points)
-    idx_float = np.interp(s_targets, s, np.arange(n, dtype=float))
-    idx = np.round(idx_float).astype(int)
-    np.clip(idx, 0, n - 1, out=idx)
-
-    # Ensure endpoints are exactly included
-    idx[0] = 0
-    idx[-1] = n - 1
-
-    # Remove duplicates while preserving order (idx is non-decreasing)
-    mask = np.empty(len(idx), dtype=bool)
-    mask[0] = True
-    mask[1:] = idx[1:] != idx[:-1]
-    idx = idx[mask]
-
-    return north_km[idx], east_km[idx], alt_m[idx], t_s[idx]
+    return keep
 
 
 def _extract_replay_trajectory(
     sr: SampleResult,
-    max_points: int = 50,
+    max_distortion_m: float = 10.0,
+    hard_max_points: int = 100,
 ) -> dict | None:
     """Extract full NED trajectory arrays from a replayed sample.
 
@@ -1163,10 +1131,12 @@ def _extract_replay_trajectory(
     ``t_s``, ``colour``, ``label``, ``is_terminated``, or *None* if the
     sample has no trajectory attached.
 
-    When the trajectory has more than *max_points* data points it is
-    downsampled using curvature-biased arc-length resampling, which
-    concentrates points near apogee where the path curves sharply.
-    First and last points are always kept.
+    The trajectory is simplified using Ramer-Douglas-Peucker in 3-D so
+    that no original point deviates more than *max_distortion_m* metres
+    from the rendered polyline.  This uses the minimum number of points
+    needed to represent each trajectory faithfully — longer or more
+    curved paths automatically receive more points than short straight
+    ones.  *hard_max_points* caps the output as a safety net.
     """
     if sr.trajectory is None:
         return None
@@ -1195,10 +1165,22 @@ def _extract_replay_trajectory(
         alt_m = alt_asc
         t_s = t_asc
 
-    # Curvature-biased adaptive downsample for smooth rendering
-    north_km, east_km, alt_m, t_s = _adaptive_resample_trajectory(
-        north_km, east_km, alt_m, t_s, max_points
-    )
+    # RDP simplification: keep minimum points within distortion budget
+    if len(north_km) > 2:
+        pts = np.column_stack([north_km, east_km, alt_m / 1000.0])
+        mask = _rdp_simplify_3d(pts, epsilon_km=max_distortion_m / 1000.0)
+        # Safety cap: if RDP still yields too many points, uniformly thin
+        kept = np.where(mask)[0]
+        if len(kept) > hard_max_points:
+            sub = np.linspace(0, len(kept) - 1, hard_max_points, dtype=int)
+            mask = np.zeros(len(north_km), dtype=bool)
+            mask[kept[sub]] = True
+            mask[0] = True
+            mask[-1] = True
+        north_km = north_km[mask]
+        east_km = east_km[mask]
+        alt_m = alt_m[mask]
+        t_s = t_s[mask]
 
     is_terminated = not sr.stability_compliant
     colour = "deeppink" if is_terminated else SCENARIO_COLOURS.get(sr.scenario, "grey")
