@@ -1243,6 +1243,43 @@ def save_replay_3d(
             color="red", linewidth=0.6, linestyle="--", alpha=0.5, zorder=5,
         )
 
+    # --- Coastline on ground plane (clipped to plot extents) ---
+    if site.coastline is not None:
+        from shapely.geometry import box as shapely_box
+
+        coastline_poly = load_polygon_ned(site.coastline, lat0, lon0)
+
+        # Compute plot extents from trajectories + danger area
+        all_north = np.concatenate([t["north_km"] for t in trajectories])
+        all_east = np.concatenate([t["east_km"] for t in trajectories])
+        margin = 2.0
+        clip_n = max(float(np.max(all_north)), np.max(da_n_km)) + margin
+        clip_s = min(float(np.min(all_north)), np.min(da_n_km)) - margin
+        clip_e = max(float(np.max(all_east)), np.max(da_e_km)) + margin
+        clip_w = min(float(np.min(all_east)), np.min(da_e_km)) - margin
+
+        # Clip polygon (in NED metres) to extent box
+        clip_box = shapely_box(
+            clip_w * 1000.0, clip_s * 1000.0,
+            clip_e * 1000.0, clip_n * 1000.0,
+        )
+        clipped = coastline_poly.intersection(clip_box)
+
+        def _plot_coastline_geom(geom) -> None:
+            if geom.is_empty:
+                return
+            if geom.geom_type == "Polygon":
+                ce, cn = polygon_to_arrays(geom)
+                ax.plot(
+                    ce / 1000.0, cn / 1000.0, zs=0, zdir="z",
+                    color="blue", linewidth=0.8, alpha=0.6, zorder=4,
+                )
+            elif geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+                for part in geom.geoms:
+                    _plot_coastline_geom(part)
+
+        _plot_coastline_geom(clipped)
+
     # --- Monitor circles on ground plane ---
     n_circle_pts = 360
     bearings = np.linspace(0, 2 * math.pi, n_circle_pts, endpoint=True)
@@ -1329,16 +1366,27 @@ def save_replay_3d(
         legend_seen.add(legend_key)
 
         line, = ax.plot(
-            t["east_km"], t["north_km"], t["alt_m"],
+            t["east_km"], t["north_km"], t["alt_m"] / 1000.0,
             color=t["colour"], linewidth=1.5, alpha=0.8,
             label=legend_key if show_label else None,
         )
         if show_label:
             legend_handles.append(line)
 
+    # Equal scale on all three axes (altitude may extend further)
+    x_range = ax.get_xlim()[1] - ax.get_xlim()[0]
+    y_range = ax.get_ylim()[1] - ax.get_ylim()[0]
+    z_range = ax.get_zlim()[1] - ax.get_zlim()[0]
+    max_range = max(x_range, y_range, z_range)
+    ax.set_box_aspect([
+        x_range / max_range,
+        y_range / max_range,
+        z_range / max_range,
+    ])
+
     ax.set_xlabel("East (km)", fontsize=10, labelpad=10)
     ax.set_ylabel("North (km)", fontsize=10, labelpad=10)
-    ax.set_zlabel("Altitude (m)", fontsize=10, labelpad=10)
+    ax.set_zlabel("Altitude (km)", fontsize=10, labelpad=10)
     ax.legend(handles=legend_handles, loc="upper right", fontsize=9)
 
     fig.tight_layout()

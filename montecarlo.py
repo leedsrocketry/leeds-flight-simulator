@@ -872,3 +872,54 @@ def replay_non_compliant(
         results.append(sr)
 
     return results
+
+
+def replay_compliant(
+    sim_cfg: SimulationConfig,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
+    aero_model: AeroModel,
+    wind_ensemble: WindEnsemble,
+    master_seed: int,
+    azimuth_mean: float,
+    inclination_mean: float,
+    samples_csv_path: Path,
+) -> list[SampleResult]:
+    """Replay all compliant samples from a previous run.
+
+    Reads the samples CSV to find fully-compliant (sample_id, run_index) pairs,
+    then replays each one with full trajectory data.
+    """
+    import csv
+
+    compliant_pairs: list[tuple[int, int]] = []
+    with open(samples_csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            compliance_cols = [
+                c for c in row if c.endswith("_compliant")
+            ]
+            is_compliant = all(
+                row[c].strip().lower() not in ("false", "0", "no")
+                for c in compliance_cols
+            )
+            if is_compliant:
+                sid = int(row["sample_id"])
+                scenario = row["scenario"].strip()
+                active = vehicle.recovery.active_scenarios
+                if scenario in active:
+                    ridx = active.index(scenario)
+                else:
+                    continue
+                compliant_pairs.append((ridx, sid))
+
+    results: list[SampleResult] = []
+    for run_idx, sample_idx in compliant_pairs:
+        sr = replay_sample(
+            sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+            master_seed, run_idx, sample_idx,
+            azimuth_mean, inclination_mean,
+        )
+        results.append(sr)
+
+    return results

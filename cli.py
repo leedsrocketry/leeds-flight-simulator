@@ -32,6 +32,7 @@ from montecarlo import (
     SCENARIO_LABELS,
     build_sim_params,
     load_all_models,
+    replay_compliant,
     replay_non_compliant,
     replay_sample,
     run_monte_carlo,
@@ -500,9 +501,13 @@ def run(config_path: Path, no_popup: bool, points: bool) -> None:
 @main.command()
 @click.argument("summary_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--seed", type=int, default=None, help="Override master seed.")
-@click.option("--run", "run_index", type=int, default=None, help="Run (scenario) index.")
+@click.option("--run", "run_index", type=int, default=None,
+              help="Run (scenario) index. Active scenarios are a subset of: "
+                   + ", ".join(f"{i}={name}" for i, name in enumerate(SCENARIO_LABELS))
+                   + ".")
 @click.option("--sample", "sample_index", type=int, default=None, help="Sample index.")
 @click.option("--non-compliant", is_flag=True, help="Replay all non-compliant samples.")
+@click.option("--compliant", is_flag=True, help="Replay all compliant samples.")
 @click.option("-q", "--no-popup", is_flag=True, help="Save figures to disk instead of interactive display.")
 def replay(
     summary_path: Path,
@@ -510,6 +515,7 @@ def replay(
     run_index: int | None,
     sample_index: int | None,
     non_compliant: bool,
+    compliant: bool,
     no_popup: bool,
 ) -> None:
     """Replay specific samples from a completed run."""
@@ -524,10 +530,15 @@ def replay(
 
     # --- Validate options ---
     single_replay = run_index is not None and sample_index is not None
-    if not single_replay and not non_compliant:
+    if not single_replay and not non_compliant and not compliant:
         console.print(
             "[red]Error:[/] Specify either --run and --sample for a single "
-            "replay, or --non-compliant to replay all non-compliant samples."
+            "replay, --non-compliant, or --compliant."
+        )
+        sys.exit(1)
+    if non_compliant and compliant:
+        console.print(
+            "[red]Error:[/] --non-compliant and --compliant are mutually exclusive."
         )
         sys.exit(1)
 
@@ -566,14 +577,22 @@ def replay(
         if not samples_csv.exists():
             console.print(f"[red]Error:[/] samples.csv not found in {summary_dir}")
             sys.exit(1)
-        console.print("Replaying all non-compliant samples...")
-        results = replay_non_compliant(
-            sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-            master_seed, azimuth_mean, inclination_mean, samples_csv,
-        )
+        if compliant:
+            console.print("Replaying all compliant samples...")
+            results = replay_compliant(
+                sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+                master_seed, azimuth_mean, inclination_mean, samples_csv,
+            )
+        else:
+            console.print("Replaying all non-compliant samples...")
+            results = replay_non_compliant(
+                sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+                master_seed, azimuth_mean, inclination_mean, samples_csv,
+            )
 
     if not results:
-        console.print("[green]No samples to replay (all compliant).[/]")
+        msg = "compliant" if compliant else "non-compliant"
+        console.print(f"[green]No {msg} samples to replay.[/]")
         return
 
     console.print(f"Replayed {len(results)} sample(s).")
