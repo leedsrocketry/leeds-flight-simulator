@@ -5,10 +5,12 @@ for progress bars, warning panels, and status output.
 """
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import sys
 import warnings
+from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -283,12 +285,21 @@ def main():
 @click.argument("config_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-q", "--no-popup", is_flag=True, help="Do not open figures after execution.")
 @click.option("-p", "--points", is_flag=True, help="Draw apogee and landing points on the dispersion plot.")
-def run(config_path: Path, no_popup: bool, points: bool) -> None:
+@click.option("--no-termination", is_flag=True,
+              help="Disable early termination on stability/AoA violations.")
+def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -> None:
     """Run a Monte Carlo flight safety analysis."""
     import matplotlib.pyplot as plt
 
     config_path = Path(config_path).resolve()
     sim_cfg = load_simulation_config(config_path)
+
+    if no_termination:
+        acc = sim_cfg.monte_carlo.acceptance
+        acc = replace(acc, aoa_max=180.0, sm_subsonic_min=-1e9,
+                      sm_supersonic_min=-1e9)
+        mc = replace(sim_cfg.monte_carlo, acceptance=acc)
+        sim_cfg = replace(sim_cfg, monte_carlo=mc)
     all_warnings: list[str] = []
 
     display = _RunDisplay(console)

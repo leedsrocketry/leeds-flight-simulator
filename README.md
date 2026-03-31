@@ -83,6 +83,7 @@ python . run <simulation.yaml>
 |------|--------|
 | `-q`, `--no-popup` | Save figures to disk instead of displaying interactively |
 | `-p`, `--points` | Overlay individual apogee and landing scatter points on the dispersion plot |
+| `--no-termination` | Disable early termination on stability and AoA violations (all samples run to completion) |
 
 Example:
 
