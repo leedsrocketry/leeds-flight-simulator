@@ -1160,6 +1160,7 @@ def _extract_replay_trajectory(sr: SampleResult) -> dict | None:
         "t_s": profile.time.copy(),
         "aoa_deg": profile.aoa_deg,
         "t_aoa_s": profile.time,
+        "roll_rate_hz": profile.roll_rate_hz,
         "colour": colour,
         "label": label,
         "is_terminated": is_terminated,
@@ -1328,6 +1329,53 @@ def save_replay_aoa(
 
     if output_dir is not None:
         save_path = output_dir / "replay_aoa.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return save_path
+
+    return fig
+
+
+def save_replay_roll_rate(
+    replayed: list[SampleResult],
+    sim_cfg: SimulationConfig,
+    *,
+    output_dir: Path | None = None,
+) -> Path | plt.Figure:
+    """Generate roll rate vs time replay plot.
+
+    Only the 6DoF ascent phase is shown (descent values are NaN and
+    filtered out).  All traces are black; opacity scales with trajectory
+    count via :func:`_replay_line_style`.
+
+    *sim_cfg* is accepted for signature compatibility with the other
+    ``save_replay_*`` functions but is not used.
+    """
+    _ = sim_cfg
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    trajectories: list[dict] = []
+    for sr in replayed:
+        t = _extract_replay_trajectory(sr)
+        if t is not None:
+            trajectories.append(t)
+
+    lw, alpha = _replay_line_style(len(trajectories))
+
+    for t in trajectories:
+        ts = t["t_s"]
+        rr = t["roll_rate_hz"]
+        mask = ~np.isnan(rr)
+        ax.plot(ts[mask], rr[mask], color="black", linewidth=lw, alpha=alpha)
+
+    ax.set_xlabel("Flight Time (s)", fontsize=11)
+    ax.set_ylabel("Roll Rate (Hz)", fontsize=11)
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+    fig.tight_layout()
+
+    if output_dir is not None:
+        save_path = output_dir / "replay_roll_rate.png"
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return save_path

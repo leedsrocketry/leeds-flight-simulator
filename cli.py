@@ -47,6 +47,7 @@ from outputs import (
     save_replay_altitude,
     save_replay_aoa,
     save_replay_plan_view,
+    save_replay_roll_rate,
     write_samples_csv,
     write_summary_yaml,
 )
@@ -638,6 +639,7 @@ def replay(
             (save_replay_plan_view, "plan view"),
             (save_replay_altitude, "altitude-time"),
             (save_replay_aoa, "angle of attack"),
+            (save_replay_roll_rate, "roll rate"),
         ]:
             try:
                 result = save_fn(results, sim_cfg, output_dir=out_dir)

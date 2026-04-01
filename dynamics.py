@@ -373,6 +373,7 @@ class TrajectoryProfile:
     mass: np.ndarray          # (K,) kg
     cd: np.ndarray            # (K,) vehicle CD during ascent,
                               #       parachute CD from config during descent
+    roll_rate_hz: np.ndarray  # (K,) roll rate in Hz; NaN during rail & parachute descent
 
 
 # ---------------------------------------------------------------------------
@@ -1528,6 +1529,8 @@ def _build_profile(
     t_desc: np.ndarray | None, state_desc: np.ndarray | None, n_desc: int,
     # Descent scenario (for parachute CD selection)
     scenario: int,
+    # Burnout time for power-on/off CA selection
+    t_burnout: float = 0.0,
 ) -> TrajectoryProfile:
     """Build a unified :class:`TrajectoryProfile` from phase-specific arrays.
 
@@ -1559,6 +1562,7 @@ def _build_profile(
     rail_sm = np.empty(nr, dtype=np.float64)
     rail_cd = np.empty(nr, dtype=np.float64)
     rail_aoa = np.zeros(nr, dtype=np.float64)   # zero AoA on rail
+    rail_roll_hz = np.full(nr, math.nan, dtype=np.float64)  # no roll on rail
 
     for i in range(nr):
         ti = float(rail_t[i])
@@ -1611,6 +1615,11 @@ def _build_profile(
     asc_sm = np.empty(n_asc, dtype=np.float64)
     asc_cd = np.empty(n_asc, dtype=np.float64)
     asc_aoa = np.empty(n_asc, dtype=np.float64)
+    # Roll rate: state index 10 is p_rate [rad/s], convert to Hz
+    _RAD_PER_S_TO_HZ = 1.0 / (2.0 * math.pi)
+    asc_roll_hz = np.empty(n_asc, dtype=np.float64)
+    for i in range(n_asc):
+        asc_roll_hz[i] = float(state_asc[i, 10]) * _RAD_PER_S_TO_HZ
 
     for i in range(n_asc):
         ti = float(t_asc[i])
@@ -1677,6 +1686,7 @@ def _build_profile(
         desc_thrust = np.zeros(n_desc, dtype=np.float64)
         desc_mass = np.full(n_desc, p.m_dry, dtype=np.float64)
         desc_aoa = np.full(n_desc, math.nan, dtype=np.float64)
+        desc_roll_hz = np.full(n_desc, math.nan, dtype=np.float64)
         desc_cd = np.empty(n_desc, dtype=np.float64)
 
         for i in range(n_desc):
@@ -1706,6 +1716,7 @@ def _build_profile(
     parts_thrust = [rail_thrust]
     parts_mass = [rail_mass]
     parts_cd = [rail_cd]
+    parts_roll_hz = [rail_roll_hz]
 
     # Skip first ascent point to avoid overlap with last rail point
     if n_asc > 1:
@@ -1718,6 +1729,7 @@ def _build_profile(
         parts_thrust.append(asc_thrust[1:])
         parts_mass.append(asc_mass[1:])
         parts_cd.append(asc_cd[1:])
+        parts_roll_hz.append(asc_roll_hz[1:])
     elif n_asc == 1:
         # Single-point ascent — still include it
         parts_t.append(t_asc)
@@ -1729,6 +1741,7 @@ def _build_profile(
         parts_thrust.append(asc_thrust)
         parts_mass.append(asc_mass)
         parts_cd.append(asc_cd)
+        parts_roll_hz.append(asc_roll_hz)
 
     if n_desc > 1:
         parts_t.append(t_desc_trimmed[1:])
@@ -1740,6 +1753,7 @@ def _build_profile(
         parts_thrust.append(desc_thrust[1:])
         parts_mass.append(desc_mass[1:])
         parts_cd.append(desc_cd[1:])
+        parts_roll_hz.append(desc_roll_hz[1:])
 
     return TrajectoryProfile(
         time=np.concatenate(parts_t),
@@ -1751,6 +1765,7 @@ def _build_profile(
         thrust=np.concatenate(parts_thrust),
         mass=np.concatenate(parts_mass),
         cd=np.concatenate(parts_cd),
+        roll_rate_hz=np.concatenate(parts_roll_hz),
     )
 
 
@@ -1917,6 +1932,7 @@ def run_trajectory(
             t_asc, s_asc,
             t_desc, state_desc, n_desc,
             scenario,
+            t_burnout,
         )
 
     if is_ballistic:

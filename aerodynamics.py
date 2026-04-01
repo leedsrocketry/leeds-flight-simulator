@@ -203,8 +203,12 @@ def _complete_grid(src: np.ndarray) -> np.ndarray:
     a2_all = np.unique(src[:, 2])
     expected_per_group = len(a2_all)
 
-    # Group rows by (col0, col1) and find incomplete groups
-    keys = src[:, 0] * 1e30 + src[:, 1]  # unique compound key
+    # Group rows by (col0, col1) and find incomplete groups.
+    # Use rank-based compound key to avoid floating-point collisions
+    # when col0 and col1 span very different magnitudes.
+    c0_ranks = np.searchsorted(np.unique(src[:, 0]), src[:, 0])
+    n_r = len(np.unique(src[:, 1]))
+    keys = c0_ranks * (n_r + 1) + np.searchsorted(np.unique(src[:, 1]), src[:, 1])
     unique_keys, counts = np.unique(keys, return_counts=True)
     incomplete = unique_keys[counts < expected_per_group]
 

@@ -1,5 +1,5 @@
 motor: "o3400.eng"             # RASP .eng thrust curve file (path relative to this file)
-aero_tables: "aero_table.csv"  # path to a single RASAero II Aeroplot CSV, or a directory of CSVs;
+aero_tables: "aero_tables/"    # path to a single RASAero II Aeroplot CSV, or a directory of CSVs;
                                # a single file runs without pitch/yaw damping or roll modelled (with warning)
 # fins_aero_table: "aero_tables/fins.csv"  # uncomment to identify the fins component explicitly;
                                            # if omitted, the file whose name contains "fin" is used (case insensitive)

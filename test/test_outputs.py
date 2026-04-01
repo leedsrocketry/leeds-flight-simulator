@@ -571,6 +571,8 @@ def _make_parabolic_trajectory() -> TrajectoryProfile:
                            np.full(n_desc - 1, 20.0)])
     cd = np.concatenate([np.full(n_asc, 0.4),
                          np.full(n_desc - 1, 1.5)])
+    roll_rate_hz = np.concatenate([np.linspace(0, 5, n_asc),
+                                   np.full(n_desc - 1, np.nan)])
 
     return TrajectoryProfile(
         time=time,
@@ -582,6 +584,7 @@ def _make_parabolic_trajectory() -> TrajectoryProfile:
         thrust=thrust,
         mass=mass,
         cd=cd,
+        roll_rate_hz=roll_rate_hz,
     )
 
 
