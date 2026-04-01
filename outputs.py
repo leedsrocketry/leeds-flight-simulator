@@ -1073,120 +1073,91 @@ def save_dispersion_plot(
 # ===================================================================
 
 
-def _rdp_simplify_3d(
+def _curvature_resample_3d(
     points: np.ndarray,
-    epsilon_km: float,
+    target_n: int = 150,
 ) -> np.ndarray:
-    """Ramer-Douglas-Peucker polyline simplification in 3D.
+    """Select up to *target_n* points from a 3-D polyline, sampling more
+    densely where curvature is high.
 
     Parameters
     ----------
     points
-        Shape ``(n, 3)`` array of (north_km, east_km, alt_km) coordinates.
-    epsilon_km
-        Maximum permitted perpendicular deviation in km.  Points whose
-        removal would introduce less than this error are discarded.
+        Shape ``(n, 3)`` array of coordinates (any consistent units).
+    target_n
+        Maximum number of points to retain.  If *n* <= *target_n* the
+        full array is returned unchanged (all-True mask).
 
     Returns
     -------
-    Boolean mask of shape ``(n,)``; ``True`` where a point is kept.
-    First and last points are always kept.
+    Boolean mask of shape ``(n,)``; first and last points are always kept.
     """
     n = len(points)
-    keep = np.zeros(n, dtype=bool)
-    keep[0] = True
-    keep[-1] = True
+    if n <= target_n:
+        return np.ones(n, dtype=bool)
 
-    if n <= 2:
-        return keep
+    # Arc-length segments
+    diffs = np.diff(points, axis=0)          # (n-1, 3)
+    ds = np.linalg.norm(diffs, axis=1)       # (n-1,)
+    ds = np.maximum(ds, 1e-12)
 
-    # Iterative stack-based RDP (avoids Python recursion limit on long runs)
-    stack = [(0, n - 1)]
-    while stack:
-        start, end = stack.pop()
-        if end - start <= 1:
-            continue
+    # Unit tangent per segment
+    tangents = diffs / ds[:, None]            # (n-1, 3)
 
-        p0 = points[start]
-        p1 = points[end]
-        seg = p1 - p0
-        seg_len = np.linalg.norm(seg)
+    # Curvature at interior points: turning angle per unit arc length
+    dot = np.einsum("ij,ij->i", tangents[:-1], tangents[1:])
+    dot = np.clip(dot, -1.0, 1.0)
+    turning = np.arccos(dot)                  # (n-2,)
+    avg_ds = 0.5 * (ds[:-1] + ds[1:])        # (n-2,)
+    kappa = turning / np.maximum(avg_ds, 1e-12)   # (n-2,)
 
-        interior = points[start + 1 : end]  # shape (m, 3)
-        if seg_len < 1e-15:
-            # Degenerate: all points collapse to p0
-            dists = np.linalg.norm(interior - p0, axis=1)
-        else:
-            seg_unit = seg / seg_len
-            vecs = interior - p0
-            proj = vecs @ seg_unit
-            perp = vecs - np.outer(proj, seg_unit)
-            dists = np.linalg.norm(perp, axis=1)
+    # Clip curvature at the 95th percentile so that extreme single-point
+    # turns (e.g. apogee) do not consume the entire sampling budget.
+    kappa_cap = float(np.percentile(kappa, 95)) if len(kappa) > 0 else 1.0
+    kappa_capped = np.clip(kappa, 0.0, max(kappa_cap, 1e-12))
+    kappa_mean = float(np.mean(kappa_capped)) if len(kappa_capped) > 0 else 1.0
 
-        max_idx = int(np.argmax(dists))
-        if dists[max_idx] > epsilon_km:
-            mid = start + 1 + max_idx
-            keep[mid] = True
-            stack.append((start, mid))
-            stack.append((mid, end))
+    # Density at every point (endpoints inherit mean curvature)
+    density = np.full(n, kappa_mean)
+    density[1:-1] = kappa_capped
+    density += max(kappa_mean * 0.05, 1e-12)  # 5% floor: baseline coverage
 
-    return keep
+    # Uniformly sample in cumulative-density space
+    cumulative = np.cumsum(density)
+    sample_vals = np.linspace(0.0, cumulative[-1], target_n)
+    indices = np.searchsorted(cumulative, sample_vals)
+    indices = np.clip(indices, 0, n - 1)
+    indices = np.union1d(np.unique(indices), [0, n - 1])
+
+    mask = np.zeros(n, dtype=bool)
+    mask[indices] = True
+    return mask
 
 
-def _extract_replay_trajectory(
-    sr: SampleResult,
-    max_distortion_m: float = 10.0,
-    hard_max_points: int = 100,
-) -> dict | None:
-    """Extract full NED trajectory arrays from a replayed sample.
+def _extract_replay_trajectory(sr: SampleResult) -> dict | None:
+    """Extract raw NED trajectory arrays from a replayed sample.
 
     Returns a dict with keys ``north_km``, ``east_km``, ``alt_m``,
-    ``t_s``, ``colour``, ``label``, ``is_terminated``, or *None* if the
-    sample has no trajectory attached.
+    ``t_s``, ``aoa_deg``, ``t_aoa_s``, ``colour``, ``label``,
+    ``is_terminated``, or *None* if the sample has no trajectory attached.
 
-    The trajectory is simplified using Ramer-Douglas-Peucker in 3-D so
-    that no original point deviates more than *max_distortion_m* metres
-    from the rendered polyline.  This uses the minimum number of points
-    needed to represent each trajectory faithfully — longer or more
-    curved paths automatically receive more points than short straight
-    ones.  *hard_max_points* caps the output as a safety net.
+    No simplification is applied here.  Callers that need to reduce point
+    count for rendering should apply their own resampling (e.g.
+    :func:`_curvature_resample_3d`) after extraction.
     """
     if sr.trajectory is None:
         return None
 
     profile = sr.trajectory
-
-    north_km = profile.position_ned[:, 0] / 1000.0
-    east_km = profile.position_ned[:, 1] / 1000.0
-    alt_m = profile.altitude.copy()
-    t_s = profile.time.copy()
-
-    # RDP simplification: keep minimum points within distortion budget
-    if len(north_km) > 2:
-        pts = np.column_stack([north_km, east_km, alt_m / 1000.0])
-        mask = _rdp_simplify_3d(pts, epsilon_km=max_distortion_m / 1000.0)
-        # Safety cap: if RDP still yields too many points, uniformly thin
-        kept = np.where(mask)[0]
-        if len(kept) > hard_max_points:
-            sub = np.linspace(0, len(kept) - 1, hard_max_points, dtype=int)
-            mask = np.zeros(len(north_km), dtype=bool)
-            mask[kept[sub]] = True
-            mask[0] = True
-            mask[-1] = True
-        north_km = north_km[mask]
-        east_km = east_km[mask]
-        alt_m = alt_m[mask]
-        t_s = t_s[mask]
-
     is_terminated = not sr.stability_compliant
     colour = "deeppink" if is_terminated else SCENARIO_COLOURS.get(sr.scenario, "grey")
     label = SCENARIO_LABELS.get(sr.scenario, sr.scenario)
 
     return {
-        "north_km": north_km,
-        "east_km": east_km,
-        "alt_m": alt_m,
-        "t_s": t_s,
+        "north_km": profile.position_ned[:, 0] / 1000.0,
+        "east_km": profile.position_ned[:, 1] / 1000.0,
+        "alt_m": profile.altitude.copy(),
+        "t_s": profile.time.copy(),
         "aoa_deg": profile.aoa_deg,
         "t_aoa_s": profile.time,
         "colour": colour,
@@ -1552,15 +1523,21 @@ def save_replay_3d(
 
     lw, alpha = _replay_line_style(len(trajectories))
 
-    # --- Plot trajectories ---
+    # --- Plot trajectories (curvature-resampled for 3D only) ---
     legend_seen: set[str] = set()
     for t in trajectories:
         legend_key = "Terminated" if t["is_terminated"] else t["label"]
         show_label = legend_key not in legend_seen
         legend_seen.add(legend_key)
 
+        pts = np.column_stack([t["north_km"], t["east_km"], t["alt_m"] / 1000.0])
+        mask = _curvature_resample_3d(pts)
+        north_plot = t["north_km"][mask]
+        east_plot = t["east_km"][mask]
+        alt_plot = t["alt_m"][mask]
+
         ax.plot(
-            t["east_km"], t["north_km"], t["alt_m"] / 1000.0,
+            east_plot, north_plot, alt_plot / 1000.0,
             color=t["colour"], linewidth=lw, alpha=alpha,
         )
         if show_label:
