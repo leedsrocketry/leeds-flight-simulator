@@ -36,6 +36,7 @@ from shapely.geometry import Polygon as ShapelyPolygon
 import yaml
 
 from config import SimulationConfig, SiteConfig
+from dynamics import FlightSummary
 from geography import (
     _lonlat_to_ned,
     load_polygon_ned,
@@ -351,64 +352,23 @@ def _km_formatter(x: float, _: float) -> str:
     return f"{x / M_TO_FT * M_TO_KM:.0f}"
 
 
-def save_altitude_plot(
-    scenarios: dict[str, tuple[np.ndarray, np.ndarray]],
-    burnout_time_s: float,
-    output_dir: Path | None = None,
-) -> Path | plt.Figure:
-    """Generate and save the altitude-time plot.
+def _make_broken_altitude_axes(
+    t_left_max: float,
+    t_right_end: float,
+    alt_max_ft: float,
+) -> tuple[plt.Figure, plt.Axes, plt.Axes, plt.Axes]:
+    """Create a broken-x-axis altitude figure with dual y-axes on the left.
 
-    Parameters
-    ----------
-    scenarios : dict[str, tuple[np.ndarray, np.ndarray]]
-        Mapping of scenario key → (time_s, altitude_m) arrays.
-        Only active scenarios need be present.
-    burnout_time_s : float
-        Motor burnout time in seconds.
-    output_dir : Path or None
-        Directory to save the plot into.  If *None*, return the
-        ``Figure`` for interactive display.
-
-    Returns
-    -------
-    Path or Figure
-        Path to the saved ``altitude_plot.png``.
+    Returns *(fig, ax_l, ax_r, ax_km)* where *ax_l* / *ax_r* are the
+    left and right time panels sharing a y-axis, and *ax_km* is the
+    secondary km axis offset to the left of the primary ft axis.
     """
     LEFT_FRAC = 0.70
     RIGHT_FRAC = 0.30
 
-    active_keys = [k for k in SCENARIO_KEYS if k in scenarios]
-
-    scenarios_s = scenarios  # time arrays already in seconds
-
-    burnout_t_s = burnout_time_s
-
-    # Left panel x-range — all scenarios except premature_main (if it lands late)
-    left_keys = [k for k in active_keys if k != "premature_main"]
-    if not left_keys:
-        left_keys = active_keys
-    t_left_max = np.ceil(
-        max(scenarios_s[k][0][-1] for k in left_keys) * 1.05
-    )
-
-    # Right panel
     t_right_span = t_left_max * (RIGHT_FRAC / LEFT_FRAC)
-    if "premature_main" in scenarios_s:
-        t_pm_land_s = scenarios_s["premature_main"][0][-1]
-    else:
-        t_pm_land_s = 0.0
-    t_right_end = max(
-        t_left_max + 60.0 + t_right_span,
-        t_pm_land_s * 1.01,
-    )
     t_right_start = t_right_end - t_right_span
 
-    # Y limits
-    alt_max_ft = (
-        max(np.max(scenarios[k][1]) for k in active_keys) * M_TO_FT * 1.08
-    )
-
-    # Figure
     fig = plt.figure(figsize=(14, 7))
     fig.subplots_adjust(left=0.14, right=0.97, top=0.93, bottom=0.10)
 
@@ -416,18 +376,6 @@ def save_altitude_plot(
         1, 2, sharey=True,
         gridspec_kw={"width_ratios": [LEFT_FRAC, RIGHT_FRAC], "wspace": 0.04},
     )
-
-    # Draw curves (reversed so Nominal paints on top)
-    handles = []
-    for key in reversed(active_keys):
-        t_s = scenarios_s[key][0]
-        alt_ft = scenarios_s[key][1] * M_TO_FT
-        colour = SCENARIO_COLOURS.get(key, "grey")
-        alpha = SCENARIO_ALPHA.get(key, 0.6)
-        kw = dict(color=colour, linewidth=1.8, alpha=alpha)
-        line, = ax_l.plot(t_s, alt_ft, **kw)
-        ax_r.plot(t_s, alt_ft, **kw)
-        handles.insert(0, line)
 
     # Axis limits
     ax_l.set_xlim(0, t_left_max)
@@ -481,8 +429,78 @@ def save_altitude_plot(
         "Flight Time (s)", ha="center", va="bottom", fontsize=11,
     )
 
+    return fig, ax_l, ax_r, ax_km
+
+
+def save_altitude_plot(
+    scenarios: dict[str, tuple[FlightSummary, np.ndarray, np.ndarray]],
+    burnout_time_s: float,
+    output_dir: Path | None = None,
+) -> Path | plt.Figure:
+    """Generate and save the altitude-time plot.
+
+    Parameters
+    ----------
+    scenarios : dict[str, tuple[FlightSummary, np.ndarray, np.ndarray]]
+        Mapping of scenario key → (summary, time_s, altitude_m).
+        Only active scenarios need be present.
+    burnout_time_s : float
+        Motor burnout time in seconds.
+    output_dir : Path or None
+        Directory to save the plot into.  If *None*, return the
+        ``Figure`` for interactive display.
+
+    Returns
+    -------
+    Path or Figure
+        Path to the saved ``altitude_plot.png``.
+    """
+    active_keys = [k for k in SCENARIO_KEYS if k in scenarios]
+
+    # Left panel x-range — all scenarios except premature_main (if it lands late)
+    left_keys = [k for k in active_keys if k != "premature_main"]
+    if not left_keys:
+        left_keys = active_keys
+    t_left_max = np.ceil(
+        max(scenarios[k][1][-1] for k in left_keys) * 1.05
+    )
+
+    # Right panel
+    LEFT_FRAC = 0.70
+    RIGHT_FRAC = 0.30
+    t_right_span = t_left_max * (RIGHT_FRAC / LEFT_FRAC)
+    if "premature_main" in scenarios:
+        t_pm_land_s = scenarios["premature_main"][1][-1]
+    else:
+        t_pm_land_s = 0.0
+    t_right_end = max(
+        t_left_max + 60.0 + t_right_span,
+        t_pm_land_s * 1.01,
+    )
+
+    # Y limits
+    alt_max_ft = (
+        max(np.max(scenarios[k][2]) for k in active_keys) * M_TO_FT * 1.08
+    )
+
+    fig, ax_l, ax_r, _ax_km = _make_broken_altitude_axes(
+        t_left_max, t_right_end, alt_max_ft,
+    )
+
+    # Draw curves (reversed so Nominal paints on top)
+    handles = []
+    for key in reversed(active_keys):
+        t_s = scenarios[key][1]
+        alt_ft = scenarios[key][2] * M_TO_FT
+        colour = SCENARIO_COLOURS.get(key, "grey")
+        alpha = SCENARIO_ALPHA.get(key, 0.6)
+        kw = dict(color=colour, linewidth=1.8, alpha=alpha)
+        line, = ax_l.plot(t_s, alt_ft, **kw)
+        ax_r.plot(t_s, alt_ft, **kw)
+        handles.insert(0, line)
+
     # Horizontal apogee line
-    apogee_ft = max(np.max(scenarios[k][1]) for k in active_keys) * M_TO_FT
+    apogee_ft = max(np.max(scenarios[k][2]) for k in active_keys) * M_TO_FT
     apogee_km = apogee_ft / M_TO_FT * M_TO_KM
     hline_kw = dict(color="grey", linewidth=0.9, linestyle="--", zorder=0)
     ax_l.axhline(apogee_ft, **hline_kw)
@@ -499,21 +517,13 @@ def save_altitude_plot(
         bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8),
     )
 
-    # Vertical dashed lines at events
+    # Vertical dashed lines at events (times from FlightSummary)
     def fmt_timestamp(t_s: float) -> str:
         total_s = int(round(t_s))
         return f"{total_s // 60}:{total_s % 60:02d}"
 
-    def find_landing_s(t_s: np.ndarray, alt_m: np.ndarray) -> float | None:
-        apogee_idx = int(np.argmax(alt_m))
-        idx = np.where(alt_m[apogee_idx:] <= 0)[0]
-        return float(t_s[apogee_idx + idx[0]]) if len(idx) else None
-
-    apogee_t_s = float(
-        scenarios_s[active_keys[0]][0][
-            np.argmax(scenarios_s[active_keys[0]][1])
-        ]
-    )
+    first_summary = scenarios[active_keys[0]][0]
+    apogee_t_s = first_summary.apogee_time
 
     landing_labels = {
         "nominal": "Nominal Landing",
@@ -523,18 +533,19 @@ def save_altitude_plot(
     }
 
     vline_events: list[tuple[float, str]] = [
-        (burnout_t_s, "Burnout"),
+        (burnout_time_s, "Burnout"),
         (apogee_t_s, "Apogee"),
     ]
     for key in active_keys:
-        t_land = find_landing_s(*scenarios_s[key])
-        if t_land is not None:
-            vline_events.append((t_land, landing_labels.get(key, f"{key} Landing")))
+        summary = scenarios[key][0]
+        vline_events.append(
+            (summary.landing_time, landing_labels.get(key, f"{key} Landing")),
+        )
 
     vline_kw = dict(color="grey", linewidth=0.9, linestyle="--", zorder=0)
     bbox_kw = dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8)
 
-    for idx, (t_s_ev, event_name) in enumerate(vline_events):
+    for _idx, (t_s_ev, event_name) in enumerate(vline_events):
         ax_l.axvline(t_s_ev, **vline_kw)
         ax_r.axvline(t_s_ev, **vline_kw)
 
@@ -1211,26 +1222,62 @@ def save_replay_altitude(
 ) -> Path | plt.Figure:
     """Generate altitude-time replay plot.
 
+    Uses the same broken-x-axis layout as :func:`save_altitude_plot`
+    (via :func:`_make_broken_altitude_axes`) but without vertical event
+    lines or horizontal apogee annotations.
+
     Parameters
     ----------
     replayed : list[SampleResult]
         Replayed samples with trajectory data attached.
     sim_cfg : SimulationConfig
-        Simulation configuration.
+        Simulation configuration (accepted for signature compatibility).
     output_dir : Path or None
         If given, save the figure to ``replay_altitude.png`` in this
         directory and return the path.  If *None*, return the
         ``Figure`` for interactive display.
     """
-    fig, ax = plt.subplots(figsize=(12, 7))
+    _ = sim_cfg
 
-    # Extract trajectories and count per legend group
+    # Extract trajectories
     trajectories: list[dict] = []
     for sr in replayed:
         t = _extract_replay_trajectory(sr)
         if t is not None:
             trajectories.append(t)
 
+    if not trajectories:
+        fig, _ax = plt.subplots()
+        return fig
+
+    # Compute axis limits
+    non_pm = [t for t in trajectories if t["label"] != "Premature Main"]
+    left_ref = non_pm if non_pm else trajectories
+    t_left_max = np.ceil(
+        max(t["t_s"][-1] for t in left_ref) * 1.05
+    )
+
+    LEFT_FRAC = 0.70
+    RIGHT_FRAC = 0.30
+    t_right_span = t_left_max * (RIGHT_FRAC / LEFT_FRAC)
+    t_pm_max = max(
+        (t["t_s"][-1] for t in trajectories if t["label"] == "Premature Main"),
+        default=0.0,
+    )
+    t_right_end = max(
+        t_left_max + 60.0 + t_right_span,
+        t_pm_max * 1.01,
+    )
+
+    alt_max_ft = (
+        max(np.max(t["alt_m"]) for t in trajectories) * M_TO_FT * 1.08
+    )
+
+    fig, ax_l, ax_r, _ax_km = _make_broken_altitude_axes(
+        t_left_max, t_right_end, alt_max_ft,
+    )
+
+    # Legend bookkeeping
     legend_counts: dict[str, int] = {}
     for t in trajectories:
         key = "Terminated" if t["is_terminated"] else t["label"]
@@ -1247,33 +1294,20 @@ def save_replay_altitude(
         show_label = legend_key not in legend_seen
         legend_seen.add(legend_key)
 
-        ax.plot(
-            t["t_s"], alt_ft,
-            color=t["colour"],
-            linewidth=lw,
-            alpha=alpha,
-        )
+        kw = dict(color=t["colour"], linewidth=lw, alpha=alpha)
+        ax_l.plot(t["t_s"], alt_ft, **kw)
+        ax_r.plot(t["t_s"], alt_ft, **kw)
+
         if show_label:
             legend_handles.append(mlines.Line2D(
                 [], [], color=t["colour"], linewidth=2.0,
                 label=f"{legend_key} (n={legend_counts[legend_key]})",
             ))
 
-    # Primary y-axis (feet)
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_ft_formatter))
-    ax.set_ylabel("Altitude (ft)", fontsize=11)
-    ax.set_xlabel("Flight Time (s)", fontsize=11)
-
-    # Secondary y-axis (km)
-    ax_km = ax.twinx()
-    ax_km.set_ylim(ax.get_ylim())
-    ax_km.yaxis.set_major_formatter(mticker.FuncFormatter(_km_formatter))
-    ax_km.set_ylabel("Altitude (km)", fontsize=11)
-
-    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
-    ax.legend(handles=legend_handles, loc="upper right", fontsize=9, framealpha=0.9, edgecolor="gray")
-
-    fig.tight_layout()
+    ax_r.legend(
+        handles=legend_handles, loc="upper right",
+        fontsize=9, frameon=True, framealpha=0.9, edgecolor="gray",
+    )
 
     if output_dir is not None:
         save_path = output_dir / "replay_altitude.png"

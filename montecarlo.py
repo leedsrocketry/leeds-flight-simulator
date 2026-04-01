@@ -624,8 +624,8 @@ class MonteCarloResult:
     warnings: list[str]
     azimuth_mean: float
     inclination_mean: float
-    # Deterministic altitude-time curves (zero uncertainty, mean wind) per scenario.
-    baseline_curves: dict[str, tuple[np.ndarray, np.ndarray]] = field(
+    # Deterministic baseline per scenario: (FlightSummary, time_s, altitude_m).
+    baseline_curves: dict[str, tuple[FlightSummary, np.ndarray, np.ndarray]] = field(
         default_factory=dict,
     )
 
@@ -787,7 +787,7 @@ def run_monte_carlo(
     # One deterministic trajectory per scenario: all uncertainties zero,
     # mean wind profile.  These are cheap (one run each) and give the
     # altitude plot its reference line without re-running later.
-    baseline_curves: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    baseline_curves: dict[str, tuple[FlightSummary, np.ndarray, np.ndarray]] = {}
     for scenario_name in active:
         baseline_params = build_sim_params(
             sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
@@ -801,7 +801,7 @@ def run_monte_carlo(
             baseline_params, SCENARIO_MAP[scenario_name],
             keep_profile=True,
         )
-        baseline_curves[scenario_name] = (profile.time, profile.altitude)
+        baseline_curves[scenario_name] = (summary, profile.time, profile.altitude)
         check_stability_compliance(
             summary, sim_cfg.monte_carlo.acceptance,
             f"Baseline '{scenario_name}'",

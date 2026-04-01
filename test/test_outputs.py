@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import yaml
 
-from dynamics import TrajectoryProfile
+from dynamics import FlightSummary, TrajectoryProfile
 from montecarlo import SampleResult, ScenarioStats, MonteCarloResult, SCENARIO_LABELS
 from optimisation import OptimisationResult
 from config import (
@@ -409,6 +409,30 @@ class TestWriteSummaryYaml:
 # Altitude plot
 # ---------------------------------------------------------------------------
 
+def _stub_summary(
+    apogee_time: float = 60.0,
+    landing_time: float = 300.0,
+    apogee: float = 15000.0,
+) -> FlightSummary:
+    """Minimal FlightSummary for altitude-plot tests."""
+    return FlightSummary(
+        apogee=apogee,
+        apogee_time=apogee_time,
+        apogee_position=np.zeros(3),
+        landing_position=np.zeros(3),
+        landing_time=landing_time,
+        flight_time=landing_time,
+        max_mach=2.0,
+        max_aoa_deg=5.0,
+        min_sm_subsonic=2.0,
+        min_sm_supersonic=2.5,
+        rail_exit_velocity=30.0,
+        footprint_compliant=True,
+        ceiling_compliant=True,
+        stability_compliant=True,
+    )
+
+
 class TestSaveAltitudePlot:
     def test_generates_file(self, tmp_path: Path):
         """Plot file is created and non-empty."""
@@ -420,8 +444,8 @@ class TestSaveAltitudePlot:
         alt[t > 120] = np.maximum(15000.0 - 50.0 * (t[t > 120] - 120.0), 0)
 
         scenarios = {
-            "nominal": (t.copy(), alt.copy()),
-            "ballistic": (t[:150].copy(), alt[:150].copy()),
+            "nominal": (_stub_summary(apogee_time=60.0, landing_time=300.0), t.copy(), alt.copy()),
+            "ballistic": (_stub_summary(apogee_time=60.0, landing_time=225.0), t[:150].copy(), alt[:150].copy()),
         }
         path = save_altitude_plot(scenarios, 6.2, tmp_path)
         assert path.exists()
@@ -434,7 +458,7 @@ class TestSaveAltitudePlot:
         t = np.linspace(0, 300, 100)
         alt = 10000.0 * np.sin(np.pi * t / 100.0)
         alt = np.maximum(alt, 0)
-        scenarios = {"nominal": (t, alt)}
+        scenarios = {"nominal": (_stub_summary(apogee_time=50.0, landing_time=300.0), t, alt)}
         path = save_altitude_plot(scenarios, 5.0, tmp_path)
         assert path.name == "altitude_plot.png"
 
