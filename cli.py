@@ -1,7 +1,10 @@
-"""Command-line interface — ``run`` and ``replay`` commands (§17).
+"""Command-line interface — ``run``, ``replay``, ``verify``, and ``diff`` (§17).
 
 Provides the Click CLI group invoked by ``__main__.py``.  Uses ``rich``
 for progress bars, warning panels, and status output.
+
+See the **Command conventions** comment block (above ``@click.group``)
+for the patterns every command must follow.
 """
 from __future__ import annotations
 
@@ -137,16 +140,6 @@ class _RunDisplay:
         self._warnings.append(text)
         self._refresh()
 
-    # -- errors ----------------------------------------------------------------
-
-    def abort(self, message: str) -> None:
-        """Display a red error panel and exit."""
-        self._live.stop()
-        self._console.print(Panel(
-            message, border_style="red", title="ERROR", title_align="left",
-        ))
-        sys.exit(1)
-
     # -- progress bars ---------------------------------------------------------
 
     @property
@@ -197,6 +190,82 @@ class _RunDisplay:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+class _QuietGroup(click.Group):
+    """Suppress Click's default ``Aborted!`` on keyboard interrupt."""
+
+    def invoke(self, ctx: click.Context):
+        try:
+            return super().invoke(ctx)
+        except KeyboardInterrupt:
+            raise SystemExit(130)
+
+
+def _start_warning_capture(
+    display: _RunDisplay | None = None,
+) -> tuple[list[str], object]:
+    """Begin routing ``warnings.warn()`` to *display* (if provided).
+
+    Returns ``(collected_warnings, original_handler)``.  Call
+    ``_stop_warning_capture(original_handler)`` when finished.
+    """
+    collected: list[str] = []
+    original = warnings.showwarning
+
+    def _hook(
+        message: Warning | str,
+        category: type[Warning],
+        filename: str,
+        lineno: int,
+        file: object = None,
+        line: str | None = None,
+    ) -> None:
+        text = str(message)
+        collected.append(text)
+        if display is not None:
+            display.add_warning(text)
+
+    warnings.showwarning = _hook
+    return collected, original
+
+
+def _stop_warning_capture(original: object) -> None:
+    """Restore the warning handler returned by ``_start_warning_capture``."""
+    warnings.showwarning = original  # type: ignore[assignment]
+
+
+def _error_exit(message: str, display: _RunDisplay | None = None) -> None:
+    """Print a red ERROR panel and terminate the process.
+
+    Stops *display* first if one is running.  All error exits in every
+    command should go through this function so the format is consistent.
+    """
+    if display is not None:
+        display.stop()
+    console.print(Panel(
+        message, border_style="red", title="ERROR", title_align="left",
+    ))
+    raise SystemExit(1)
+
+
+def _print_warnings(warnings_list: list[str]) -> None:
+    """Print collected warnings as a yellow WARNINGS panel.
+
+    Used by commands that do not use a live display (e.g. ``diff``).
+    Commands that *do* use ``_RunDisplay`` show warnings inline via
+    ``_start_warning_capture(display)`` — no need to call this afterwards.
+    """
+    if not warnings_list:
+        return
+    bullet_list = "\n".join(f"• {w}" for w in warnings_list)
+    console.print(Panel(
+        bullet_list,
+        border_style="yellow",
+        title="WARNINGS",
+        title_align="left",
+    ))
+
+
 def _clear_results(results_root: Path, display: _RunDisplay) -> None:
     """Remove the results directory, aborting if any file is locked."""
     if not results_root.exists():
@@ -218,9 +287,10 @@ def _clear_results(results_root: Path, display: _RunDisplay) -> None:
         try:
             shutil.rmtree(results_root, onerror=_force_remove)
         except OSError as exc:
-            display.abort(
+            _error_exit(
                 f"Could not clear results directory — a file may be locked "
-                f"by another program.\n\n{exc}"
+                f"by another program.\n\n{exc}",
+                display,
             )
 
 
@@ -231,7 +301,43 @@ def _clear_results(results_root: Path, display: _RunDisplay) -> None:
 # Click CLI
 # ---------------------------------------------------------------------------
 
-@click.group()
+# ---------------------------------------------------------------------------
+# Command conventions (read before adding or editing commands)
+# ---------------------------------------------------------------------------
+#
+# Every ``@main.command()`` must follow these patterns so the CLI behaves
+# consistently.  Helpers above exist to enforce them — use them rather than
+# rolling your own.
+#
+# Warnings
+#     w, orig = _start_warning_capture(display)   # or no display arg
+#     ...
+#     _stop_warning_capture(orig)
+#   Routes ``warnings.warn()`` to the live display (if provided) and
+#   collects them in a list.  Always restore before ``display.stop()``.
+#   For commands without a display, call ``_print_warnings(w)`` afterwards.
+#
+# Error exit
+#     _error_exit("message", display)             # display is optional
+#   Prints a red ERROR panel and terminates.  Never use bare
+#   ``console.print("[red]Error:...")``, ``sys.exit``, or ``raise
+#   SystemExit`` directly — always go through ``_error_exit`` so every
+#   error looks the same.
+#
+# Vertical spacing
+#   • After ``display.stop()``, print a blank ``console.print()`` to
+#     separate the Rich output from any summary text.
+#   • End the command's output with ``console.print()`` for a trailing
+#     blank line before the shell prompt.
+#   • Never embed ``\n`` in ``console.print()`` strings for spacing —
+#     use a separate ``console.print()`` call instead.
+#
+# Keyboard interrupt
+#   ``_QuietGroup`` suppresses Click's default "Aborted!" message.
+#   Individual commands do not need to catch ``KeyboardInterrupt``.
+#
+
+@click.group(cls=_QuietGroup)
 def main():
     """Leeds Flight Simulator — 6DoF Monte Carlo sounding rocket analysis."""
 
@@ -254,32 +360,15 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
         acc = replace(acc, sm_subsonic_min=-1e9, sm_supersonic_min=-1e9)
         mc = replace(sim_cfg.monte_carlo, acceptance=acc)
         sim_cfg = replace(sim_cfg, monte_carlo=mc)
-    all_warnings: list[str] = []
-
     display = _RunDisplay(console)
-
-    # Route all warnings through the live display
-    def _showwarning(
-        message: Warning | str,
-        category: type[Warning],
-        filename: str,
-        lineno: int,
-        file: object = None,
-        line: str | None = None,
-    ) -> None:
-        text = str(message)
-        all_warnings.append(text)
-        display.add_warning(text)
-
-    warnings.showwarning = _showwarning
+    all_warnings, _orig_warn = _start_warning_capture(display)
 
     # --- Detect wind profile mode ---
     wind_path = sim_cfg.launch.wind_profiles
     if wind_path.is_dir():
         npz_files = sorted(wind_path.glob("*.npz"))
         if not npz_files:
-            console.print(f"[red]Error:[/] No .npz files found in {wind_path}")
-            sys.exit(1)
+            _error_exit(f"No .npz files found in {wind_path}")
     else:
         npz_files = [wind_path]
 
@@ -304,7 +393,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
         try:
             ver_result = run_verification(sim_cfg, vehicle, propellant, aero_model)
         except RuntimeError as exc:
-            display.abort(str(exc))
+            _error_exit(str(exc), display)
         if ver_result.figure is not None:
             if no_popup:
                 ver_fig_path = results_root / "verification_plot.png"
@@ -343,7 +432,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
                 wind_ensemble, _opt_callback,
             )
         except ValueError as exc:
-            display.abort(f"Optimisation failed: {exc}")
+            _error_exit(f"Optimisation failed: {exc}", display)
 
         verdict = "[black on green] PASS [/]"
         display.finish_task(opt_task, description=f"{'Optimisation':<16} {verdict}")
@@ -415,7 +504,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
                 scenario_done_callback=_scenario_done,
             )
         except RuntimeError as exc:
-            display.abort(str(exc))
+            _error_exit(str(exc), display)
 
         # MC warnings
         for w in mc_result.warnings:
@@ -455,6 +544,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
         if isinstance(disp_result, Path):
             figure_paths.append(disp_result)
 
+    _stop_warning_capture(_orig_warn)
     display.stop()
     console.print()
 
@@ -521,42 +611,20 @@ def replay(
     # --- Validate options ---
     single_replay = scenario_name is not None and sample_index is not None
     if not single_replay and not non_compliant and not compliant:
-        console.print(
-            "[red]Error:[/] Specify either --scenario and --sample for a single "
+        _error_exit(
+            "Specify either --scenario and --sample for a single "
             "replay, --non-compliant, or --compliant."
         )
-        sys.exit(1)
     if non_compliant and compliant:
-        console.print(
-            "[red]Error:[/] --non-compliant and --compliant are mutually exclusive."
-        )
-        sys.exit(1)
+        _error_exit("--non-compliant and --compliant are mutually exclusive.")
     if reasons and not non_compliant:
-        console.print(
-            "[red]Error:[/] --reason requires --non-compliant."
-        )
-        sys.exit(1)
+        _error_exit("--reason requires --non-compliant.")
     if sample_index is not None and scenario_name is None:
-        console.print(
-            "[red]Error:[/] --sample requires --scenario."
-        )
-        sys.exit(1)
+        _error_exit("--sample requires --scenario.")
 
     # --- Live display (same style as run command) ---
     display = _RunDisplay(console)
-
-    def _replay_showwarning(
-        message: Warning | str,
-        category: type[Warning],
-        filename: str,
-        lineno: int,
-        file: object = None,
-        line: str | None = None,
-    ) -> None:
-        display.add_warning(str(message))
-
-    original_showwarning = warnings.showwarning
-    warnings.showwarning = _replay_showwarning
+    _, _orig_warn = _start_warning_capture(display)
 
     try:
         display.start()
@@ -593,7 +661,7 @@ def replay(
         else:
             samples_csv = summary_dir / "samples.csv"
             if not samples_csv.exists():
-                display.abort(f"samples.csv not found in {summary_dir}")
+                _error_exit(f"samples.csv not found in {summary_dir}", display)
             if compliant:
                 display.update_status("Replaying compliant samples...")
                 results = replay_compliant(
@@ -623,8 +691,10 @@ def replay(
 
         if not results:
             display.stop()
+            console.print()
             msg = "compliant" if compliant else "non-compliant"
             console.print(f"[green]No {msg} samples to replay.[/]")
+            console.print()
             return
 
         display.update_status("Generating plots...")
@@ -649,12 +719,13 @@ def replay(
                 display.add_warning(f"{name} replay plot not yet implemented.")
 
         display.stop()
+        console.print()
 
         if not no_popup:
             plt.show()
 
     finally:
-        warnings.showwarning = original_showwarning
+        _stop_warning_capture(_orig_warn)
 
 
 @main.command()
@@ -674,25 +745,10 @@ def verify(config_path: Path, inclination: float | None,
     sim_cfg = load_simulation_config(config_path)
 
     if sim_cfg.verification is None:
-        console.print(Panel(
-            "No verification section in config.",
-            border_style="red", title="ERROR", title_align="left",
-        ))
-        sys.exit(1)
+        _error_exit("No verification section in config.")
 
     display = _RunDisplay(console)
-
-    def _showwarning(
-        message: Warning | str,
-        category: type[Warning],
-        filename: str,
-        lineno: int,
-        file: object = None,
-        line: str | None = None,
-    ) -> None:
-        display.add_warning(str(message))
-
-    warnings.showwarning = _showwarning
+    _, _orig_warn = _start_warning_capture(display)
 
     display.start()
 
@@ -706,10 +762,12 @@ def verify(config_path: Path, inclination: float | None,
             inclination_override=inclination,
         )
     except RuntimeError as exc:
-        display.abort(str(exc))
+        _error_exit(str(exc), display)
 
     display.update_status("Done.")
+    _stop_warning_capture(_orig_warn)
     display.stop()
+    console.print()
 
     # --- Dump comparison data to CSV ---
     if dump_csv is not None:
@@ -751,16 +809,18 @@ def verify(config_path: Path, inclination: float | None,
                         f"{cd_cmp.sim_values[i] - cd_cmp.ref_values[i]:.6f}",
                     ])
 
-        console.print(f"\nComparison data written to: {dump_path}")
+        console.print(f"Comparison data written to: {dump_path}")
 
     if ver_result.figure is not None:
         if no_popup:
             fig_path = config_path.parent / "results" / "verification_plot.png"
             fig_path.parent.mkdir(parents=True, exist_ok=True)
             ver_result.figure.savefig(fig_path, dpi=150, bbox_inches="tight")
-            console.print(f"\nFigure saved to: {fig_path}")
+            console.print(f"Figure saved to: {fig_path}")
         else:
             plt.show()
+
+    console.print()
 
 
 # ── diff ──────────────────────────────────────────────────────────────────
@@ -803,25 +863,15 @@ def diff_cmd(config_path: Path, cdx1_path: Path,
     else:
         motor_hint = motor
 
-    old_showwarning = warnings.showwarning
-    caught_warnings: list[str] = []
-
-    def _catch(message, category, *args, **kwargs):
-        caught_warnings.append(str(message))
-
-    warnings.showwarning = _catch
+    caught_warnings, _orig_warn = _start_warning_capture()
 
     cdx1_data = parse_cdx1(cdx1_path, motor_hint=motor_hint)
     yaml_data = load_yaml_for_diff(config_path, veh_path)
     rows = build_comparison(cdx1_data, yaml_data, threshold=threshold)
     sorted_rows = sort_rows(rows)
 
-    warnings.showwarning = old_showwarning
-
-    # Print warnings
-    for w in caught_warnings:
-        console.print(Panel(w, border_style="yellow", title="WARNING",
-                            title_align="left"))
+    _stop_warning_capture(_orig_warn)
+    _print_warnings(caught_warnings)
 
     # Build Rich table
     table = Table(show_header=True, header_style="bold",
@@ -857,12 +907,15 @@ def diff_cmd(config_path: Path, cdx1_path: Path,
 
     # Force-update
     if force:
+        console.print()
         n_veh, n_sim = apply_force_updates(sorted_rows, config_path, veh_path)
         total = n_veh + n_sim
         if total > 0:
             console.print(
-                f"\nUpdated {total} value(s) "
+                f"Updated {total} value(s) "
                 f"({n_veh} in {veh_path.name}, {n_sim} in {config_path.name})."
             )
         else:
-            console.print("\nAll values within threshold — nothing to update.")
+            console.print("All values within threshold — nothing to update.")
+
+    console.print()
