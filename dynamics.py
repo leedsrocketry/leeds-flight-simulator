@@ -670,13 +670,6 @@ def simulate_rail(
                 y[j] = y_new[j]
             k1, k7 = k7, k1  # FSAL swap — no copy
 
-            # Record accepted step
-            if n_hist < max_hist:
-                t_hist[n_hist] = t
-                V_hist[n_hist] = y[1]
-                alt_hist[n_hist] = max(-y[0] * eD, 0.0)
-                n_hist += 1
-
             if y[0] >= rail_length:
                 # Interpolate to exact rail exit (V² linear in s)
                 if y[0] > s_prev:
@@ -686,10 +679,23 @@ def simulate_rail(
                     ds = rail_length - s_prev
                     V_avg = 0.5 * (V_prev + V_exit)
                     t_exit = t_prev + ds / V_avg if V_avg > 1.0e-15 else t_prev + frac * (t - t_prev)
+                    # Record the interpolated exit point (not the overshoot)
+                    if n_hist < max_hist:
+                        t_hist[n_hist] = t_exit
+                        V_hist[n_hist] = V_exit
+                        alt_hist[n_hist] = max(rail_length * (-eD), 0.0)
+                        n_hist += 1
                     return (V_exit, t_exit,
                             rail_length * eN, rail_length * eE, rail_length * eD,
                             t_hist, V_hist, alt_hist, n_hist)
                 break
+
+            # Record accepted step (only if we didn't exit the rail above)
+            if n_hist < max_hist:
+                t_hist[n_hist] = t
+                V_hist[n_hist] = y[1]
+                alt_hist[n_hist] = max(-y[0] * eD, 0.0)
+                n_hist += 1
 
         factor = optimal_step_factor(err)
         h = clamp_step(h * factor, h_min, h_max)
@@ -1152,7 +1158,9 @@ def integrate_sixdof(
             if alpha_rad > aoa_max_rad:
                 stability_compliant = False
                 violation_code = 1
-                break
+                if terminate_at_apogee:
+                    break
+                # Ballistic: record violation but continue to ground impact
 
             # SM check (only when AoA < threshold)
             if alpha_rad < sm_aoa_threshold_rad:
@@ -1162,14 +1170,16 @@ def integrate_sixdof(
                     if sm_cal < sm_subsonic_min:
                         stability_compliant = False
                         violation_code = 2
-                        break
+                        if terminate_at_apogee:
+                            break
                 else:
                     if sm_cal < min_sm_sup:
                         min_sm_sup = sm_cal
                     if sm_cal < sm_supersonic_min:
                         stability_compliant = False
                         violation_code = 2
-                        break
+                        if terminate_at_apogee:
+                            break
 
             # Termination detection
             if terminate_at_apogee:
