@@ -476,10 +476,10 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
 @main.command()
 @click.argument("summary_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--seed", type=int, default=None, help="Override master seed.")
-@click.option("--run", "run_index", type=int, default=None,
-              help="Run (scenario) index. Active scenarios are a subset of: "
-                   + ", ".join(f"{i}={name}" for i, name in enumerate(SCENARIO_LABELS))
-                   + ".")
+@click.option("--scenario", "scenario_name", type=click.Choice(
+    list(SCENARIO_LABELS), case_sensitive=False), default=None,
+    help="Scenario name.  Required with --sample; optional filter for "
+         "--compliant / --non-compliant.")
 @click.option("--sample", "sample_index", type=int, default=None, help="Sample index.")
 @click.option("--non-compliant", is_flag=True, help="Replay all non-compliant samples.")
 @click.option(
@@ -489,7 +489,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
         "Filter --non-compliant to a specific violation type; may be repeated. "
         "footprint: trajectory exited danger area; "
         "ceiling: apogee above altitude ceiling; "
-        "stability: AoA or static margin violation; "
+        "stability: static margin violation; "
         "coastline: landing at sea; "
         "monitor: outside monitored area. "
         "Default: all non-compliant reasons."
@@ -500,7 +500,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
 def replay(
     summary_path: Path,
     seed: int | None,
-    run_index: int | None,
+    scenario_name: str | None,
     sample_index: int | None,
     non_compliant: bool,
     reasons: tuple[str, ...],
@@ -518,10 +518,10 @@ def replay(
     sim_config_path = Path(summary["metadata"]["config"]).resolve()
 
     # --- Validate options ---
-    single_replay = run_index is not None and sample_index is not None
+    single_replay = scenario_name is not None and sample_index is not None
     if not single_replay and not non_compliant and not compliant:
         console.print(
-            "[red]Error:[/] Specify either --run and --sample for a single "
+            "[red]Error:[/] Specify either --scenario and --sample for a single "
             "replay, --non-compliant, or --compliant."
         )
         sys.exit(1)
@@ -533,6 +533,11 @@ def replay(
     if reasons and not non_compliant:
         console.print(
             "[red]Error:[/] --reason requires --non-compliant."
+        )
+        sys.exit(1)
+    if sample_index is not None and scenario_name is None:
+        console.print(
+            "[red]Error:[/] --sample requires --scenario."
         )
         sys.exit(1)
 
@@ -574,13 +579,13 @@ def replay(
         # --- Replay ---
         if single_replay:
             display.update_status(
-                f"Replaying seed={master_seed}, run={run_index}, "
+                f"Replaying seed={master_seed}, scenario={scenario_name}, "
                 f"sample={sample_index}..."
             )
             results = [
                 replay_sample(
                     sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-                    master_seed, run_index, sample_index,
+                    master_seed, scenario_name, sample_index,
                     azimuth_mean, inclination_mean,
                 )
             ]
@@ -589,17 +594,22 @@ def replay(
             if not samples_csv.exists():
                 display.abort(f"samples.csv not found in {summary_dir}")
             if compliant:
-                display.update_status("Replaying all compliant samples...")
+                display.update_status("Replaying compliant samples...")
                 results = replay_compliant(
                     sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
                     master_seed, azimuth_mean, inclination_mean, samples_csv,
+                    scenario_filter=scenario_name,
                 )
             else:
+                filters: list[str] = []
+                if scenario_name:
+                    filters.append(f"scenario={scenario_name}")
                 if reasons:
-                    reason_str = ", ".join(reasons)
+                    filters.append(f"reason={', '.join(reasons)}")
+                if filters:
                     display.update_status(
                         f"Replaying non-compliant samples "
-                        f"(filter: {reason_str})..."
+                        f"({'; '.join(filters)})..."
                     )
                 else:
                     display.update_status("Replaying all non-compliant samples...")
@@ -607,6 +617,7 @@ def replay(
                     sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
                     master_seed, azimuth_mean, inclination_mean, samples_csv,
                     reasons=reasons,
+                    scenario_filter=scenario_name,
                 )
 
         if not results:

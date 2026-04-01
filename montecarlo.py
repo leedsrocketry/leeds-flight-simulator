@@ -829,7 +829,7 @@ def replay_sample(
     aero_model: AeroModel,
     wind_ensemble: WindEnsemble,
     master_seed: int,
-    run_index: int,
+    scenario_name: str,
     sample_index: int,
     azimuth_mean: float,
     inclination_mean: float,
@@ -840,12 +840,12 @@ def replay_sample(
     (``keep_trajectory=True``).
     """
     active = vehicle.recovery.active_scenarios
-    if run_index < 0 or run_index >= len(active):
+    if scenario_name not in active:
         raise ValueError(
-            f"run_index {run_index} out of range for "
-            f"{len(active)} active scenarios: {active}"
+            f"Scenario '{scenario_name}' is not active. "
+            f"Active scenarios: {active}"
         )
-    scenario_name = active[run_index]
+    run_index = active.index(scenario_name)
 
     # Prepare geofence
     (poly_e, poly_n, buffered_ceiling,
@@ -896,10 +896,11 @@ def replay_non_compliant(
     inclination_mean: float,
     samples_csv_path: Path,
     reasons: tuple[str, ...] = (),
+    scenario_filter: str | None = None,
 ) -> list[SampleResult]:
     """Replay all non-compliant samples from a previous run.
 
-    Reads the samples CSV to find non-compliant (sample_id, run_index) pairs,
+    Reads the samples CSV to find non-compliant (sample_id, scenario) pairs,
     then replays each one with full trajectory data.
 
     Parameters
@@ -909,16 +910,22 @@ def replay_non_compliant(
         least one of the given reason keywords.  Valid keywords are the keys
         of :data:`REASON_COLS`.  When empty (default) all non-compliant
         samples are replayed.
+    scenario_filter
+        Optional scenario name to restrict replay to a single scenario.
     """
     import csv
 
     def _is_false(val: str) -> bool:
         return val.strip().lower() in ("false", "0", "no")
 
-    non_compliant: list[tuple[int, int]] = []
+    pairs: list[tuple[str, int]] = []
     with open(samples_csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            scenario = row["scenario"].strip()
+            if scenario_filter is not None and scenario != scenario_filter:
+                continue
+
             # A sample is non-compliant if any _compliant column is False
             compliance_cols = [c for c in row if c.endswith("_compliant")]
             is_non_compliant = any(_is_false(row[c]) for c in compliance_cols)
@@ -935,20 +942,15 @@ def replay_non_compliant(
                 if not matched:
                     continue
 
-            sid = int(row["sample_id"])
-            scenario = row["scenario"].strip()
             active = vehicle.recovery.active_scenarios
             if scenario in active:
-                ridx = active.index(scenario)
-            else:
-                continue
-            non_compliant.append((ridx, sid))
+                pairs.append((scenario, int(row["sample_id"])))
 
     results: list[SampleResult] = []
-    for run_idx, sample_idx in non_compliant:
+    for scen, sample_idx in pairs:
         sr = replay_sample(
             sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-            master_seed, run_idx, sample_idx,
+            master_seed, scen, sample_idx,
             azimuth_mean, inclination_mean,
         )
         results.append(sr)
@@ -966,18 +968,28 @@ def replay_compliant(
     azimuth_mean: float,
     inclination_mean: float,
     samples_csv_path: Path,
+    scenario_filter: str | None = None,
 ) -> list[SampleResult]:
     """Replay all compliant samples from a previous run.
 
-    Reads the samples CSV to find fully-compliant (sample_id, run_index) pairs,
+    Reads the samples CSV to find fully-compliant (sample_id, scenario) pairs,
     then replays each one with full trajectory data.
+
+    Parameters
+    ----------
+    scenario_filter
+        Optional scenario name to restrict replay to a single scenario.
     """
     import csv
 
-    compliant_pairs: list[tuple[int, int]] = []
+    pairs: list[tuple[str, int]] = []
     with open(samples_csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            scenario = row["scenario"].strip()
+            if scenario_filter is not None and scenario != scenario_filter:
+                continue
+
             compliance_cols = [
                 c for c in row if c.endswith("_compliant")
             ]
@@ -986,20 +998,15 @@ def replay_compliant(
                 for c in compliance_cols
             )
             if is_compliant:
-                sid = int(row["sample_id"])
-                scenario = row["scenario"].strip()
                 active = vehicle.recovery.active_scenarios
                 if scenario in active:
-                    ridx = active.index(scenario)
-                else:
-                    continue
-                compliant_pairs.append((ridx, sid))
+                    pairs.append((scenario, int(row["sample_id"])))
 
     results: list[SampleResult] = []
-    for run_idx, sample_idx in compliant_pairs:
+    for scen, sample_idx in pairs:
         sr = replay_sample(
             sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-            master_seed, run_idx, sample_idx,
+            master_seed, scen, sample_idx,
             azimuth_mean, inclination_mean,
         )
         results.append(sr)

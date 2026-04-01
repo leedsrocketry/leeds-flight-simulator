@@ -96,7 +96,7 @@ python . run simulations/g2b2-safety-case/cape-wrath.yaml -q
 Replay a specific sample:
 
 ```
-python . replay simulations/g2b2-safety-case/results/summary.yaml --run 3 --sample 117
+python . replay simulations/g2b2-safety-case/results/summary.yaml --scenario nominal --sample 117
 ```
 
 Replay all non-compliant samples from a completed run:
@@ -105,11 +105,13 @@ Replay all non-compliant samples from a completed run:
 python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant
 ```
 
-Replay only samples that failed a specific check — multiple `--reason` flags may be combined:
+Filter to a single scenario, a specific violation reason, or both — flags combine naturally:
 
 ```
+python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --scenario ballistic
 python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --reason stability
-python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --reason footprint --reason ceiling
+python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --scenario drogue_only --reason footprint
+python . replay simulations/g2b2-safety-case/results/summary.yaml --compliant --scenario nominal
 ```
 
 Valid reason keywords:
@@ -118,7 +120,7 @@ Valid reason keywords:
 |---------|-----------|
 | `footprint` | Trajectory exited the buffered danger area |
 | `ceiling` | Apogee above the buffered altitude ceiling |
-| `stability` | AoA exceeded maximum or static margin below minimum |
+| `stability` | Static margin below minimum |
 | `coastline` | Landing point is at sea |
 | `monitor` | Landing outside the monitored area |
 
@@ -127,8 +129,8 @@ Valid reason keywords:
 | Flag | Effect |
 |------|--------|
 | `--seed INTEGER` | Override master seed |
-| `--run INTEGER` | Scenario index |
-| `--sample INTEGER` | Sample index |
+| `--scenario NAME` | Scenario name (`nominal`, `ballistic`, `drogue_only`, `premature_main`). Required with `--sample`; optional filter for `--compliant` / `--non-compliant` |
+| `--sample INTEGER` | Sample index (requires `--scenario`) |
 | `--non-compliant` | Replay all non-compliant samples |
 | `--reason KEYWORD` | Filter `--non-compliant` by violation type; repeatable (see above) |
 | `--compliant` | Replay all compliant samples |
@@ -342,7 +344,7 @@ Mean altitude profile vs. time for each active descent scenario.
 
 ## Replaying Samples
 
-Every sample is deterministic given the master seed, run index, and sample index. No full trajectory data is stored — any sample can be replayed exactly from these three values.
+Every sample is deterministic given the master seed, scenario name, and sample index. No full trajectory data is stored — any sample can be replayed exactly from these three values.
 
 Replay displays figures interactively by default. Pass `-q` to save them to disk instead. If multiple samples are replayed, all trajectories are overlaid on the same figures:
 
