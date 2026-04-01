@@ -9,3 +9,4 @@ dist/
 CLAUDE.md
 .map_cache/
 debug/
+results/

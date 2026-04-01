@@ -344,13 +344,13 @@ Results are saved to `results/`, relative to the directory containing `simulatio
 
 ### Dispersion Plot
 
-![Dispersion plot](simulations/g2b2-safety-case/results/dispersion_plot.png)
+![Dispersion plot](figures/dispersion_plot.png)
 
 Landing points colour-coded by descent scenario, overlaid on an OS Maps base map with the danger area, buffer boundary, coastline, monitor station coverage circles, map markers, and launch site.
 
 ### Altitude Plot
 
-![Altitude plot](simulations/g2b2-safety-case/results/altitude_plot.png)
+![Altitude plot](figures/altitude_plot.png)
 
 Mean altitude profile vs. time for each active descent scenario.
 
@@ -367,15 +367,15 @@ Replay displays figures interactively by default. Pass `-q` to save them to disk
 
 The 3D isometric view shows the full trajectory from rail exit through descent, with the danger area and coastline projected onto the ground plane:
 
-![3D replay](simulations/g2b2-safety-case/results/replay_3d.png)
+![3D replay](figures/replay_3d.png)
 
 The plan view provides a top-down perspective for checking lateral dispersion against the danger area boundary:
 
-![Plan view replay](simulations/g2b2-safety-case/results/replay_plan_view.png)
+![Plan view replay](figures/replay_plan_view.png)
 
 The altitude-time plot shows the complete flight profile, highlighting the transition between ascent and descent phases:
 
-![Altitude replay](simulations/g2b2-safety-case/results/replay_altitude.png)
+![Altitude replay](figures/replay_altitude.png)
 
 
 ## Verification
@@ -424,7 +424,7 @@ python . verify simulations/g2b2-safety-case/cape-wrath.yaml --dump-csv debug/ve
 
 By default, the comparison figure is displayed interactively with linked zoom/pan across the time-series subplots. Pass `-q` to save to file instead.
 
-![Verification plot](simulations/g2b2-safety-case/results/verification_plot.png)
+![Verification plot](figures/verification_plot.png)
 
 Five time-series subplots (altitude, Mach, stability margin, thrust, mass) share a linked time axis. The bottom-right subplot shows drag coefficient vs Mach number over the reference simulation's Mach range. Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail).
 
