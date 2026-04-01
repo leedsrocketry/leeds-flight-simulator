@@ -83,7 +83,7 @@ def _dummy_rail_aero():
     re_g = np.array([0.0, 1e8], dtype=np.float64)
     alpha_g = np.array([0.0, 180.0], dtype=np.float64)
     ca_tbl = np.zeros((2, 2, 2), dtype=np.float64)
-    return mach_g, re_g, alpha_g, ca_tbl
+    return mach_g, re_g, alpha_g, ca_tbl, ca_tbl
 
 
 def _nonzero_rail_aero(ca_val: float):
@@ -92,7 +92,7 @@ def _nonzero_rail_aero(ca_val: float):
     re_g = np.array([0.0, 1e8], dtype=np.float64)
     alpha_g = np.array([0.0, 180.0], dtype=np.float64)
     ca_tbl = np.full((2, 2, 2), ca_val, dtype=np.float64)
-    return mach_g, re_g, alpha_g, ca_tbl
+    return mach_g, re_g, alpha_g, ca_tbl, ca_tbl
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +291,7 @@ def test_rail_no_drag_no_gravity():
 
     times, thrusts = _constant_thrust_motor(F, burn_time)
     total_impulse = float(np.trapz(thrusts, times))
-    mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
+    mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on = _dummy_rail_aero()
 
     # Horizontal rail (0° inclination) pointing north (0° azimuth)
     # → no gravity component along rail
@@ -309,7 +309,9 @@ def test_rail_no_drag_no_gravity():
         mach_g=mach_g,
         re_g=re_g,
         alpha_g=alpha_g,
-        ca_tbl=ca_tbl,
+        ca_tbl_off=ca_tbl_off,
+        ca_tbl_on=ca_tbl_on,
+        t_burnout=burn_time,
         A_ref=0.01,               # irrelevant with zero C_A
         length=1.0,
         site_elevation=0.0,
@@ -344,7 +346,7 @@ def test_rail_vertical_with_gravity():
 
     times, thrusts = _constant_thrust_motor(F, burn_time)
     total_impulse = float(np.trapz(thrusts, times))
-    mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
+    mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on = _dummy_rail_aero()
 
     V_exit, t_exit, rN, rE, rD, _, _, _, _ = simulate_rail(
         rail_azimuth_rad=0.0,
@@ -360,7 +362,9 @@ def test_rail_vertical_with_gravity():
         mach_g=mach_g,
         re_g=re_g,
         alpha_g=alpha_g,
-        ca_tbl=ca_tbl,
+        ca_tbl_off=ca_tbl_off,
+        ca_tbl_on=ca_tbl_on,
+        t_burnout=burn_time,
         A_ref=0.01,
         length=1.0,
         site_elevation=0.0,
@@ -394,7 +398,7 @@ def test_rail_exit_position_direction(az_deg, inc_deg):
 
     times, thrusts = _constant_thrust_motor(F, burn_time)
     total_impulse = float(np.trapz(thrusts, times))
-    mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
+    mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on = _dummy_rail_aero()
 
     az = math.radians(az_deg)
     inc = math.radians(inc_deg)
@@ -403,7 +407,7 @@ def test_rail_exit_position_direction(az_deg, inc_deg):
         az, inc, rail_length,
         times, thrusts, 0.0, 1.0,
         m_prop_0, total_impulse, m_dry,
-        mach_g, re_g, alpha_g, ca_tbl,
+        mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on, burn_time,
         0.01, 1.0, 0.0, 0.0, 1e-9, 1e-9,
     )
 
@@ -433,7 +437,7 @@ def test_rail_impulse_factor():
 
     times, thrusts = _constant_thrust_motor(F, burn_time)
     total_impulse = float(np.trapz(thrusts, times))
-    mach_g, re_g, alpha_g, ca_tbl = _dummy_rail_aero()
+    mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on = _dummy_rail_aero()
 
     common = dict(
         rail_azimuth_rad=0.0,
@@ -442,7 +446,8 @@ def test_rail_impulse_factor():
         motor_times=times, motor_thrusts=thrusts,
         nozzle_area=0.0,
         m_prop_0=m_prop_0, total_impulse=total_impulse, m_dry=m_dry,
-        mach_g=mach_g, re_g=re_g, alpha_g=alpha_g, ca_tbl=ca_tbl,
+        mach_g=mach_g, re_g=re_g, alpha_g=alpha_g,
+        ca_tbl_off=ca_tbl_off, ca_tbl_on=ca_tbl_on, t_burnout=burn_time,
         A_ref=0.01, length=1.0,
         site_elevation=0.0, t_offset=0.0,
         rtol=1e-9, atol=1e-9,
@@ -490,7 +495,7 @@ def test_sixdof_gravity_only_apogee():
         10.0, 0.5, 0.5,       # m_dry, cg_dry, motor_cg_loaded
         0.01, 0.01, 0.01, 0.0, 0.1,  # I_roll_dry, I_lat_dry, prop_r_outer, prop_r_inner_0, prop_length
         1.0,                   # impulse_factor
-        mg, rg, ag, cat, cnt, cpt, cnc, cpc,
+        mg, rg, ag, cat, cat, cnt, cpt, cnc, cpc,
         False, cnaf,           # no components
         0.1, 1.0, 0.01, 0.05, # diameter, length, A_ref, fin_cp_radius
         wa, we, wn,
@@ -537,7 +542,8 @@ def test_integrator_convergence():
         prop_r_outer=0.01, prop_r_inner_0=0.0, prop_length=0.1,
         impulse_factor=1.0,
         mach_g=mg, re_g=rg, alpha_g=ag,
-        ca_tbl=cat, cn_tbl=cnt, cp_tbl=cpt,
+        ca_tbl_off=cat, ca_tbl_on=cat,
+        cn_tbl=cnt, cp_tbl=cpt,
         cn_comp=cnc, cp_comp=cpc,
         has_components=False, cn_alpha_fins_tbl=cnaf,
         diameter=0.1, ref_length=1.0, A_ref=0.01, fin_cp_radius=0.05,
@@ -632,7 +638,7 @@ def test_sixdof_deriv_gravity_direction():
         10.0, 0.5, 0.5,
         0.01, 0.01, 0.01, 0.0, 0.1,  # I_roll_dry, I_lat_dry, prop_r_outer, prop_r_inner_0, prop_length
         1.0,
-        mg, rg, ag, cat, cnt, cpt, cnc, cpc, False, cnaf,
+        mg, rg, ag, cat, cat, 0.001, cnt, cpt, cnc, cpc, False, cnaf,
         0.1, 1.0, 0.01, 0.05,
         wa, we, wn,
         0.0,

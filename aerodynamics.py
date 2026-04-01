@@ -4,7 +4,11 @@ Loads per-component RASAero II Aeroplot CSVs, assembles per-component and
 whole-vehicle tables on a regular grid, and exposes Numba @njit hot-loop
 functions.
 
-CSV format (one header row, then data)::
+CSV format (one header row, then data).  7-column (recommended)::
+
+    Mach,Reynolds,AoA_deg,CA_off,CA_on,CN,CP_m
+
+or 6-column (CA used for both power-on and power-off)::
 
     Mach,Reynolds,AoA_deg,CA,CN,CP_m
 
@@ -33,7 +37,8 @@ build_aero_model(aero_dir)  →  AeroModel
 
     aero_forces_moments(
         mach_g, re_g, alpha_g,
-        ca_tbl, cn_tbl, cp_tbl, cn_comp, cp_comp, has_components,
+        ca_tbl_off, ca_tbl_on, power_on,
+        cn_tbl, cp_tbl, cn_comp, cp_comp, has_components,
         M, Re, rho, V, A_ref,
         u_rel, v_rel, w_rel, q_rate, r_rate, cg,
     ) → (F_x, F_y, F_z, tau_pitch, tau_yaw, cp_whole)
@@ -72,7 +77,8 @@ class AeroModel:
     alpha_grid: np.ndarray    # (NA,)  AoA in degrees
 
     # Whole-vehicle 3-D tables [NM, NR, NA]
-    ca_table: np.ndarray      # axial force coefficient C_A (always the sum)
+    ca_table_off: np.ndarray  # axial force coefficient C_A, power-off (always the sum)
+    ca_table_on: np.ndarray   # axial force coefficient C_A, power-on  (always the sum)
     cn_table: np.ndarray      # C_N — used in single-file fallback; zeros in per-component mode
     cp_table: np.ndarray      # C_P — used in single-file fallback; zeros in per-component mode
 
@@ -152,28 +158,14 @@ def build_aero_model(
 # ---------------------------------------------------------------------------
 
 def _read_csv(path: Path) -> np.ndarray:
-    """Load a CSV → contiguous (N, 6) float64: Mach, Re, AoA_deg, CA, CN, CP_m.
+    """Load a CSV → contiguous (N, 7) float64: Mach, Re, AoA_deg, CA_off, CA_on, CN, CP_m.
 
-    Supports both the canonical 6-column layout and the full 16-column
-    RASAero II Aeroplot export.  When the header contains RASAero-style
-    column names the relevant columns are selected by name; otherwise
-    the first six columns are used as-is.
+    Supports two layouts:
+
+    * **7-column**: ``Mach,Reynolds,AoA_deg,CA_off,CA_on,CN,CP_m``
+    * **6-column**: ``Mach,Reynolds,AoA_deg,CA,CN,CP_m``
+      — the single CA column is duplicated into both CA_off and CA_on.
     """
-    # --- Read header to decide column mapping ---
-    with open(path, encoding="utf-8") as f:
-        header_line = f.readline().strip()
-    headers = [h.strip() for h in header_line.split(",")]
-
-    # RASAero II header mapping (case-insensitive substring match)
-    _RASAERO_MAP = {
-        "Mach":             "Mach",
-        "Reynolds Number":  "Re",
-        "Alpha":            "AoA_deg",
-        "CA Power-Off":     "CA",
-        "CN":               "CN",
-        "CP_m":             "CP_m",
-    }
-
     try:
         data = np.loadtxt(path, delimiter=",", skiprows=1, dtype=np.float64)
     except Exception as exc:
@@ -181,44 +173,23 @@ def _read_csv(path: Path) -> np.ndarray:
     if data.ndim == 1:
         data = data[np.newaxis, :]
 
-    # Check if we have a RASAero-style wide CSV
-    header_lower = [h.lower() for h in headers]
-    is_rasaero = (
-        len(headers) > 6
-        and "alpha" in header_lower
-        and any("reynolds" in h for h in header_lower)
-    )
-
-    if is_rasaero:
-        # Build index map: find each required column by exact header match
-        col_indices: list[int] = []
-        for csv_name in _RASAERO_MAP:
-            # Find exact match first, then substring
-            idx: int | None = None
-            for i, h in enumerate(headers):
-                if h == csv_name:
-                    idx = i
-                    break
-            if idx is None:
-                raise ValueError(
-                    f"{path.name}: cannot find column '{csv_name}' in header: {headers}"
-                )
-            col_indices.append(idx)
-
-        if data.shape[1] < max(col_indices) + 1:
-            raise ValueError(
-                f"{path.name}: expected ≥{max(col_indices) + 1} columns, "
-                f"got {data.shape[1]}"
-            )
-        data = data[:, col_indices]
+    if data.shape[1] >= 7:
+        # 7-column format: Mach, Re, AoA_deg, CA_off, CA_on, CN, CP_m
+        data = data[:, :7]
+    elif data.shape[1] >= 6:
+        # 6-column format: Mach, Re, AoA_deg, CA, CN, CP_m
+        d6 = data[:, :6]
+        # Duplicate CA into CA_off and CA_on
+        data = np.empty((d6.shape[0], 7), dtype=np.float64)
+        data[:, :3] = d6[:, :3]       # Mach, Re, AoA_deg
+        data[:, 3]  = d6[:, 3]        # CA_off = CA
+        data[:, 4]  = d6[:, 3]        # CA_on  = CA
+        data[:, 5:] = d6[:, 4:]       # CN, CP_m
     else:
-        # Canonical 6-column format
-        if data.shape[1] < 6:
-            raise ValueError(
-                f"{path.name}: expected ≥6 columns "
-                f"(Mach,Reynolds,AoA_deg,CA,CN,CP_m), got {data.shape[1]}"
-            )
-        data = data[:, :6]
+        raise ValueError(
+            f"{path.name}: expected ≥6 columns "
+            f"(Mach,Reynolds,AoA_deg,CA,CN,CP_m), got {data.shape[1]}"
+        )
 
     return np.ascontiguousarray(data, dtype=np.float64)
 
@@ -295,8 +266,8 @@ def _resample_3d(
     mach_g: np.ndarray,
     re_g: np.ndarray,
     alpha_g: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Resample CA, CN, CP from *src* onto the structured target grid.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Resample CA_off, CA_on, CN, CP from *src* onto the structured target grid.
 
     *src* must be a structured (complete Cartesian product) grid — this is
     always the case for RASAero II Aeroplot output.  Extrapolation is clamped
@@ -305,13 +276,13 @@ def _resample_3d(
     Parameters
     ----------
     src:
-        (N, 6) source data: Mach, Re, AoA_deg, CA, CN, CP_m.
+        (N, 7) source data: Mach, Re, AoA_deg, CA_off, CA_on, CN, CP_m.
     mach_g, re_g, alpha_g:
         Target grid axes (sorted 1-D arrays).
 
     Returns
     -------
-    ca, cn, cp:
+    ca_off, ca_on, cn, cp:
         Each of shape ``(NM, NR, NA)``, C-contiguous float64.
     """
     m_src = np.unique(src[:, 0])
@@ -331,11 +302,11 @@ def _resample_3d(
     s = src[idx]
 
     out: list[np.ndarray] = []
-    for col in (3, 4, 5):  # CA, CN, CP
+    for col in (3, 4, 5, 6):  # CA_off, CA_on, CN, CP
         tbl = s[:, col].reshape(NM_s, NR_s, NA_s)
         out.append(_trilinear(m_src, r_src, a_src, tbl, mach_g, re_g, alpha_g))
 
-    return out[0], out[1], out[2]
+    return out[0], out[1], out[2], out[3]
 
 
 def _trilinear(
@@ -443,14 +414,15 @@ def _fit_cna_cp(
 def _build_single(path: Path) -> AeroModel:
     src = _collapse_covarying_re(_read_csv(path))
     mach_g, re_g, alpha_g = _unique_axes(src)
-    ca, cn, cp = _resample_3d(src, mach_g, re_g, alpha_g)
+    ca_off, ca_on, cn, cp = _resample_3d(src, mach_g, re_g, alpha_g)
     NM, NR, NA = len(mach_g), len(re_g), len(alpha_g)
     zeros_2d = np.zeros((NM, NR), dtype=np.float64)
     # Dummy per-component arrays — shape (1, NM, NR, NA), never used when has_components=False
     dummy = np.zeros((1, NM, NR, NA), dtype=np.float64)
     return AeroModel(
         mach_grid=mach_g, re_grid=re_g, alpha_grid=alpha_g,
-        ca_table=ca, cn_table=cn, cp_table=cp,
+        ca_table_off=ca_off, ca_table_on=ca_on,
+        cn_table=cn, cp_table=cp,
         cn_comp=dummy, cp_comp=dummy,
         cn_alpha_fins=zeros_2d,
         has_components=False,
@@ -477,15 +449,17 @@ def _build_components(
     mach_g, re_g, alpha_g = _unique_axes(*datasets.values())
 
     NM, NR, NA = len(mach_g), len(re_g), len(alpha_g)
-    ca_tot = np.zeros((NM, NR, NA), dtype=np.float64)
+    ca_off_tot = np.zeros((NM, NR, NA), dtype=np.float64)
+    ca_on_tot  = np.zeros((NM, NR, NA), dtype=np.float64)
     cna_fins = np.zeros((NM, NR), dtype=np.float64)
 
     cn_comp_list: list[np.ndarray] = []
     cp_comp_list: list[np.ndarray] = []
 
     for path, src in datasets.items():
-        ca_i, cn_i, cp_i = _resample_3d(src, mach_g, re_g, alpha_g)
-        ca_tot += ca_i
+        ca_off_i, ca_on_i, cn_i, cp_i = _resample_3d(src, mach_g, re_g, alpha_g)
+        ca_off_tot += ca_off_i
+        ca_on_tot  += ca_on_i
         cn_comp_list.append(np.ascontiguousarray(cn_i, dtype=np.float64))
         cp_comp_list.append(np.ascontiguousarray(cp_i, dtype=np.float64))
 
@@ -502,7 +476,8 @@ def _build_components(
 
     return AeroModel(
         mach_grid=mach_g, re_grid=re_g, alpha_grid=alpha_g,
-        ca_table=np.ascontiguousarray(ca_tot, dtype=np.float64),
+        ca_table_off=np.ascontiguousarray(ca_off_tot, dtype=np.float64),
+        ca_table_on=np.ascontiguousarray(ca_on_tot, dtype=np.float64),
         cn_table=zeros_3d,
         cp_table=zeros_3d,
         cn_comp=cn_comp,
@@ -674,7 +649,9 @@ def aero_forces_moments(
     mach_g: np.ndarray,
     re_g: np.ndarray,
     alpha_g: np.ndarray,
-    ca_tbl: np.ndarray,
+    ca_tbl_off: np.ndarray,
+    ca_tbl_on: np.ndarray,
+    power_on: bool,
     cn_tbl: np.ndarray,
     cp_tbl: np.ndarray,
     cn_comp: np.ndarray,
@@ -701,7 +678,12 @@ def aero_forces_moments(
 
     Parameters
     ----------
-    ca_tbl, cn_tbl, cp_tbl:
+    ca_tbl_off, ca_tbl_on:
+        Whole-vehicle 3-D CA tables [NM, NR, NA] for power-off and
+        power-on respectively.  ``power_on`` selects which is used.
+    power_on:
+        True when the motor is burning (use ``ca_tbl_on``).
+    cn_tbl, cp_tbl:
         Whole-vehicle 3-D tables [NM, NR, NA].  ``cn_tbl`` and ``cp_tbl``
         are used only in single-file (fallback) mode.
     cn_comp, cp_comp:
@@ -730,6 +712,7 @@ def aero_forces_moments(
     alpha_bulk_deg = math.atan2(V_lat_bulk, u_rel) * _RAD_TO_DEG
 
     # Axial force — whole-vehicle C_A at bulk AoA (§6.4)
+    ca_tbl = ca_tbl_on if power_on else ca_tbl_off
     C_A = _interp3(mach_g, re_g, alpha_g, ca_tbl, M, Re, alpha_bulk_deg)
     F_x = -0.5 * rho * V * V * A_ref * C_A
 

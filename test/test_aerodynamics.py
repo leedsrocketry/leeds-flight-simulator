@@ -193,7 +193,8 @@ def test_grid_shapes_consistent(tmp_path):
     model = build_aero_model(_component_dir(tmp_path))
     NM, NR, NA = len(model.mach_grid), len(model.re_grid), len(model.alpha_grid)
     N = model.cn_comp.shape[0]
-    assert model.ca_table.shape == (NM, NR, NA)
+    assert model.ca_table_off.shape == (NM, NR, NA)
+    assert model.ca_table_on.shape == (NM, NR, NA)
     assert model.cn_comp.shape == (N, NM, NR, NA)
     assert model.cp_comp.shape == (N, NM, NR, NA)
     assert model.cn_alpha_fins.shape == (NM, NR)
@@ -223,7 +224,7 @@ def test_ca_at_exact_grid_point(tmp_path):
         warnings.simplefilter("ignore")
         m = build_aero_model(_single_dir(tmp_path))
     # At M=0.5, Re=1e6, alpha=0 → CA=0.5
-    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table,
+    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table_off,
                    0.5, 1e6, 0.0)
     assert result == pytest.approx(0.5, rel=1e-6)
 
@@ -233,7 +234,7 @@ def test_ca_at_constant_table(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         m = build_aero_model(_single_dir(tmp_path))
-    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table,
+    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table_off,
                    1.0, 1e6, math.radians(7.0))
     assert result == pytest.approx(0.5, rel=1e-4)
 
@@ -242,7 +243,7 @@ def test_ca_at_clamped_below_min_mach(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         m = build_aero_model(_single_dir(tmp_path))
-    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table,
+    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table_off,
                    0.01, 1e6, 0.0)
     assert result == pytest.approx(0.5, rel=1e-4)
 
@@ -251,7 +252,7 @@ def test_ca_at_clamped_above_max_alpha(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         m = build_aero_model(_single_dir(tmp_path))
-    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table,
+    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table_off,
                    0.5, 1e6, math.radians(90.0))
     assert result == pytest.approx(0.5, rel=1e-4)
 
@@ -296,7 +297,7 @@ def test_ca_total_is_sum_of_components(tmp_path):
     """At any (M, Re, alpha): CA_total = CA_nosecone + CA_fins."""
     m = build_aero_model(_component_dir(tmp_path))
     # Both components have constant CA: 0.3 + 0.2 = 0.5
-    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table,
+    result = ca_at(m.mach_grid, m.re_grid, m.alpha_grid, m.ca_table_off,
                    0.5, 1e6, math.radians(5.0))
     assert result == pytest.approx(0.5, rel=1e-4)
 
@@ -324,7 +325,8 @@ def test_cp_moment_balance(tmp_path):
     w_rel = V * math.sin(alpha_rad)
     _, _, _, _, _, cp_whole = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
-        m.ca_table, m.cn_table, m.cp_table,
+        m.ca_table_off, m.ca_table_on, False,
+        m.cn_table, m.cp_table,
         m.cn_comp, m.cp_comp, m.has_components,
         0.5, 1e6,
         1.0, V, 1.0,        # rho, V, A_ref
@@ -367,7 +369,8 @@ def test_pitch_damping_matches_mandell_small_q(tmp_path, q_rate):
     # u_rel = V, v_rel = w_rel = 0  → zero bulk AoA, pure rotation
     _, _, _, tau_pitch, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
-        m.ca_table, m.cn_table, m.cp_table,
+        m.ca_table_off, m.ca_table_on, False,
+        m.cn_table, m.cp_table,
         m.cn_comp, m.cp_comp, m.has_components,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
@@ -387,7 +390,8 @@ def test_yaw_damping_matches_mandell_small_r(tmp_path, q_rate):
 
     _, _, _, _, tau_yaw, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
-        m.ca_table, m.cn_table, m.cp_table,
+        m.ca_table_off, m.ca_table_on, False,
+        m.cn_table, m.cp_table,
         m.cn_comp, m.cp_comp, m.has_components,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
@@ -409,7 +413,8 @@ def test_pitch_damping_opposes_positive_q(tmp_path):
     m = _damp_model(tmp_path)
     _, _, _, tau_pitch, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
-        m.ca_table, m.cn_table, m.cp_table,
+        m.ca_table_off, m.ca_table_on, False,
+        m.cn_table, m.cp_table,
         m.cn_comp, m.cp_comp, m.has_components,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
@@ -425,7 +430,8 @@ def test_yaw_damping_opposes_positive_r(tmp_path):
     m = _damp_model(tmp_path)
     _, _, _, _, tau_yaw, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
-        m.ca_table, m.cn_table, m.cp_table,
+        m.ca_table_off, m.ca_table_on, False,
+        m.cn_table, m.cp_table,
         m.cn_comp, m.cp_comp, m.has_components,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
@@ -449,7 +455,8 @@ def test_restoring_moment_no_rotation(tmp_path):
 
     _, _, _, tau_pitch, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
-        m.ca_table, m.cn_table, m.cp_table,
+        m.ca_table_off, m.ca_table_on, False,
+        m.cn_table, m.cp_table,
         m.cn_comp, m.cp_comp, m.has_components,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
@@ -475,7 +482,8 @@ def test_cp_whole_at_nonzero_aoa(tmp_path):
 
     _, _, _, _, _, cp_whole = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
-        m.ca_table, m.cn_table, m.cp_table,
+        m.ca_table_off, m.ca_table_on, False,
+        m.cn_table, m.cp_table,
         m.cn_comp, m.cp_comp, m.has_components,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
@@ -491,7 +499,8 @@ def test_cp_whole_fallback_to_cg_at_zero_aoa(tmp_path):
     m = _damp_model(tmp_path)
     _, _, _, _, _, cp_whole = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
-        m.ca_table, m.cn_table, m.cp_table,
+        m.ca_table_off, m.ca_table_on, False,
+        m.cn_table, m.cp_table,
         m.cn_comp, m.cp_comp, m.has_components,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,

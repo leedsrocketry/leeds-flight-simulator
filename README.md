@@ -264,7 +264,20 @@ The `aero_tables` field in `vehicle.yaml` can point to either a single `.csv` fi
 - **Single file** — whole-vehicle mode. Per-component forces, pitch/yaw damping, and roll are disabled. A warning is issued.
 - **Directory** — one `.csv` per aerodynamic component (nosecone, body tube, fin set, boattail, etc.), enabling full 6-DoF with per-component local angle-of-attack forces and moments, pitch/yaw damping, and roll torques.
 
-Each `.csv` must contain columns: `Mach, Reynolds, AoA_deg, CA, CN, CP_m`. CP_m is in metres from the nosecone tip. The grid need not be uniformly spaced.
+Each `.csv` must use one of two column layouts. CP_m is in metres from the nosecone tip. The grid need not be uniformly spaced.
+
+- **7-column** (recommended): `Mach, Reynolds, AoA_deg, CA_off, CA_on, CN, CP_m` — `CA_off` and `CA_on` are the axial force coefficients for motor-off and motor-on respectively.
+- **6-column**: `Mach, Reynolds, AoA_deg, CA, CN, CP_m` — the single CA column is used for both power-on and power-off (no base drag correction).
+
+#### Base Drag and Power-On/Off Switching
+
+The axial force coefficient CA depends on whether the motor is burning. When the motor fires, exhaust flow from the nozzle fills the low-pressure wake at the rocket's base, reducing base drag. Aerodynamic data sources typically report two values: **CA Power-Off** (motor not burning) and **CA Power-On** (motor burning).
+
+LFS reads both CA columns from each aero table CSV, sums them independently across components into two vehicle-level tables, and selects the appropriate table at each timestep based on whether the current time is before or after motor burnout. This applies to both the launch rail and free-flight phases.
+
+Vehicle-level switching is physically correct for the axial force: unlike the normal force (which must be resolved per-component to capture the correct moment arms for pitch/yaw damping), the axial force acts along the body axis and produces no pitch/yaw moment regardless of where along the body it acts. The total vehicle-level CA is therefore all that is needed.
+
+> **Note for RASAero II users:** RASAero applies the power-on/off base drag correction at the vehicle level, not per-component. When per-component data is extracted via successive differencing (<!-- TODO: link to rasaero-export-tool repository -->), the power-on/off delta appears only on one component in the subtraction chain. This is expected — once per-component CAs are summed back to a vehicle total, the correct vehicle-level values are recovered. LFS is agnostic to the source of aerodynamic data (RASAero, CFD, wind tunnel, etc.) — the same format is used regardless of provenance.
 
 ### `danger_area.geojson`
 

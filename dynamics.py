@@ -245,7 +245,8 @@ class SimParams:
     mach_g: np.ndarray
     re_g: np.ndarray
     alpha_g: np.ndarray
-    ca_tbl: np.ndarray
+    ca_tbl_off: np.ndarray
+    ca_tbl_on: np.ndarray
     cn_tbl: np.ndarray
     cp_tbl: np.ndarray
     cn_comp: np.ndarray
@@ -486,7 +487,8 @@ def _rail_deriv(
     impulse_factor: float,
     m_prop_0: float, total_impulse: float, m_dry: float,
     mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
-    ca_tbl: np.ndarray,
+    ca_tbl_off: np.ndarray, ca_tbl_on: np.ndarray,
+    t_burnout: float,
     A_ref: float, length: float,
     site_elevation: float, t_offset: float,
 ) -> tuple[float, float]:
@@ -503,6 +505,7 @@ def _rail_deriv(
     if V_abs > _EPS_V:
         M = V_abs / a_sound
         Re = rho * V_abs * length / mu
+        ca_tbl = ca_tbl_on if t <= t_burnout else ca_tbl_off
         C_A = ca_at(mach_g, re_g, alpha_g, ca_tbl, M, Re, 0.0)
         F_drag = 0.5 * rho * V_abs * V_abs * A_ref * C_A
     else:
@@ -528,7 +531,9 @@ def simulate_rail(
     mach_g: np.ndarray,
     re_g: np.ndarray,
     alpha_g: np.ndarray,
-    ca_tbl: np.ndarray,
+    ca_tbl_off: np.ndarray,
+    ca_tbl_on: np.ndarray,
+    t_burnout: float,
     A_ref: float,
     length: float,
     site_elevation: float,
@@ -591,7 +596,8 @@ def simulate_rail(
         t, y[0], y[1], sin_theta,
         motor_times, motor_thrusts, nozzle_area, altitude,
         impulse_factor, m_prop_0, total_impulse, m_dry,
-        mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+        mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on,
+        t_burnout, A_ref, length,
         site_elevation, t_offset,
     )
     k1[0] = ds; k1[1] = dV
@@ -606,7 +612,8 @@ def simulate_rail(
             t + DP_C[1] * h, ys[0], ys[1], sin_theta,
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on,
+        t_burnout, A_ref, length,
             site_elevation, t_offset,
         )
         k2[0] = ds; k2[1] = dV
@@ -618,7 +625,8 @@ def simulate_rail(
             t + DP_C[2] * h, ys[0], ys[1], sin_theta,
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on,
+        t_burnout, A_ref, length,
             site_elevation, t_offset,
         )
         k3[0] = ds; k3[1] = dV
@@ -631,7 +639,8 @@ def simulate_rail(
             t + DP_C[3] * h, ys[0], ys[1], sin_theta,
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on,
+        t_burnout, A_ref, length,
             site_elevation, t_offset,
         )
         k4[0] = ds; k4[1] = dV
@@ -644,7 +653,8 @@ def simulate_rail(
             t + DP_C[4] * h, ys[0], ys[1], sin_theta,
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on,
+        t_burnout, A_ref, length,
             site_elevation, t_offset,
         )
         k5[0] = ds; k5[1] = dV
@@ -658,7 +668,8 @@ def simulate_rail(
             t + DP_C[5] * h, ys[0], ys[1], sin_theta,
             motor_times, motor_thrusts, nozzle_area, altitude,
             impulse_factor, m_prop_0, total_impulse, m_dry,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on,
+        t_burnout, A_ref, length,
             site_elevation, t_offset,
         )
         k6[0] = ds; k6[1] = dV
@@ -676,7 +687,8 @@ def simulate_rail(
             t + h, y_new[0], y_new[1], sin_theta,
             motor_times, motor_thrusts, nozzle_area, alt_new,
             impulse_factor, m_prop_0, total_impulse, m_dry,
-            mach_g, re_g, alpha_g, ca_tbl, A_ref, length,
+            mach_g, re_g, alpha_g, ca_tbl_off, ca_tbl_on,
+        t_burnout, A_ref, length,
             site_elevation, t_offset,
         )
         k7[0] = ds; k7[1] = dV
@@ -760,7 +772,9 @@ def _sixdof_deriv(
     impulse_factor: float,
     # Aero
     mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
-    ca_tbl: np.ndarray, cn_tbl: np.ndarray, cp_tbl: np.ndarray,
+    ca_tbl_off: np.ndarray, ca_tbl_on: np.ndarray,
+    t_burnout: float,
+    cn_tbl: np.ndarray, cp_tbl: np.ndarray,
     cn_comp: np.ndarray, cp_comp: np.ndarray,
     has_components: bool, cn_alpha_fins_tbl: np.ndarray,
     # Geometry
@@ -846,9 +860,11 @@ def _sixdof_deriv(
     )
 
     # --- Aerodynamic forces and moments ---
+    power_on = t <= t_burnout
     Fx, Fy, Fz, tau_p_aero, tau_y_aero, cp_whole = aero_forces_moments(
         mach_g, re_g, alpha_g,
-        ca_tbl, cn_tbl, cp_tbl,
+        ca_tbl_off, ca_tbl_on, power_on,
+        cn_tbl, cp_tbl,
         cn_comp, cp_comp, has_components,
         M, Re, rho, V, A_ref,
         u_rel, v_rel, w_rel, q_r, r_r, cg,
@@ -940,7 +956,8 @@ def integrate_sixdof(
     impulse_factor: float,
     # Aero
     mach_g: np.ndarray, re_g: np.ndarray, alpha_g: np.ndarray,
-    ca_tbl: np.ndarray, cn_tbl: np.ndarray, cp_tbl: np.ndarray,
+    ca_tbl_off: np.ndarray, ca_tbl_on: np.ndarray,
+    cn_tbl: np.ndarray, cp_tbl: np.ndarray,
     cn_comp: np.ndarray, cp_comp: np.ndarray,
     has_components: bool, cn_alpha_fins_tbl: np.ndarray,
     # Geometry
@@ -1023,7 +1040,8 @@ def integrate_sixdof(
     _pro = prop_r_outer; _pri = prop_r_inner_0; _pl = prop_length
     _if = impulse_factor
     _mg = mach_g; _rg = re_g; _ag = alpha_g
-    _cat = ca_tbl; _cnt = cn_tbl; _cpt = cp_tbl
+    _coff = ca_tbl_off; _con = ca_tbl_on; _tb = t_burnout
+    _cnt = cn_tbl; _cpt = cp_tbl
     _cnc = cn_comp; _cpc = cp_comp
     _hc = has_components; _cnaf = cn_alpha_fins_tbl
     _d = diameter; _rl = ref_length; _ar = A_ref; _fr = fin_cp_radius
@@ -1036,7 +1054,7 @@ def integrate_sixdof(
         t, y, k1,
         _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
         _ird, _ild, _pro, _pri, _pl, _if,
-        _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+        _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
         _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
         _se, _to,
     )
@@ -1054,7 +1072,7 @@ def integrate_sixdof(
             t + DP_C[1] * h_step, ys, k2,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1066,7 +1084,7 @@ def integrate_sixdof(
             t + DP_C[2] * h_step, ys, k3,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1080,7 +1098,7 @@ def integrate_sixdof(
             t + DP_C[3] * h_step, ys, k4,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1095,7 +1113,7 @@ def integrate_sixdof(
             t + DP_C[4] * h_step, ys, k5,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1111,7 +1129,7 @@ def integrate_sixdof(
             t + DP_C[5] * h_step, ys, k6,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1128,7 +1146,7 @@ def integrate_sixdof(
             t + h_step, y_new, k7,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _cat, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1567,7 +1585,8 @@ def _build_profile(
         # SM from whole-vehicle (no lateral flow on rail)
         _, _, _, _, _, cp_whole = aero_forces_moments(
             p.mach_g, p.re_g, p.alpha_g,
-            p.ca_tbl, p.cn_tbl, p.cp_tbl,
+            p.ca_tbl_off, p.ca_tbl_on, ti <= t_burnout,
+            p.cn_tbl, p.cp_tbl,
             p.cn_comp, p.cp_comp, p.has_components,
             M, Re, rho, V, p.A_ref,
             V, 0.0, 0.0, 0.0, 0.0, cg,
@@ -1575,7 +1594,8 @@ def _build_profile(
         rail_sm[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
         if M >= p.mach_g[0]:
-            ca = ca_at(p.mach_g, p.re_g, p.alpha_g, p.ca_tbl, M, Re, 0.0)
+            ca_tbl = p.ca_tbl_on if ti <= t_burnout else p.ca_tbl_off
+            ca = ca_at(p.mach_g, p.re_g, p.alpha_g, ca_tbl, M, Re, 0.0)
             rail_cd[i] = ca
         else:
             rail_cd[i] = math.nan
@@ -1625,9 +1645,11 @@ def _build_profile(
         q_rate = float(state_asc[i, 11])
         r_rate = float(state_asc[i, 12])
 
+        power_on = ti <= t_burnout
         _, _, _, _, _, cp_whole = aero_forces_moments(
             p.mach_g, p.re_g, p.alpha_g,
-            p.ca_tbl, p.cn_tbl, p.cp_tbl,
+            p.ca_tbl_off, p.ca_tbl_on, power_on,
+            p.cn_tbl, p.cp_tbl,
             p.cn_comp, p.cp_comp, p.has_components,
             M, Re, rho, V, p.A_ref,
             u, v, w, q_rate, r_rate, cg,
@@ -1635,7 +1657,8 @@ def _build_profile(
         asc_sm[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
         if M >= p.mach_g[0]:
-            ca = ca_at(p.mach_g, p.re_g, p.alpha_g, p.ca_tbl, M, Re, alpha_rad)
+            ca_tbl = p.ca_tbl_on if power_on else p.ca_tbl_off
+            ca = ca_at(p.mach_g, p.re_g, p.alpha_g, ca_tbl, M, Re, alpha_rad)
             cn, _ = cn_cp_at(
                 p.mach_g, p.re_g, p.alpha_g,
                 p.cn_tbl, p.cp_tbl, M, Re, alpha_rad,
@@ -1782,7 +1805,8 @@ def run_trajectory(
         p.rail_azimuth_rad, p.rail_inclination_rad, p.rail_length,
         p.motor_times, p.motor_thrusts, p.nozzle_area, p.impulse_factor,
         p.m_prop_0, p.total_impulse, p.m_dry,
-        p.mach_g, p.re_g, p.alpha_g, p.ca_tbl,
+        p.mach_g, p.re_g, p.alpha_g,
+        p.ca_tbl_off, p.ca_tbl_on, t_burnout,
         p.A_ref, p.length,
         p.site_elevation, p.t_offset,
         p.rtol, p.atol,
@@ -1812,7 +1836,8 @@ def run_trajectory(
         p.prop_r_outer, p.prop_r_inner_0, p.prop_length,
         p.impulse_factor,
         p.mach_g, p.re_g, p.alpha_g,
-        p.ca_tbl, p.cn_tbl, p.cp_tbl,
+        p.ca_tbl_off, p.ca_tbl_on,
+        p.cn_tbl, p.cp_tbl,
         p.cn_comp, p.cp_comp, p.has_components, p.cn_alpha_fins,
         p.diameter, p.length, p.A_ref, p.fin_cp_radius,
         p.wind_alt, p.wind_east, p.wind_north,
