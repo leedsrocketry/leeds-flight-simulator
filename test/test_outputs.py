@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import yaml
 
-from dynamics import TrajectoryResult
+from dynamics import TrajectoryProfile
 from montecarlo import SampleResult, ScenarioStats, MonteCarloResult, SCENARIO_LABELS
 from optimisation import OptimisationResult
 from config import (
@@ -60,13 +60,12 @@ def _make_sample(
         landing_east=landing_east,
         flight_time_s=300.0,
         peak_mach=2.1,
-        peak_altitude_ft=49212.0,
         max_aoa_deg=3.5,
         min_sm_subsonic=2.0,
         min_sm_supersonic=1.5,
         compliant=compliant,
-        in_buffer=True,
-        below_ceiling=True,
+        footprint_compliant=True,
+        ceiling_compliant=True,
         stability_compliant=True,
         landing_at_sea=landing_at_sea,
         in_coverage=in_coverage,
@@ -516,54 +515,52 @@ class TestFitEllipseThreshold:
 # ---------------------------------------------------------------------------
 
 
-def _make_parabolic_trajectory() -> TrajectoryResult:
-    """Create a simple parabolic trajectory for testing."""
+def _make_parabolic_trajectory() -> TrajectoryProfile:
+    """Create a simple parabolic trajectory profile for testing."""
+    # Ascent: 50 points, 0–60 s
     n_asc = 50
     t_asc = np.linspace(0, 60, n_asc)
-    # Parabolic altitude profile: peaks at ~15000 m
-    alt = 15000.0 * (1 - ((t_asc - 30) / 30) ** 2)
-    state_asc = np.zeros((n_asc, 13))
-    state_asc[:, 0] = np.linspace(0, 2000, n_asc)    # rN
-    state_asc[:, 1] = np.linspace(0, 500, n_asc)     # rE
-    state_asc[:, 2] = -alt                             # rD (negative altitude)
-    state_asc[:, 3] = 1.0                              # q0 (unit quaternion)
+    alt_asc = 15000.0 * (1 - ((t_asc - 30) / 30) ** 2)
+    north_asc = np.linspace(0, 2000, n_asc)
+    east_asc = np.linspace(0, 500, n_asc)
 
+    # Descent: 30 points, 60–300 s
     n_desc = 30
     t_desc = np.linspace(60, 300, n_desc)
-    state_desc = np.zeros((n_desc, 4))
-    state_desc[:, 0] = np.linspace(2000, 3000, n_desc)   # rN
-    state_desc[:, 1] = np.linspace(500, 800, n_desc)     # rE
-    state_desc[:, 2] = np.linspace(0, -15000, n_desc)    # rD (descending to 0, note: -alt)
-    # Correct: descent starts at apogee, goes to ground
-    desc_alt = 15000.0 * np.linspace(1, 0, n_desc)
-    state_desc[:, 2] = -desc_alt
-    state_desc[:, 3] = -5.0                               # vD
+    alt_desc = 15000.0 * np.linspace(1, 0, n_desc)
+    north_desc = np.linspace(2000, 3000, n_desc)
+    east_desc = np.linspace(500, 800, n_desc)
 
-    return TrajectoryResult(
-        apogee_altitude=15000.0,
-        apogee_time=60.0,
-        apogee_position=np.array([2000.0, 500.0, -15000.0]),
-        landing_position=np.array([3000.0, 800.0, 0.0]),
-        landing_time=300.0,
-        flight_time=300.0,
-        max_mach=2.1,
-        max_aoa_deg=3.5,
-        min_sm_subsonic=2.0,
-        min_sm_supersonic=1.5,
-        rail_exit_velocity=30.0,
-        peak_altitude_ft=15000.0 * 3.28084,
-        in_buffer=True,
-        below_ceiling=True,
-        compliant=True,
-        stability_compliant=True,
-        violation_reason="",
-        t_ascent=t_asc,
-        state_ascent=state_asc,
-        t_descent=t_desc,
-        state_descent=state_desc,
-        sm_descent=np.full(n_desc, 2.0),
-        mach_descent=np.full(n_desc, 0.3),
-        n_descent=n_desc,
+    # Unified arrays
+    time = np.concatenate([t_asc, t_desc[1:]])       # skip overlap at apogee
+    altitude = np.concatenate([alt_asc, alt_desc[1:]])
+    north = np.concatenate([north_asc, north_desc[1:]])
+    east = np.concatenate([east_asc, east_desc[1:]])
+    n_total = len(time)
+
+    position_ned = np.column_stack([north, east, -altitude])
+    mach = np.concatenate([np.linspace(0, 2.1, n_asc),
+                           np.full(n_desc - 1, 0.3)])
+    aoa_deg = np.concatenate([np.linspace(0, 3.5, n_asc),
+                              np.full(n_desc - 1, np.nan)])
+    sm = np.full(n_total, 2.0)
+    thrust = np.concatenate([np.linspace(5000, 0, n_asc),
+                             np.zeros(n_desc - 1)])
+    mass = np.concatenate([np.linspace(30, 20, n_asc),
+                           np.full(n_desc - 1, 20.0)])
+    cd = np.concatenate([np.full(n_asc, 0.4),
+                         np.full(n_desc - 1, 1.5)])
+
+    return TrajectoryProfile(
+        time=time,
+        position_ned=position_ned,
+        altitude=altitude,
+        mach=mach,
+        aoa_deg=aoa_deg,
+        sm=sm,
+        thrust=thrust,
+        mass=mass,
+        cd=cd,
     )
 
 

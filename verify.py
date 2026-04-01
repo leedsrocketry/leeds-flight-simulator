@@ -31,27 +31,14 @@ import matplotlib.figure
 
 from config import SimulationConfig, Vehicle, VerificationConfig
 from motor import PropellantModel
-from aerodynamics import AeroModel, aero_forces_moments, ca_at, cn_cp_at
-from atmosphere import isa_at_site, compute_t_offset
+from aerodynamics import AeroModel
 from wind import WindEnsemble
 from dynamics import (
-    TrajectoryResult,
     run_trajectory,
-    simulate_rail,
     SCENARIO_NOMINAL,
     SCENARIO_BALLISTIC,
-    mass_at,
-    cg_at,
-    thrust_corrected_at,
 )
 from montecarlo import build_sim_params
-
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-_DEG2RAD: float = math.pi / 180.0
-_G0: float = 9.80665
 
 
 def _nominal_scenario(vehicle: "Vehicle") -> int:
@@ -195,244 +182,6 @@ def _load_reference_csv(path: Path) -> dict[str, np.ndarray]:
     return data
 
 
-# ---------------------------------------------------------------------------
-# Rail phase reconstruction helper
-# ---------------------------------------------------------------------------
-
-def _quantities_from_rail_hist(
-    t_hist: np.ndarray,
-    V_hist: np.ndarray,
-    alt_hist: np.ndarray,
-    propellant: PropellantModel,
-    aero_model: AeroModel,
-    geometry: "VehicleGeometry",
-    m_dry: float,
-    cg_dry: float,
-    site_elevation: float = 0.0,
-    t_offset: float = 0.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Compute comparison quantities from the actual simulate_rail() history.
-
-    The time, velocity, and altitude arrays come directly from the RK45
-    integrator in ``simulate_rail()``, so they reflect the same code path
-    used by the Monte Carlo simulation.  Thrust, mass, Mach, SM, and CD
-    are derived from the motor and aero models at each recorded time step.
-
-    Returns
-    -------
-    (t, alt, mach, thrust, mass, sm, cd)
-    """
-    mm = propellant
-    am = aero_model
-    N = len(t_hist)
-    diameter = geometry.diameter
-
-    mach_arr = np.empty(N, dtype=np.float64)
-    thrust_arr = np.empty(N, dtype=np.float64)
-    mass_arr = np.empty(N, dtype=np.float64)
-    sm_arr = np.empty(N, dtype=np.float64)
-    cd_arr = np.empty(N, dtype=np.float64)
-
-    for i in range(N):
-        ti = float(t_hist[i])
-        hi = float(alt_hist[i])
-        Vi = float(V_hist[i])
-
-        _, _, rho, a_sound, mu = isa_at_site(hi, site_elevation, t_offset)
-        M = Vi / a_sound if a_sound > 0.0 else 0.0
-        mach_arr[i] = M
-
-        thrust_arr[i] = thrust_corrected_at(
-            mm.times, mm.thrusts, mm.nozzle_area, hi, site_elevation, ti,
-        )
-        mass_arr[i] = mass_at(
-            mm.times, mm.thrusts, mm.m_prop_0,
-            mm.total_impulse, m_dry, ti,
-        )
-
-        cg = cg_at(
-            mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
-            m_dry, cg_dry, mm.motor_cg_loaded, ti,
-        )
-        Re = rho * Vi * geometry.length / mu if Vi > 1.0e-6 and mu > 0.0 else 0.0
-
-        _, _, _, _, _, cp_whole = aero_forces_moments(
-            am.mach_grid, am.re_grid, am.alpha_grid,
-            am.ca_table, am.cn_table, am.cp_table,
-            am.cn_comp, am.cp_comp, am.has_components,
-            M, Re, rho, Vi, geometry.reference_area,
-            Vi, 0.0, 0.0, 0.0, 0.0, cg,
-        )
-        sm_arr[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
-
-        if M >= am.mach_grid[0]:
-            cd_arr[i] = ca_at(
-                am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
-                M, Re, 0.0,
-            )
-        else:
-            cd_arr[i] = math.nan
-
-    return t_hist.copy(), alt_hist.copy(), mach_arr, thrust_arr, mass_arr, sm_arr, cd_arr
-
-
-# ---------------------------------------------------------------------------
-# Trajectory quantity extraction — 6DoF
-# ---------------------------------------------------------------------------
-
-def _extract_trajectory_quantities_6dof(
-    result: TrajectoryResult,
-    propellant: PropellantModel,
-    aero_model: AeroModel,
-    vehicle: Vehicle,
-    rail_t_hist: np.ndarray | None = None,
-    rail_V_hist: np.ndarray | None = None,
-    rail_alt_hist: np.ndarray | None = None,
-    site_elevation: float = 0.0,
-    t_offset: float = 0.0,
-) -> dict[str, np.ndarray]:
-    """Extract altitude, Mach, SM, thrust, mass, and CD from a 6DoF trajectory.
-
-    Includes both the ascent and descent phases.
-
-    Returns
-    -------
-    dict with keys "time", "altitude", "mach", "sm", "thrust", "mass", "cd"
-    → 1-D arrays.
-    """
-    # --- Ascent ---
-    t_asc = result.t_ascent
-    state_asc = result.state_ascent
-    n_asc = len(t_asc)
-
-    alt_asc = -state_asc[:, 2]
-
-    mach_asc = np.empty(n_asc, dtype=np.float64)
-    thrust_asc = np.empty(n_asc, dtype=np.float64)
-    mass_asc = np.empty(n_asc, dtype=np.float64)
-    sm_asc = np.empty(n_asc, dtype=np.float64)
-    cd_asc = np.empty(n_asc, dtype=np.float64)
-
-    mm = propellant
-    am = aero_model
-    geom = vehicle.geometry
-    diameter = geom.diameter
-    m_dry = vehicle.m_dry
-    cg_dry = vehicle.cg_dry
-
-    for i in range(n_asc):
-        ti = float(t_asc[i])
-        h = max(float(alt_asc[i]), 0.0)
-
-        T, p, rho, a, mu = isa_at_site(h, site_elevation, t_offset)
-
-        u = float(state_asc[i, 7])
-        v = float(state_asc[i, 8])
-        w = float(state_asc[i, 9])
-        V = math.sqrt(u * u + v * v + w * w)
-
-        M = V / a if a > 0.0 else 0.0
-        mach_asc[i] = M
-
-        thrust_asc[i] = thrust_corrected_at(
-            mm.times, mm.thrusts, mm.nozzle_area, h, site_elevation, ti,
-        )
-
-        mass_asc[i] = mass_at(
-            mm.times, mm.thrusts, mm.m_prop_0,
-            mm.total_impulse, m_dry, ti,
-        )
-
-        cg = cg_at(
-            mm.times, mm.thrusts, mm.m_prop_0, mm.total_impulse,
-            m_dry, cg_dry, mm.motor_cg_loaded, ti,
-        )
-
-        Re = rho * V * geom.length / mu if V > 1.0e-6 and mu > 0.0 else 0.0
-        q_rate = float(state_asc[i, 11])
-        r_rate = float(state_asc[i, 12])
-
-        _, _, _, _, _, cp_whole = aero_forces_moments(
-            am.mach_grid, am.re_grid, am.alpha_grid,
-            am.ca_table, am.cn_table, am.cp_table,
-            am.cn_comp, am.cp_comp, am.has_components,
-            M, Re, rho, V, geom.reference_area,
-            u, v, w, q_rate, r_rate, cg,
-        )
-
-        sm_asc[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
-
-        # True drag coefficient: CD = CA·cos(α) + CN·sin(α)
-        # NaN when below the aero table's Mach range (no valid data).
-        alpha_rad = math.atan2(math.sqrt(v * v + w * w), u) if V > 1.0e-6 else 0.0
-        if M >= am.mach_grid[0]:
-            ca = ca_at(
-                am.mach_grid, am.re_grid, am.alpha_grid, am.ca_table,
-                M, Re, alpha_rad,
-            )
-            cn, _ = cn_cp_at(
-                am.mach_grid, am.re_grid, am.alpha_grid,
-                am.cn_table, am.cp_table, M, Re, alpha_rad,
-            )
-            cd_asc[i] = ca * math.cos(alpha_rad) + cn * math.sin(alpha_rad)
-        else:
-            cd_asc[i] = math.nan
-
-    # --- Descent (thrust is zero, mass is dry, under parachute) ---
-    if result.t_descent is not None and result.n_descent > 0:
-        n_desc = result.n_descent
-        t_desc = result.t_descent[:n_desc]
-        state_desc = result.state_descent[:n_desc]
-        alt_desc = -state_desc[:, 2]
-
-        mach_desc = result.mach_descent[:n_desc]
-        thrust_desc = np.zeros(n_desc, dtype=np.float64)
-        mass_desc = np.full(n_desc, m_dry, dtype=np.float64)
-        sm_desc = result.sm_descent[:n_desc]
-        cd_desc = np.zeros(n_desc, dtype=np.float64)
-
-        # Stitch (skip first descent point to avoid overlap at apogee)
-        t_full = np.concatenate([t_asc, t_desc[1:]])
-        alt_full = np.concatenate([alt_asc, alt_desc[1:]])
-        mach_full = np.concatenate([mach_asc, mach_desc[1:]])
-        sm_full = np.concatenate([sm_asc, sm_desc[1:]])
-        thrust_full = np.concatenate([thrust_asc, thrust_desc[1:]])
-        mass_full = np.concatenate([mass_asc, mass_desc[1:]])
-        cd_full = np.concatenate([cd_asc, cd_desc[1:]])
-    else:
-        t_full = t_asc
-        alt_full = alt_asc
-        mach_full = mach_asc
-        sm_full = sm_asc
-        thrust_full = thrust_asc
-        mass_full = mass_asc
-        cd_full = cd_asc
-
-    # --- Prepend launch rail phase (t=0 to t_asc[0]) ---
-    # Uses the actual trajectory recorded by simulate_rail() so the
-    # comparison exercises the same code path as the Monte Carlo simulation.
-    if rail_t_hist is not None and len(rail_t_hist) > 0:
-        t_r, alt_r, mach_r, thrust_r, mass_r, sm_r, cd_r = _quantities_from_rail_hist(
-            rail_t_hist, rail_V_hist, rail_alt_hist, mm, am, geom,
-            m_dry, cg_dry, site_elevation, t_offset,
-        )
-        t_full      = np.concatenate([t_r,      t_full])
-        alt_full    = np.concatenate([alt_r,    alt_full])
-        mach_full   = np.concatenate([mach_r,   mach_full])
-        sm_full     = np.concatenate([sm_r,     sm_full])
-        thrust_full = np.concatenate([thrust_r, thrust_full])
-        mass_full   = np.concatenate([mass_r,   mass_full])
-        cd_full     = np.concatenate([cd_r,     cd_full])
-
-    return {
-        "time": t_full,
-        "altitude": alt_full,
-        "mach": mach_full,
-        "sm": sm_full,
-        "thrust": thrust_full,
-        "mass": mass_full,
-        "cd": cd_full,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -643,35 +392,9 @@ def run_verification(
     else:
         inclination = _resolve_rail_angle(rail.inclination, rail.inclination_range)
 
-    geom = vehicle.geometry
     zero_wind = _zero_wind_ensemble()
-    mm = propellant
-    m_dry = vehicle.m_dry
-    _site_elev = sim_cfg.site.elevation
-    _site_t_offset = (
-        compute_t_offset(_site_elev, sim_cfg.site.temperature)
-        if sim_cfg.site.temperature is not None
-        else 0.0
-    )
 
-    # Run the rail phase once to capture the trajectory history.
-    # This uses the same simulate_rail() called inside run_trajectory(),
-    # so the comparison exercises the real rail-phase code path.
-    _, _, _, _, _, rt_hist, rV_hist, ralt_hist, rn = simulate_rail(
-        azimuth * _DEG2RAD, inclination * _DEG2RAD, rail.length,
-        mm.times, mm.thrusts, mm.nozzle_area, 1.0,
-        mm.m_prop_0, mm.total_impulse, m_dry,
-        aero_model.mach_grid, aero_model.re_grid,
-        aero_model.alpha_grid, aero_model.ca_table,
-        geom.reference_area, geom.length,
-        _site_elev, _site_t_offset,
-        1.0e-6, 1.0e-6,
-    )
-    rail_t = rt_hist[:rn]
-    rail_V = rV_hist[:rn]
-    rail_alt = ralt_hist[:rn]
-
-    # --- Full 6DoF trajectory ---
+    # --- Full trajectory with profile (rail + 6DoF + descent) ---
     params = build_sim_params(
         sim_cfg, vehicle, propellant, aero_model, zero_wind,
         wind_profile_index=0,
@@ -681,13 +404,21 @@ def run_verification(
         fin_cant_deg=0.0,
     )
     scenario = _nominal_scenario(vehicle)
-    traj = run_trajectory(params, scenario, None, None, float("inf"))
-
-    sim_data = _extract_trajectory_quantities_6dof(
-        traj, propellant, aero_model, vehicle,
-        rail_t, rail_V, rail_alt,
-        _site_elev, _site_t_offset,
+    _, profile = run_trajectory(
+        params, scenario, None, None, float("inf"),
+        keep_profile=True,
     )
+
+    # Read unified quantities directly from the profile — no recomputation.
+    sim_data: dict[str, np.ndarray] = {
+        "time": profile.time,
+        "altitude": profile.altitude,
+        "mach": profile.mach,
+        "sm": profile.sm,
+        "thrust": profile.thrust,
+        "mass": profile.mass,
+        "cd": profile.cd,
+    }
 
     # --- Load reference CSV ---
     ref_data = _load_reference_csv(ver_cfg.reference_trajectory)

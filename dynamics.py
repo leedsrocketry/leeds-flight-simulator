@@ -22,8 +22,9 @@ Performance notes
 Public API
 ----------
 Data structures (plain Python):
-    SimParams       — all pre-processed data for one trajectory
-    TrajectoryResult — output of a single trajectory
+    SimParams         — all pre-processed data for one trajectory
+    FlightSummary     — scalar outputs of a single trajectory
+    TrajectoryProfile — unified time-history (only when requested)
 
 @njit quaternion/frame utilities:
     quat_from_rail, quat_to_dcm_nb, quat_rate, quat_normalize
@@ -34,7 +35,7 @@ Data structures (plain Python):
     integrate_descent     — Phase 3
 
 Top-level entry point:
-    run_trajectory(params, scenario) → TrajectoryResult
+    run_trajectory(params, scenario) → FlightSummary (+ TrajectoryProfile)
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ from wind import interpolate_wind
 from aerodynamics import (
     aero_forces_moments,
     ca_at,
+    cn_cp_at,
     cn_alpha_fins_at,
     _interp3,
 )
@@ -295,9 +297,15 @@ class SimParams:
 
 
 @dataclass
-class TrajectoryResult:
-    """Output of a single trajectory simulation."""
-    apogee_altitude: float        # m AGL
+class FlightSummary:
+    """Scalar outputs of a single trajectory simulation.
+
+    Contains only summary values — no time-history arrays.  Modules
+    outside ``dynamics.py`` should never need to know about flight
+    phases (rail / ascent / descent); that knowledge is encapsulated
+    here and in :class:`TrajectoryProfile`.
+    """
+    apogee: float                 # m AGL
     apogee_time: float            # s
     apogee_position: np.ndarray   # [N, E, D] NED [m]
     landing_position: np.ndarray  # [N, E, D] NED [m]
@@ -308,21 +316,33 @@ class TrajectoryResult:
     min_sm_subsonic: float        # calibres (worst case)
     min_sm_supersonic: float      # calibres (worst case)
     rail_exit_velocity: float     # m/s
-    peak_altitude_ft: float       # feet
-    in_buffer: bool               # full trajectory inside buffered footprint
-    below_ceiling: bool           # apogee below buffered altitude ceiling
-    compliant: bool
+    footprint_compliant: bool     # full trajectory inside buffered footprint
+    ceiling_compliant: bool       # apogee below buffered altitude ceiling
     stability_compliant: bool
-    violation_reason: str         # empty string if compliant
-    # Time history (ascent only, for replay/verification)
-    t_ascent: np.ndarray
-    state_ascent: np.ndarray      # (N, 13) 6DoF state history
-    # Time history (descent, for altitude plot / replay)
-    t_descent: np.ndarray | None = None
-    state_descent: np.ndarray | None = None   # (M, 4) [rN, rE, rD, vD]
-    sm_descent: np.ndarray | None = None      # (M,) stability margin [cal]
-    mach_descent: np.ndarray | None = None    # (M,) Mach from terminal velocity
-    n_descent: int = 0
+
+
+@dataclass
+class TrajectoryProfile:
+    """Unified flight profile from ignition to landing.
+
+    All arrays share a common time axis covering every phase of
+    flight (rail, free flight, descent).  No consumer outside
+    ``dynamics.py`` should ever need to know where one phase ends
+    and another begins.
+
+    Quantities that are undefined during part of the flight (e.g.
+    angle of attack during parachute descent) are ``NaN``.
+    """
+    time: np.ndarray          # (K,) seconds from ignition
+    position_ned: np.ndarray  # (K, 3) [N, E, D] metres
+    altitude: np.ndarray      # (K,) metres AGL
+    mach: np.ndarray          # (K,)
+    aoa_deg: np.ndarray       # (K,) NaN during descent
+    sm: np.ndarray            # (K,) calibres
+    thrust: np.ndarray        # (K,) Newtons, 0 after burnout
+    mass: np.ndarray          # (K,) kg
+    cd: np.ndarray            # (K,) vehicle CD during ascent,
+                              #       parachute CD from config during descent
 
 
 # ---------------------------------------------------------------------------
@@ -1438,6 +1458,241 @@ def _descent_mach(
 
 
 # ---------------------------------------------------------------------------
+# Profile builder (plain Python — NOT exposed outside dynamics.py)
+# ---------------------------------------------------------------------------
+
+def _build_profile(
+    params: SimParams,
+    # Rail phase
+    rail_t: np.ndarray, rail_V: np.ndarray, rail_alt: np.ndarray, n_rail: int,
+    # 6DoF ascent phase
+    t_asc: np.ndarray, state_asc: np.ndarray,
+    # Descent phase (may be None for ballistic)
+    t_desc: np.ndarray | None, state_desc: np.ndarray | None, n_desc: int,
+    # Descent scenario (for parachute CD selection)
+    scenario: int,
+) -> TrajectoryProfile:
+    """Build a unified :class:`TrajectoryProfile` from phase-specific arrays.
+
+    Computes all derived quantities (Mach, AoA, SM, thrust, mass, CD)
+    at each integration step using the same functions the integrator
+    calls, then concatenates into a single timeline.  This is the
+    **only** place where phase stitching occurs.
+    """
+    p = params
+    diameter = p.diameter
+
+    # --- Rail phase ---
+    nr = n_rail
+    rail_pos = np.empty((nr, 3), dtype=np.float64)
+    eN, eE, eD = _rail_direction(p.rail_azimuth_rad, p.rail_inclination_rad)
+    for i in range(nr):
+        # Reconstruct NED position from rail distance implied by altitude
+        if eD != 0.0:
+            s_i = -rail_alt[i] / eD if rail_alt[i] > 0.0 else 0.0
+        else:
+            s_i = 0.0
+        rail_pos[i, 0] = s_i * eN
+        rail_pos[i, 1] = s_i * eE
+        rail_pos[i, 2] = s_i * eD
+
+    rail_mach = np.empty(nr, dtype=np.float64)
+    rail_thrust = np.empty(nr, dtype=np.float64)
+    rail_mass = np.empty(nr, dtype=np.float64)
+    rail_sm = np.empty(nr, dtype=np.float64)
+    rail_cd = np.empty(nr, dtype=np.float64)
+    rail_aoa = np.zeros(nr, dtype=np.float64)   # zero AoA on rail
+
+    for i in range(nr):
+        ti = float(rail_t[i])
+        h = max(float(rail_alt[i]), 0.0)
+        V = float(rail_V[i])
+
+        _, _, rho, a, mu = isa_at_site(h, p.site_elevation, p.t_offset)
+        M = V / a if a > 0.0 else 0.0
+        rail_mach[i] = M
+
+        rail_thrust[i] = thrust_corrected_at(
+            p.motor_times, p.motor_thrusts, p.nozzle_area,
+            h, p.site_elevation, ti,
+        )
+        rail_mass[i] = mass_at(
+            p.motor_times, p.motor_thrusts, p.m_prop_0,
+            p.total_impulse, p.m_dry, ti,
+        )
+        cg = cg_at(
+            p.motor_times, p.motor_thrusts, p.m_prop_0, p.total_impulse,
+            p.m_dry, p.cg_dry, p.motor_cg_loaded, ti,
+        )
+        Re = rho * V * p.length / mu if V > _EPS_V and mu > 0.0 else 0.0
+        # SM from whole-vehicle (no lateral flow on rail)
+        _, _, _, _, _, cp_whole = aero_forces_moments(
+            p.mach_g, p.re_g, p.alpha_g,
+            p.ca_tbl, p.cn_tbl, p.cp_tbl,
+            p.cn_comp, p.cp_comp, p.has_components,
+            M, Re, rho, V, p.A_ref,
+            V, 0.0, 0.0, 0.0, 0.0, cg,
+        )
+        rail_sm[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+
+        if M >= p.mach_g[0]:
+            ca = ca_at(p.mach_g, p.re_g, p.alpha_g, p.ca_tbl, M, Re, 0.0)
+            rail_cd[i] = ca
+        else:
+            rail_cd[i] = math.nan
+
+    # --- 6DoF ascent phase ---
+    n_asc = len(t_asc)
+    asc_pos = state_asc[:, :3].copy()               # [rN, rE, rD]
+    asc_alt = -state_asc[:, 2].copy()
+
+    asc_mach = np.empty(n_asc, dtype=np.float64)
+    asc_thrust = np.empty(n_asc, dtype=np.float64)
+    asc_mass = np.empty(n_asc, dtype=np.float64)
+    asc_sm = np.empty(n_asc, dtype=np.float64)
+    asc_cd = np.empty(n_asc, dtype=np.float64)
+    asc_aoa = np.empty(n_asc, dtype=np.float64)
+
+    for i in range(n_asc):
+        ti = float(t_asc[i])
+        h = max(float(asc_alt[i]), 0.0)
+
+        _, _, rho, a, mu = isa_at_site(h, p.site_elevation, p.t_offset)
+
+        u = float(state_asc[i, 7])
+        v = float(state_asc[i, 8])
+        w = float(state_asc[i, 9])
+        V = math.sqrt(u * u + v * v + w * w)
+
+        M = V / a if a > 0.0 else 0.0
+        asc_mach[i] = M
+
+        alpha_rad = math.atan2(math.sqrt(v * v + w * w), u) if V > _EPS_V else 0.0
+        asc_aoa[i] = alpha_rad * _RAD2DEG
+
+        asc_thrust[i] = thrust_corrected_at(
+            p.motor_times, p.motor_thrusts, p.nozzle_area,
+            h, p.site_elevation, ti,
+        )
+        asc_mass[i] = mass_at(
+            p.motor_times, p.motor_thrusts, p.m_prop_0,
+            p.total_impulse, p.m_dry, ti,
+        )
+        cg = cg_at(
+            p.motor_times, p.motor_thrusts, p.m_prop_0, p.total_impulse,
+            p.m_dry, p.cg_dry, p.motor_cg_loaded, ti,
+        )
+        Re = rho * V * p.length / mu if V > _EPS_V and mu > 0.0 else 0.0
+        q_rate = float(state_asc[i, 11])
+        r_rate = float(state_asc[i, 12])
+
+        _, _, _, _, _, cp_whole = aero_forces_moments(
+            p.mach_g, p.re_g, p.alpha_g,
+            p.ca_tbl, p.cn_tbl, p.cp_tbl,
+            p.cn_comp, p.cp_comp, p.has_components,
+            M, Re, rho, V, p.A_ref,
+            u, v, w, q_rate, r_rate, cg,
+        )
+        asc_sm[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+
+        if M >= p.mach_g[0]:
+            ca = ca_at(p.mach_g, p.re_g, p.alpha_g, p.ca_tbl, M, Re, alpha_rad)
+            cn, _ = cn_cp_at(
+                p.mach_g, p.re_g, p.alpha_g,
+                p.cn_tbl, p.cp_tbl, M, Re, alpha_rad,
+            )
+            asc_cd[i] = ca * math.cos(alpha_rad) + cn * math.sin(alpha_rad)
+        else:
+            asc_cd[i] = math.nan
+
+    # --- Descent phase ---
+    if t_desc is not None and n_desc > 0:
+        desc_pos = state_desc[:n_desc, :3].copy()
+        desc_alt = -state_desc[:n_desc, 2].copy()
+
+        desc_mach = np.empty(n_desc, dtype=np.float64)
+        desc_sm = np.zeros(n_desc, dtype=np.float64)
+        desc_thrust = np.zeros(n_desc, dtype=np.float64)
+        desc_mass = np.full(n_desc, p.m_dry, dtype=np.float64)
+        desc_aoa = np.full(n_desc, math.nan, dtype=np.float64)
+        desc_cd = np.empty(n_desc, dtype=np.float64)
+
+        for i in range(n_desc):
+            h = max(float(desc_alt[i]), 0.0)
+            _, _, _, a, _ = isa_at_site(h, p.site_elevation, p.t_offset)
+            vD = float(state_desc[i, 5])
+            desc_mach[i] = abs(vD) / a if a > 0.0 else 0.0
+            # Parachute CD from config (constant per chute, switches at main deploy)
+            cda = _parachute_cda(
+                h, p.drogue_cda, p.main_cda, p.main_deploy_alt, scenario,
+            )
+            desc_cd[i] = cda / p.A_ref if p.A_ref > 0.0 else 0.0
+
+        t_desc_trimmed = t_desc[:n_desc]
+    else:
+        n_desc = 0
+
+    # --- Stitch into unified arrays (skip overlap at phase boundaries) ---
+    # Rail → 6DoF: skip first 6DoF point (same as rail exit)
+    # 6DoF → Descent: skip first descent point (same as apogee)
+    parts_t = [rail_t[:nr]]
+    parts_pos = [rail_pos]
+    parts_alt = [np.array([max(float(rail_alt[i]), 0.0) for i in range(nr)])]
+    parts_mach = [rail_mach]
+    parts_aoa = [rail_aoa]
+    parts_sm = [rail_sm]
+    parts_thrust = [rail_thrust]
+    parts_mass = [rail_mass]
+    parts_cd = [rail_cd]
+
+    # Skip first ascent point to avoid overlap with last rail point
+    if n_asc > 1:
+        parts_t.append(t_asc[1:])
+        parts_pos.append(asc_pos[1:])
+        parts_alt.append(asc_alt[1:])
+        parts_mach.append(asc_mach[1:])
+        parts_aoa.append(asc_aoa[1:])
+        parts_sm.append(asc_sm[1:])
+        parts_thrust.append(asc_thrust[1:])
+        parts_mass.append(asc_mass[1:])
+        parts_cd.append(asc_cd[1:])
+    elif n_asc == 1:
+        # Single-point ascent — still include it
+        parts_t.append(t_asc)
+        parts_pos.append(asc_pos)
+        parts_alt.append(asc_alt)
+        parts_mach.append(asc_mach)
+        parts_aoa.append(asc_aoa)
+        parts_sm.append(asc_sm)
+        parts_thrust.append(asc_thrust)
+        parts_mass.append(asc_mass)
+        parts_cd.append(asc_cd)
+
+    if n_desc > 1:
+        parts_t.append(t_desc_trimmed[1:])
+        parts_pos.append(desc_pos[1:])
+        parts_alt.append(desc_alt[1:])
+        parts_mach.append(desc_mach[1:])
+        parts_aoa.append(desc_aoa[1:])
+        parts_sm.append(desc_sm[1:])
+        parts_thrust.append(desc_thrust[1:])
+        parts_mass.append(desc_mass[1:])
+        parts_cd.append(desc_cd[1:])
+
+    return TrajectoryProfile(
+        time=np.concatenate(parts_t),
+        position_ned=np.concatenate(parts_pos, axis=0),
+        altitude=np.concatenate(parts_alt),
+        mach=np.concatenate(parts_mach),
+        aoa_deg=np.concatenate(parts_aoa),
+        sm=np.concatenate(parts_sm),
+        thrust=np.concatenate(parts_thrust),
+        mass=np.concatenate(parts_mass),
+        cd=np.concatenate(parts_cd),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Top-level trajectory runner (plain Python)
 # ---------------------------------------------------------------------------
 
@@ -1447,7 +1702,8 @@ def run_trajectory(
     poly_e: np.ndarray | None = None,
     poly_n: np.ndarray | None = None,
     buffered_ceiling: float = float('inf'),
-) -> TrajectoryResult:
+    keep_profile: bool = False,
+) -> FlightSummary | tuple[FlightSummary, TrajectoryProfile]:
     """Run a complete trajectory: rail → 6DoF ascent → descent.
 
     For ballistic scenarios the 6DoF integrator continues past apogee to
@@ -1466,16 +1722,24 @@ def run_trajectory(
     buffered_ceiling : float
         ``altitude_ceiling - buffer_distance`` in metres.  Defaults to
         ``inf`` (no ceiling check).
+    keep_profile : bool
+        If *True*, also return a :class:`TrajectoryProfile` with the
+        full unified time history.  The default (*False*) skips all
+        array allocation for the profile, keeping the MC hot path lean.
 
     Returns
     -------
-    TrajectoryResult
+    FlightSummary
+        Always returned.
+    tuple[FlightSummary, TrajectoryProfile]
+        When *keep_profile* is *True*.
     """
     p = params
     t_burnout = float(p.motor_times[-1])
 
     # ---- Phase 1: Launch rail ----
-    V_exit, t_exit, rN_exit, rE_exit, rD_exit, _, _, _, _ = simulate_rail(
+    (V_exit, t_exit, rN_exit, rE_exit, rD_exit,
+     rail_t_hist, rail_V_hist, rail_alt_hist, rail_n) = simulate_rail(
         p.rail_azimuth_rad, p.rail_inclination_rad, p.rail_length,
         p.motor_times, p.motor_thrusts, p.nozzle_area, p.impulse_factor,
         p.m_prop_0, p.total_impulse, p.m_dry,
@@ -1528,11 +1792,9 @@ def run_trajectory(
     # ---- Identify apogee ----
     apogee_alt = peak_alt
     if is_ballistic:
-        # Find apogee index (highest altitude in the 6DoF history)
         altitudes = -s_full[:, 2]
         apogee_idx = int(np.argmax(altitudes))
     else:
-        # Last point is apogee (integrator stopped there)
         apogee_idx = n_steps - 1
 
     apogee_state = s_full[apogee_idx]
@@ -1548,38 +1810,21 @@ def run_trajectory(
         s_asc = s_full[:apogee_idx + 1]
 
     # ---- Geofence checks ----
-    _below_ceiling = apogee_alt <= buffered_ceiling
-    _in_buffer = True
+    _ceiling_ok = apogee_alt <= buffered_ceiling
+    _footprint_ok = True
 
     if poly_e is not None and poly_n is not None:
         from geography import all_points_in_polygon
-        _in_buffer = all_points_in_polygon(
+        _footprint_ok = all_points_in_polygon(
             s_full[:, 0], s_full[:, 1], poly_e, poly_n,
         )
 
-    if is_ballistic:
-        # ---- Ballistic: 6DoF ran to ground impact — no 3DoF descent ----
-        landing_pos = s_full[n_steps - 1, :3].copy()
-        landing_t = t_full[n_steps - 1]
-
-        if not stab_ok:
-            if viol_code == 1:
-                viol_str = "AoA exceeded maximum"
-            elif viol_code == 2:
-                viol_str = "Static margin below minimum"
-            else:
-                viol_str = "Unknown stability violation"
-        elif not _in_buffer:
-            viol_str = "Trajectory exited buffered danger area"
-        elif not _below_ceiling:
-            viol_str = "Apogee above buffered ceiling"
-        else:
-            viol_str = ""
-
-        _compliant = stab_ok and _in_buffer and _below_ceiling
-
-        return TrajectoryResult(
-            apogee_altitude=apogee_alt,
+    # Helper to build FlightSummary from current local state
+    def _make_summary(
+        landing_pos: np.ndarray, landing_t: float,
+    ) -> FlightSummary:
+        return FlightSummary(
+            apogee=apogee_alt,
             apogee_time=apogee_t,
             apogee_position=apogee_pos,
             landing_position=landing_pos,
@@ -1590,55 +1835,43 @@ def run_trajectory(
             min_sm_subsonic=min_sm_sub if min_sm_sub < 1.0e5 else float('nan'),
             min_sm_supersonic=min_sm_sup if min_sm_sup < 1.0e5 else float('nan'),
             rail_exit_velocity=V_exit,
-            peak_altitude_ft=peak_alt * 3.28084,
-            in_buffer=_in_buffer,
-            below_ceiling=_below_ceiling,
-            compliant=_compliant,
+            footprint_compliant=_footprint_ok,
+            ceiling_compliant=_ceiling_ok,
             stability_compliant=stab_ok,
-            violation_reason=viol_str,
-            t_ascent=t_asc,
-            state_ascent=s_asc,
-            # No 3DoF descent — 6DoF ran to ground
         )
+
+    # Helper to build profile when requested
+    def _maybe_profile(
+        t_desc: np.ndarray | None = None,
+        state_desc: np.ndarray | None = None,
+        n_desc: int = 0,
+    ) -> TrajectoryProfile | None:
+        if not keep_profile:
+            return None
+        return _build_profile(
+            p,
+            rail_t_hist[:rail_n], rail_V_hist[:rail_n],
+            rail_alt_hist[:rail_n], rail_n,
+            t_asc, s_asc,
+            t_desc, state_desc, n_desc,
+            scenario,
+        )
+
+    if is_ballistic:
+        # ---- Ballistic: 6DoF ran to ground impact — no 3DoF descent ----
+        landing_pos = s_full[n_steps - 1, :3].copy()
+        landing_t = t_full[n_steps - 1]
+        summary = _make_summary(landing_pos, landing_t)
+        profile = _maybe_profile()
+        return (summary, profile) if keep_profile else summary
 
     # ---- Parachute scenarios: 3DoF descent from apogee ----
 
-    if not _below_ceiling or not _in_buffer:
+    if not _ceiling_ok or not _footprint_ok:
         # Skip descent — sample is already non-compliant.
-        if not stab_ok:
-            if viol_code == 1:
-                viol_str = "AoA exceeded maximum"
-            elif viol_code == 2:
-                viol_str = "Static margin below minimum"
-            else:
-                viol_str = "Unknown stability violation"
-        elif not _below_ceiling:
-            viol_str = "Apogee above buffered ceiling"
-        else:
-            viol_str = "Trajectory exited buffered danger area"
-
-        return TrajectoryResult(
-            apogee_altitude=apogee_alt,
-            apogee_time=apogee_t,
-            apogee_position=apogee_pos,
-            landing_position=apogee_pos,
-            landing_time=apogee_t,
-            flight_time=apogee_t - t_exit,
-            max_mach=max_mach,
-            max_aoa_deg=max_aoa_deg,
-            min_sm_subsonic=min_sm_sub if min_sm_sub < 1.0e5 else float('nan'),
-            min_sm_supersonic=min_sm_sup if min_sm_sup < 1.0e5 else float('nan'),
-            rail_exit_velocity=V_exit,
-            peak_altitude_ft=peak_alt * 3.28084,
-            in_buffer=_in_buffer,
-            below_ceiling=_below_ceiling,
-            compliant=False,
-            stability_compliant=stab_ok,
-            violation_reason=viol_str,
-            t_ascent=t_asc,
-            state_ascent=s_asc,
-            # No descent (early termination)
-        )
+        summary = _make_summary(apogee_pos, apogee_t)
+        profile = _maybe_profile()
+        return (summary, profile) if keep_profile else summary
 
     drogue_cda = p.drogue_cda if p.has_drogue else 0.0
     main_cda = p.main_cda if p.has_main else 0.0
@@ -1649,7 +1882,6 @@ def run_trajectory(
         effective_scenario = SCENARIO_PREMATURE_MAIN
 
     # Extract NED velocity at apogee from the 6DoF state.
-    # State layout: [rN, rE, rD, q0, q1, q2, q3, u, v, w, p, q, r]
     C_nb = quat_to_dcm_nb(
         apogee_state[3], apogee_state[4],
         apogee_state[5], apogee_state[6],
@@ -1658,18 +1890,13 @@ def run_trajectory(
     vN_ap = C_nb[0, 0] * u_ap + C_nb[0, 1] * v_ap + C_nb[0, 2] * w_ap
     vE_ap = C_nb[1, 0] * u_ap + C_nb[1, 1] * v_ap + C_nb[1, 2] * w_ap
 
-    # vD starts at zero — the rocket is momentarily stationary at apogee.
-    # Horizontal velocity is preserved from the ascent phase.
     descent_state0 = np.array([
         apogee_pos[0], apogee_pos[1], apogee_pos[2],
         vN_ap, vE_ap, 0.0,
     ], dtype=np.float64)
     body_cda = _CD_CYLINDER * p.length * p.diameter
 
-    # ---- Phase 3: parachute descent (dynamic vD) ----
-    # For nominal dual-deploy, split into two smooth legs to avoid the
-    # CdA step discontinuity at main_deploy_alt.  Leg 1 uses drogue only;
-    # leg 2 uses drogue + main from the deploy altitude to ground.
+    # ---- Phase 3: parachute descent ----
     if (effective_scenario == SCENARIO_NOMINAL
             and main_deploy_alt > 0.0
             and p.has_main and p.has_drogue):
@@ -1694,13 +1921,11 @@ def run_trajectory(
             body_cda, p.site_elevation, p.t_offset,
             p.rtol, p.atol,
         )
-        # Stitch (skip duplicate point at join)
         t_desc = np.concatenate((t1[:n1], t2[1:n2]))
         y_desc = np.concatenate((y1[:n1], y2[1:n2]))
-        sm_desc = np.concatenate((sm1[:n1], sm2[1:n2]))
         n_desc = n1 + n2 - 1
     else:
-        t_desc, y_desc, sm_desc, n_desc = integrate_descent(
+        t_desc, y_desc, _, n_desc = integrate_descent(
             apogee_t, descent_state0,
             p.wind_alt, p.wind_east, p.wind_north,
             p.m_dry, drogue_cda, main_cda, main_deploy_alt,
@@ -1708,9 +1933,6 @@ def run_trajectory(
             body_cda, p.site_elevation, p.t_offset,
             p.rtol, p.atol,
         )
-
-    # Mach from the integrated descent velocity
-    mach_desc = _descent_mach(y_desc, n_desc, p.site_elevation, p.t_offset)
 
     land_idx = n_desc - 1
     landing_pos = y_desc[land_idx, :3].copy()
@@ -1722,45 +1944,8 @@ def run_trajectory(
         if not all_points_in_polygon(
             y_desc[:n_desc, 0], y_desc[:n_desc, 1], poly_e, poly_n,
         ):
-            _in_buffer = False
+            _footprint_ok = False
 
-    if not stab_ok:
-        if viol_code == 1:
-            viol_str = "AoA exceeded maximum"
-        elif viol_code == 2:
-            viol_str = "Static margin below minimum"
-        else:
-            viol_str = "Unknown stability violation"
-    elif not _in_buffer:
-        viol_str = "Trajectory exited buffered danger area"
-    else:
-        viol_str = ""
-
-    _compliant = stab_ok and _in_buffer and _below_ceiling
-
-    return TrajectoryResult(
-        apogee_altitude=apogee_alt,
-        apogee_time=apogee_t,
-        apogee_position=apogee_pos,
-        landing_position=landing_pos,
-        landing_time=landing_t,
-        flight_time=landing_t - t_exit,
-        max_mach=max_mach,
-        max_aoa_deg=max_aoa_deg,
-        min_sm_subsonic=min_sm_sub if min_sm_sub < 1.0e5 else float('nan'),
-        min_sm_supersonic=min_sm_sup if min_sm_sup < 1.0e5 else float('nan'),
-        rail_exit_velocity=V_exit,
-        peak_altitude_ft=peak_alt * 3.28084,
-        in_buffer=_in_buffer,
-        below_ceiling=_below_ceiling,
-        compliant=_compliant,
-        stability_compliant=stab_ok,
-        violation_reason=viol_str,
-        t_ascent=t_asc,
-        state_ascent=s_asc,
-        t_descent=t_desc[:n_desc].copy(),
-        state_descent=y_desc[:n_desc].copy(),
-        sm_descent=sm_desc[:n_desc].copy(),
-        mach_descent=mach_desc,
-        n_descent=n_desc,
-    )
+    summary = _make_summary(landing_pos, landing_t)
+    profile = _maybe_profile(t_desc, y_desc, n_desc)
+    return (summary, profile) if keep_profile else summary

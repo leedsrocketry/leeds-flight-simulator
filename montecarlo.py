@@ -42,7 +42,8 @@ from aerodynamics import AeroModel, build_aero_model
 from wind import WindEnsemble, load_wind_ensemble
 from dynamics import (
     SimParams,
-    TrajectoryResult,
+    FlightSummary,
+    TrajectoryProfile,
     run_trajectory,
     SCENARIO_MAP,
 )
@@ -96,15 +97,14 @@ class SampleResult:
     landing_east: float         # NED metres
     flight_time_s: float
     peak_mach: float
-    peak_altitude_ft: float
     max_aoa_deg: float
     min_sm_subsonic: float     # calibres
     min_sm_supersonic: float   # calibres
 
-    # Acceptance
+    # Acceptance (overall compliance assembled here from FlightSummary + post-sim checks)
     compliant: bool
-    in_buffer: bool
-    below_ceiling: bool
+    footprint_compliant: bool
+    ceiling_compliant: bool
     stability_compliant: bool
     landing_at_sea: bool | None    # None if coastline check disabled
     in_coverage: bool | None       # None if monitor check not applicable
@@ -117,8 +117,8 @@ class SampleResult:
     inclination_deg: float
     fin_cant_deg: float
 
-    # Full TrajectoryResult kept for replay / altitude plot
-    trajectory: TrajectoryResult | None = field(default=None, repr=False)
+    # Full TrajectoryProfile kept for replay plots
+    trajectory: TrajectoryProfile | None = field(default=None, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -319,23 +319,31 @@ def run_sample(
 
     # --- Run trajectory ---
     scenario_int = SCENARIO_MAP[scenario_name]
-    result = run_trajectory(params, scenario_int, poly_e, poly_n, buffered_ceiling)
+    traj_out = run_trajectory(
+        params, scenario_int, poly_e, poly_n, buffered_ceiling,
+        keep_profile=keep_trajectory,
+    )
+    if keep_trajectory:
+        summary, profile = traj_out
+    else:
+        summary = traj_out
+        profile = None
 
     # --- Convert positions to lat/lon ---
     apogee_lat, apogee_lon = ned_to_latlon(
-        result.apogee_position[0], result.apogee_position[1],
+        summary.apogee_position[0], summary.apogee_position[1],
         site.latitude, site.longitude,
     )
     landing_lat, landing_lon = ned_to_latlon(
-        result.landing_position[0], result.landing_position[1],
+        summary.landing_position[0], summary.landing_position[1],
         site.latitude, site.longitude,
     )
 
     # --- Extract NED positions ---
-    apogee_north = float(result.apogee_position[0])
-    apogee_east = float(result.apogee_position[1])
-    landing_north = float(result.landing_position[0])
-    landing_east = float(result.landing_position[1])
+    apogee_north = float(summary.apogee_position[0])
+    apogee_east = float(summary.apogee_position[1])
+    landing_north = float(summary.landing_position[0])
+    landing_east = float(summary.landing_position[1])
 
     # Coastline check (only for configured scenarios)
     landing_at_sea: bool | None = None
@@ -357,24 +365,34 @@ def run_sample(
         )
         monitor_compliant = in_coverage
 
-    # --- Final compliance ---
-    compliant = (
-        result.compliant
-        and sea_compliant
-        and monitor_compliant
+    # --- Assemble overall compliance ---
+    # FlightSummary provides footprint/ceiling/stability; this layer adds
+    # coastline and monitor checks that dynamics.py has no knowledge of.
+    dynamics_ok = (
+        summary.footprint_compliant
+        and summary.ceiling_compliant
+        and summary.stability_compliant
     )
+    compliant = dynamics_ok and sea_compliant and monitor_compliant
 
-    violation = result.violation_reason
-    if not sea_compliant and not violation:
+    # Build violation reason string
+    violation = ""
+    if not summary.stability_compliant:
+        violation = "Stability violation"
+    elif not summary.footprint_compliant:
+        violation = "Trajectory exited buffered danger area"
+    elif not summary.ceiling_compliant:
+        violation = "Apogee above buffered ceiling"
+    elif not sea_compliant:
         violation = "Landing fails coastline check"
-    elif not monitor_compliant and not violation:
+    elif not monitor_compliant:
         violation = "Landing outside monitored area"
 
     return SampleResult(
         sample_id=sample_index,
         scenario=scenario_name,
         run_index=run_index,
-        apogee_m=result.apogee_altitude,
+        apogee_m=summary.apogee,
         apogee_lat=apogee_lat,
         apogee_lon=apogee_lon,
         landing_lat=landing_lat,
@@ -383,16 +401,15 @@ def run_sample(
         apogee_east=apogee_east,
         landing_north=landing_north,
         landing_east=landing_east,
-        flight_time_s=result.flight_time,
-        peak_mach=result.max_mach,
-        peak_altitude_ft=result.peak_altitude_ft,
-        max_aoa_deg=result.max_aoa_deg,
-        min_sm_subsonic=result.min_sm_subsonic,
-        min_sm_supersonic=result.min_sm_supersonic,
+        flight_time_s=summary.flight_time,
+        peak_mach=summary.max_mach,
+        max_aoa_deg=summary.max_aoa_deg,
+        min_sm_subsonic=summary.min_sm_subsonic,
+        min_sm_supersonic=summary.min_sm_supersonic,
         compliant=compliant,
-        in_buffer=result.in_buffer,
-        below_ceiling=result.below_ceiling,
-        stability_compliant=result.stability_compliant,
+        footprint_compliant=summary.footprint_compliant,
+        ceiling_compliant=summary.ceiling_compliant,
+        stability_compliant=summary.stability_compliant,
         landing_at_sea=landing_at_sea,
         in_coverage=in_coverage,
         violation_reason=violation,
@@ -401,7 +418,7 @@ def run_sample(
         azimuth_deg=draws.azimuth_deg,
         inclination_deg=draws.inclination_deg,
         fin_cant_deg=draws.fin_cant_deg,
-        trajectory=result if keep_trajectory else None,
+        trajectory=profile,
     )
 
 
@@ -609,6 +626,10 @@ class MonteCarloResult:
     warnings: list[str]
     azimuth_mean: float
     inclination_mean: float
+    # Deterministic altitude-time curves (zero uncertainty, mean wind) per scenario.
+    baseline_curves: dict[str, tuple[np.ndarray, np.ndarray]] = field(
+        default_factory=dict,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -764,6 +785,26 @@ def run_monte_carlo(
 
     all_passed = all(s.passed for s in scenario_stats.values())
 
+    # --- Baseline altitude-time curves ---
+    # One deterministic trajectory per scenario: all uncertainties zero,
+    # mean wind profile.  These are cheap (one run each) and give the
+    # altitude plot its reference line without re-running later.
+    baseline_curves: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for scenario_name in active:
+        baseline_params = build_sim_params(
+            sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+            wind_profile_index=0,
+            azimuth_deg=azimuth_mean,
+            inclination_deg=inclination_mean,
+            impulse_factor=1.0,
+            fin_cant_deg=0.0,
+        )
+        _, profile = run_trajectory(
+            baseline_params, SCENARIO_MAP[scenario_name],
+            keep_profile=True,
+        )
+        baseline_curves[scenario_name] = (profile.time, profile.altitude)
+
     return MonteCarloResult(
         all_results=all_results,
         scenario_stats=scenario_stats,
@@ -771,6 +812,7 @@ def run_monte_carlo(
         warnings=warnings_list,
         azimuth_mean=azimuth_mean,
         inclination_mean=inclination_mean,
+        baseline_curves=baseline_curves,
     )
 
 
@@ -792,7 +834,7 @@ def replay_sample(
 ) -> SampleResult:
     """Replay a single sample by reconstructing its RNG state.
 
-    Returns a SampleResult with the full TrajectoryResult attached
+    Returns a SampleResult with the full TrajectoryProfile attached
     (``keep_trajectory=True``).
     """
     active = vehicle.recovery.active_scenarios

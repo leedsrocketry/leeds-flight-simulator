@@ -192,7 +192,7 @@ def write_samples_csv(
             ]
             if has_coastline:
                 row.append(r.landing_at_sea)
-            row.extend([r.in_buffer, r.below_ceiling])
+            row.extend([r.footprint_compliant, r.ceiling_compliant])
             if has_monitor:
                 row.append(r.in_coverage)
             row.extend([
@@ -1143,29 +1143,12 @@ def _extract_replay_trajectory(
     if sr.trajectory is None:
         return None
 
-    traj = sr.trajectory
+    profile = sr.trajectory
 
-    north_asc = traj.state_ascent[:, 0] / 1000.0
-    east_asc = traj.state_ascent[:, 1] / 1000.0
-    alt_asc = -traj.state_ascent[:, 2]
-    t_asc = traj.t_ascent
-
-    if traj.t_descent is not None and traj.n_descent > 0:
-        n = traj.n_descent
-        t_desc = traj.t_descent[:n]
-        north_desc = traj.state_descent[:n, 0] / 1000.0
-        east_desc = traj.state_descent[:n, 1] / 1000.0
-        alt_desc = -traj.state_descent[:n, 2]
-        # Skip overlapping apogee point in descent arrays
-        north_km = np.concatenate([north_asc, north_desc[1:]])
-        east_km = np.concatenate([east_asc, east_desc[1:]])
-        alt_m = np.concatenate([alt_asc, alt_desc[1:]])
-        t_s = np.concatenate([t_asc, t_desc[1:]])
-    else:
-        north_km = north_asc
-        east_km = east_asc
-        alt_m = alt_asc
-        t_s = t_asc
+    north_km = profile.position_ned[:, 0] / 1000.0
+    east_km = profile.position_ned[:, 1] / 1000.0
+    alt_m = profile.altitude.copy()
+    t_s = profile.time.copy()
 
     # RDP simplification: keep minimum points within distortion budget
     if len(north_km) > 2:
@@ -1184,17 +1167,6 @@ def _extract_replay_trajectory(
         alt_m = alt_m[mask]
         t_s = t_s[mask]
 
-    # AoA time history (ascent only — 6DoF phase).
-    # Computed from body-frame velocity components stored in state_ascent:
-    #   u = state[:, 7]  (axial, body x)
-    #   v = state[:, 8], w = state[:, 9]  (lateral)
-    # AoA = atan2(sqrt(v²+w²), u).  Wind contribution is not removed, but
-    # during powered ascent the airspeed dominates so the error is small.
-    u_b = traj.state_ascent[:, 7]
-    v_b = traj.state_ascent[:, 8]
-    w_b = traj.state_ascent[:, 9]
-    aoa_deg = np.degrees(np.arctan2(np.sqrt(v_b ** 2 + w_b ** 2), u_b))
-
     is_terminated = not sr.stability_compliant
     colour = "deeppink" if is_terminated else SCENARIO_COLOURS.get(sr.scenario, "grey")
     label = SCENARIO_LABELS.get(sr.scenario, sr.scenario)
@@ -1204,8 +1176,8 @@ def _extract_replay_trajectory(
         "east_km": east_km,
         "alt_m": alt_m,
         "t_s": t_s,
-        "aoa_deg": aoa_deg,
-        "t_asc_s": traj.t_ascent,
+        "aoa_deg": profile.aoa_deg,
+        "t_aoa_s": profile.time,
         "colour": colour,
         "label": label,
         "is_terminated": is_terminated,
@@ -1336,7 +1308,7 @@ def save_replay_aoa(
     lw, alpha = _replay_line_style(len(trajectories))
 
     for t in trajectories:
-        ax.plot(t["t_asc_s"], t["aoa_deg"], color="black", linewidth=lw, alpha=alpha)
+        ax.plot(t["t_aoa_s"], t["aoa_deg"], color="black", linewidth=lw, alpha=alpha)
 
     aoa_limit = sim_cfg.monte_carlo.acceptance.aoa_max
     ax.axhline(

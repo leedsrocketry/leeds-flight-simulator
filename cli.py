@@ -14,7 +14,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import click
-import numpy as np
 import yaml
 from rich.console import Console, Group
 from rich.live import Live
@@ -33,7 +32,6 @@ from config import load_simulation_config
 from montecarlo import (
     REASON_COLS,
     SCENARIO_LABELS,
-    build_sim_params,
     load_all_models,
     replay_compliant,
     replay_non_compliant,
@@ -54,7 +52,6 @@ from outputs import (
 )
 from verify import run_verification
 from wind import load_wind_ensemble
-from dynamics import SCENARIO_MAP, run_trajectory
 
 console = Console()
 
@@ -227,51 +224,6 @@ def _clear_results(results_root: Path, display: _RunDisplay) -> None:
 
 
 
-def _generate_altitude_curves(
-    sim_cfg,
-    vehicle,
-    propellant,
-    aero_model,
-    wind_ensemble,
-    azimuth_mean: float,
-    inclination_mean: float,
-) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    """Run one mean-input trajectory per scenario and return altitude curves.
-
-    Returns ``{scenario_key: (time_s, altitude_m)}`` for each active
-    descent scenario, using mean stochastic inputs and the first wind
-    profile (index 0).
-    """
-    curves: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-
-    for scenario in vehicle.recovery.active_scenarios:
-        params = build_sim_params(
-            sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-            wind_profile_index=0,
-            azimuth_deg=azimuth_mean,
-            inclination_deg=inclination_mean,
-            impulse_factor=1.0,
-            fin_cant_deg=0.0,
-        )
-        traj = run_trajectory(params, SCENARIO_MAP[scenario])
-
-        # Ascent portion
-        t_asc = traj.t_ascent
-        alt_asc = -traj.state_ascent[:, 2]  # NED Down → altitude
-
-        if traj.t_descent is not None and traj.n_descent > 0:
-            t_desc = traj.t_descent[:traj.n_descent]
-            alt_desc = -traj.state_descent[:traj.n_descent, 2]
-            # Skip overlapping apogee point in descent
-            t_full = np.concatenate([t_asc, t_desc[1:]])
-            alt_full = np.concatenate([alt_asc, alt_desc[1:]])
-        else:
-            t_full = t_asc
-            alt_full = alt_asc
-
-        curves[scenario] = (t_full, alt_full)
-
-    return curves
 
 
 # ---------------------------------------------------------------------------
@@ -465,10 +417,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
 
         # --- Plots and outputs ---
         display.update_status("Generating plots...")
-        altitude_data = _generate_altitude_curves(
-            sim_cfg, vehicle, propellant, aero_model,
-            wind_ensemble, azimuth_mean, inclination_mean,
-        )
+        altitude_data = mc_result.baseline_curves
         burnout_time = float(propellant.times[-1])
 
         results_dir = create_results_dir(config_path, wind_suffix, _clear=False)
