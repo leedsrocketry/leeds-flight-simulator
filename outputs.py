@@ -1295,8 +1295,11 @@ def save_replay_aoa(
     Only the 6DoF ascent phase is shown.  AoA is derived from body-frame
     velocity components stored in the state history.  All traces are black;
     opacity scales with trajectory count via :func:`_replay_line_style`.
-    A dashed horizontal line marks the acceptance AoA limit.
+
+    *sim_cfg* is accepted for signature compatibility with the other
+    ``save_replay_*`` functions but is not used.
     """
+    _ = sim_cfg
     fig, ax = plt.subplots(figsize=(12, 5))
 
     trajectories: list[dict] = []
@@ -1309,12 +1312,6 @@ def save_replay_aoa(
 
     for t in trajectories:
         ax.plot(t["t_aoa_s"], t["aoa_deg"], color="black", linewidth=lw, alpha=alpha)
-
-    aoa_limit = sim_cfg.monte_carlo.acceptance.aoa_max
-    ax.axhline(
-        aoa_limit, color="red", linewidth=1.2, linestyle="--",
-        label=f"AoA limit ({aoa_limit:.1f}°)",
-    )
 
     ax.set_xlabel("Flight Time (s)", fontsize=11)
     ax.set_ylabel("Angle of Attack (deg)", fontsize=11)

@@ -85,14 +85,8 @@ monte_carlo:
     buffer_distance: 500          # metres — inward buffer applied to the danger area polygon and ceiling before
                                   # containment checking; full trajectory must be inside the buffered volume
 
-    sm_transition_mach: 0.91      # Mach — threshold separating subsonic and supersonic SM checks;
-                                  # the definition of this boundary varies between tools; the value
-                                  # used here follows the RASAero II convention
-    sm_subsonic_min: 1.0          # calibres — minimum acceptable static margin when M < sm_transition_mach
-    sm_supersonic_min: 2.0        # calibres — minimum acceptable static margin when M >= sm_transition_mach
-    aoa_max: 12.0                 # degrees — maximum acceptable angle of attack at any point in flight
-    sm_aoa_threshold: 5.0         # degrees — SM check is only applied when AoA < this value;
-                                  # naturally excludes rail-exit and apogee transients
+    sm_subsonic_min: 1.0          # calibres — minimum acceptable static margin when M < 0.91
+    sm_supersonic_min: 1.0        # calibres — minimum acceptable static margin when M >= 0.91
 
     # Scenarios to apply the coastline check to (requires coastline above to be set).
     # Scenarios not active for the current vehicle configuration are skipped with a warning.

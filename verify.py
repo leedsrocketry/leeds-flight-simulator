@@ -35,6 +35,7 @@ from aerodynamics import AeroModel
 from wind import WindEnsemble
 from dynamics import (
     run_trajectory,
+    check_stability_compliance,
     SCENARIO_NOMINAL,
     SCENARIO_BALLISTIC,
 )
@@ -404,9 +405,12 @@ def run_verification(
         fin_cant_deg=0.0,
     )
     scenario = _nominal_scenario(vehicle)
-    _, profile = run_trajectory(
+    summary, profile = run_trajectory(
         params, scenario, None, None, float("inf"),
         keep_profile=True,
+    )
+    check_stability_compliance(
+        summary, sim_cfg.monte_carlo.acceptance, "Verification",
     )
 
     # Read unified quantities directly from the profile — no recomputation.

@@ -196,11 +196,8 @@ def _make_sim_cfg(tmp_path: Path) -> SimulationConfig:
             acceptance=AcceptanceConfig(
                 compliance_threshold=0.997,
                 buffer_distance=1000.0,
-                sm_transition_mach=0.8,
                 sm_subsonic_min=1.5,
                 sm_supersonic_min=1.0,
-                aoa_max=15.0,
-                sm_aoa_threshold=5.0,
                 coastline_check_scenarios=(),
                 monitor_check_scenarios=(),
             ),

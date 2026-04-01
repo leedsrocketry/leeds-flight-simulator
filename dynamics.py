@@ -281,11 +281,8 @@ class SimParams:
     has_main: bool
 
     # Acceptance thresholds
-    sm_transition_mach: float
     sm_subsonic_min: float        # calibres
     sm_supersonic_min: float      # calibres
-    aoa_max_rad: float
-    sm_aoa_threshold_rad: float
 
     # Atmosphere site corrections
     site_elevation: float             # metres MSL
@@ -319,6 +316,38 @@ class FlightSummary:
     footprint_compliant: bool     # full trajectory inside buffered footprint
     ceiling_compliant: bool       # apogee below buffered altitude ceiling
     stability_compliant: bool
+
+
+def check_stability_compliance(
+    summary: FlightSummary,
+    acceptance: "AcceptanceConfig",
+    label: str,
+) -> None:
+    """Raise ``RuntimeError`` if *summary* violates stability thresholds.
+
+    Parameters
+    ----------
+    summary : FlightSummary
+        Result of a single trajectory run.
+    acceptance : config.AcceptanceConfig
+        Configured stability thresholds.
+    label : str
+        Human-readable identifier for the trajectory (used in the error
+        message), e.g. ``"Baseline 'nominal'"`` or ``"Verification"``.
+    """
+    if not summary.stability_compliant:
+        raise RuntimeError(
+            f"{label} trajectory is stability-non-compliant "
+            f"(min SM subsonic = {summary.min_sm_subsonic:.2f} cal "
+            f"[limit {acceptance.sm_subsonic_min}], "
+            f"min SM supersonic = {summary.min_sm_supersonic:.2f} cal "
+            f"[limit {acceptance.sm_supersonic_min}]). "
+            f"The vehicle does not meet the configured acceptance "
+            f"thresholds even with zero uncertainties. Review the "
+            f"transonic stability margins or adjust acceptance "
+            f"thresholds in the config. "
+            f"Use --no-termination to run regardless."
+        )
 
 
 @dataclass
@@ -923,9 +952,7 @@ def integrate_sixdof(
     # Atmosphere site corrections
     site_elevation: float, t_offset: float,
     # Acceptance
-    sm_transition_mach: float,
     sm_subsonic_min: float, sm_supersonic_min: float,
-    aoa_max_rad: float, sm_aoa_threshold_rad: float,
     # Tolerances
     rtol: float, atol: float,
     # Termination
@@ -959,6 +986,10 @@ def integrate_sixdof(
         y_out[0, j] = y[j]
     n = 1
 
+    # Hardcoded stability-check constants
+    sm_transition_mach = 0.91
+    sm_aoa_threshold_rad = 5.0 * math.pi / 180.0
+
     # Tracking variables
     max_mach = 0.0
     max_aoa_deg = 0.0
@@ -967,6 +998,7 @@ def integrate_sixdof(
     peak_alt = -y[2]
     stability_compliant = True
     violation_code = 0
+    past_apogee = False
     prev_rD = y[2]
 
     # Pre-allocate all work arrays — zero heap allocations in the loop
@@ -1154,37 +1186,34 @@ def integrate_sixdof(
             )
             sm_cal = (cp_whole - cg_now) / _d
 
-            # AoA check
-            if alpha_rad > aoa_max_rad:
-                stability_compliant = False
-                violation_code = 1
-                if terminate_at_apogee:
-                    break
-                # Ballistic: record violation but continue to ground impact
+            # Detect apogee passage (altitude starts decreasing)
+            if y[2] > prev_rD and n > 2:
+                past_apogee = True
 
-            # SM check (only when AoA < threshold)
-            if alpha_rad < sm_aoa_threshold_rad:
-                if mach_now < sm_transition_mach:
-                    if sm_cal < min_sm_sub:
-                        min_sm_sub = sm_cal
-                    if sm_cal < sm_subsonic_min:
-                        stability_compliant = False
-                        violation_code = 2
-                        if terminate_at_apogee:
+            # Stability checks apply only during ascent (up to apogee).
+            # Post-apogee attitudes are not meaningful for vehicle
+            # stability assessment.
+            if not past_apogee:
+                # SM check (only when AoA < threshold)
+                if alpha_rad < sm_aoa_threshold_rad:
+                    if mach_now < sm_transition_mach:
+                        if sm_cal < min_sm_sub:
+                            min_sm_sub = sm_cal
+                        if sm_cal < sm_subsonic_min:
+                            stability_compliant = False
+                            violation_code = 2
                             break
-                else:
-                    if sm_cal < min_sm_sup:
-                        min_sm_sup = sm_cal
-                    if sm_cal < sm_supersonic_min:
-                        stability_compliant = False
-                        violation_code = 2
-                        if terminate_at_apogee:
+                    else:
+                        if sm_cal < min_sm_sup:
+                            min_sm_sup = sm_cal
+                        if sm_cal < sm_supersonic_min:
+                            stability_compliant = False
+                            violation_code = 2
                             break
 
             # Termination detection
             if terminate_at_apogee:
-                # Apogee: rD goes from decreasing to increasing
-                if y[2] > prev_rD and n > 2:
+                if past_apogee:
                     break
             else:
                 # Continue to ground impact (rD >= 0)
@@ -1789,9 +1818,7 @@ def run_trajectory(
         p.wind_alt, p.wind_east, p.wind_north,
         p.fin_cant_rad,
         p.site_elevation, p.t_offset,
-        p.sm_transition_mach,
         p.sm_subsonic_min, p.sm_supersonic_min,
-        p.aoa_max_rad, p.sm_aoa_threshold_rad,
         p.rtol, p.atol,
         terminate_at_apogee=not is_ballistic,
     )
@@ -1877,7 +1904,7 @@ def run_trajectory(
 
     # ---- Parachute scenarios: 3DoF descent from apogee ----
 
-    if not _ceiling_ok or not _footprint_ok:
+    if not _ceiling_ok or not _footprint_ok or not stab_ok:
         # Skip descent — sample is already non-compliant.
         summary = _make_summary(apogee_pos, apogee_t)
         profile = _maybe_profile()

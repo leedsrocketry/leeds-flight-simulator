@@ -250,8 +250,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
 
     if no_termination:
         acc = sim_cfg.monte_carlo.acceptance
-        acc = replace(acc, aoa_max=180.0, sm_subsonic_min=-1e9,
-                      sm_supersonic_min=-1e9)
+        acc = replace(acc, sm_subsonic_min=-1e9, sm_supersonic_min=-1e9)
         mc = replace(sim_cfg.monte_carlo, acceptance=acc)
         sim_cfg = replace(sim_cfg, monte_carlo=mc)
     all_warnings: list[str] = []
@@ -301,7 +300,10 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
         ver_task = progress.add_task("Verification", total=1)
         display.start_task(ver_task)
 
-        ver_result = run_verification(sim_cfg, vehicle, propellant, aero_model)
+        try:
+            ver_result = run_verification(sim_cfg, vehicle, propellant, aero_model)
+        except RuntimeError as exc:
+            display.abort(str(exc))
         if ver_result.figure is not None:
             if no_popup:
                 ver_fig_path = results_root / "verification_plot.png"
@@ -404,12 +406,15 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
                     description=f"{label:<16} {verdict}",
                 )
 
-        mc_result = run_monte_carlo(
-            sim_cfg, vehicle, propellant, aero_model,
-            wind_ensemble, azimuth_mean, inclination_mean,
-            progress_callback=_mc_callback,
-            scenario_done_callback=_scenario_done,
-        )
+        try:
+            mc_result = run_monte_carlo(
+                sim_cfg, vehicle, propellant, aero_model,
+                wind_ensemble, azimuth_mean, inclination_mean,
+                progress_callback=_mc_callback,
+                scenario_done_callback=_scenario_done,
+            )
+        except RuntimeError as exc:
+            display.abort(str(exc))
 
         # MC warnings
         for w in mc_result.warnings:
@@ -682,10 +687,13 @@ def verify(config_path: Path, inclination: float | None,
     vehicle, propellant, aero_model, _ = load_all_models(sim_cfg)
 
     display.update_status("Running 6DoF verification trajectory...")
-    ver_result = run_verification(
-        sim_cfg, vehicle, propellant, aero_model,
-        inclination_override=inclination,
-    )
+    try:
+        ver_result = run_verification(
+            sim_cfg, vehicle, propellant, aero_model,
+            inclination_override=inclination,
+        )
+    except RuntimeError as exc:
+        display.abort(str(exc))
 
     display.update_status("Done.")
     display.stop()

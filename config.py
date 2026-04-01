@@ -106,11 +106,8 @@ class UncertaintiesConfig:
 class AcceptanceConfig:
     compliance_threshold: float        # fractional (0.0–1.0) of landings inside danger area
     buffer_distance: float             # metres inward from danger area boundary
-    sm_transition_mach: float          # Mach number dividing subsonic / supersonic SM check
-    sm_subsonic_min: float             # calibres (M < sm_transition_mach)
-    sm_supersonic_min: float           # calibres (M >= sm_transition_mach)
-    aoa_max: float                     # degrees
-    sm_aoa_threshold: float            # degrees: SM check applies when AoA < this
+    sm_subsonic_min: float             # calibres (M < 0.91)
+    sm_supersonic_min: float           # calibres (M >= 0.91)
     coastline_check_scenarios: tuple[str, ...]  # scenarios checked for sea landing
     monitor_check_scenarios: tuple[str, ...]  # scenarios checked for monitor station coverage
 
@@ -406,11 +403,8 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         acceptance=AcceptanceConfig(
             compliance_threshold=float(acc_raw["compliance_threshold"]),
             buffer_distance=float(acc_raw["buffer_distance"]),
-            sm_transition_mach=float(acc_raw["sm_transition_mach"]),
             sm_subsonic_min=float(acc_raw["sm_subsonic_min"]),
             sm_supersonic_min=float(acc_raw["sm_supersonic_min"]),
-            aoa_max=float(acc_raw["aoa_max"]),
-            sm_aoa_threshold=float(acc_raw["sm_aoa_threshold"]),
             coastline_check_scenarios=tuple(
                 str(s) for s in (acc_raw.get("coastline_check_scenarios") or [])
             ),

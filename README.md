@@ -288,7 +288,7 @@ Omit the `coastline` key from `simulation.yaml` to disable the check entirely.
 
 A sample is compliant if **all** of the following hold:
 
-1. **Stability and AoA** — during powered and coasting flight, whenever AoA < `sm_aoa_threshold`: static margin ≥ `sm_subsonic_min` calibres below `sm_transition_mach`, or ≥ `sm_supersonic_min` calibres at or above it. AoA must not exceed `aoa_max` at any point. Violation terminates the sample immediately.
+1. **Stability margin** — checked during ascent only (up to apogee). Whenever AoA < 5° (hardcoded threshold that excludes rail-exit and apogee transients): static margin ≥ `sm_subsonic_min` calibres below Mach 0.91, or ≥ `sm_supersonic_min` calibres at or above it. Violation terminates the sample immediately; no descent phase is run. Maximum AoA is recorded but is not an acceptance criterion.
 2. **Containment** — landing point inside the buffered danger area and peak altitude below the buffered altitude ceiling.
 3. **Coastline** — if a coastline file is provided, the landing point must satisfy the configured `coastline_mode`.
 4. **Monitor coverage** — landing within the configured radius of at least one monitor station. Applied only to scenarios listed in `monitor_check_scenarios`.

@@ -427,7 +427,7 @@ Terminates on:
 1. **Apogee:** vertical velocity sign change.
 2. **Stability/AoA violation:** criteria from §11.1 violated — sample flagged non-compliant, terminated.
 
-The configurable AoA threshold (`sm_aoa_threshold` in `simulation.yaml`) in the SM check naturally excludes launch rail-exit and apogee transients.
+The hardcoded 5° AoA threshold in the SM check naturally excludes launch rail-exit and apogee transients.
 
 ### 8.4 Descent (3DoF)
 
@@ -523,7 +523,7 @@ At the beging of execution, run ~20 samples at tight tolerance (1×10⁻⁹), re
 
 A sample is compliant iff **all** of:
 
-**Stability & AoA** — during powered/coasting flight, whenever AoA < `sm_aoa_threshold`: SM ≥ `sm_subsonic_min` cal below `sm_transition_mach` Mach, or SM ≥ `sm_supersonic_min` cal at or above it. AoA must not exceed `aoa_max` at any point. Violation terminates the sample (§8.3.6). All thresholds configurable in `simulation.yaml`.
+**Stability margin** — during ascent (up to apogee), whenever AoA < 5° (hardcoded): SM ≥ `sm_subsonic_min` cal below Mach 0.91, or SM ≥ `sm_supersonic_min` cal at or above it. Violation terminates the sample (§8.3.6). Maximum AoA is recorded but is not an acceptance criterion. SM thresholds configurable in `simulation.yaml`.
 
 **Containment** — full trajectory within the buffered danger area: landing point inside the buffered danger area footprint, and peak altitude below the buffered altitude ceiling (§14). Same buffer for both.
 

@@ -496,9 +496,7 @@ def test_sixdof_gravity_only_apogee():
         wa, we, wn,
         0.0,                   # fin_cant
         0.0, 0.0,             # site_elevation, t_offset
-        1.0,                   # sm_transition_mach
         -1e6, -1e6,           # sm_min (permissive — no check)
-        math.pi, math.pi,     # aoa_max, sm_aoa_threshold (permissive)
         1e-8, 1e-8,           # tight tolerances
     )
 
@@ -546,9 +544,7 @@ def test_integrator_convergence():
         wind_alt=wa, wind_east=we, wind_north=wn,
         fin_cant_rad=0.0,
         site_elevation=0.0, t_offset=0.0,
-        sm_transition_mach=1.0,
         sm_subsonic_min=-1e6, sm_supersonic_min=-1e6,
-        aoa_max_rad=math.pi, sm_aoa_threshold_rad=math.pi,
     )
 
     _, y_loose, n_loose, *_ = integrate_sixdof(rtol=1e-6, atol=1e-6, **common)

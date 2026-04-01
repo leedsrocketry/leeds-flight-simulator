@@ -83,11 +83,8 @@ _MINIMAL_SIM_YAML = """
       acceptance:
         compliance_threshold: 0.997
         buffer_distance: 1000
-        sm_transition_mach: 0.91
         sm_subsonic_min: 1.0
         sm_supersonic_min: 2.0
-        aoa_max: 12.0
-        sm_aoa_threshold: 5.0
         coastline_check_scenarios:
           - nominal
           - ballistic
@@ -219,10 +216,8 @@ def test_acceptance(tmp_path):
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", _MINIMAL_SIM_YAML))
     acc = cfg.monte_carlo.acceptance
     assert acc.compliance_threshold == pytest.approx(0.997)
-    assert acc.sm_transition_mach == pytest.approx(0.91)
     assert acc.sm_subsonic_min == pytest.approx(1.0)
     assert acc.sm_supersonic_min == pytest.approx(2.0)
-    assert acc.aoa_max == pytest.approx(12.0)
 
 
 def test_monitor_stations(tmp_path):

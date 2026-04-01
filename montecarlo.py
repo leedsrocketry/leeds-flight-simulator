@@ -44,6 +44,7 @@ from dynamics import (
     SimParams,
     FlightSummary,
     TrajectoryProfile,
+    check_stability_compliance,
     run_trajectory,
     SCENARIO_MAP,
 )
@@ -214,11 +215,8 @@ def build_sim_params(
         has_drogue=has_drogue,
         has_main=has_main,
         # Acceptance thresholds
-        sm_transition_mach=acc.sm_transition_mach,
         sm_subsonic_min=acc.sm_subsonic_min,
         sm_supersonic_min=acc.sm_supersonic_min,
-        aoa_max_rad=acc.aoa_max * _DEG2RAD,
-        sm_aoa_threshold_rad=acc.sm_aoa_threshold * _DEG2RAD,
         # Atmosphere site corrections
         site_elevation=sim_cfg.site.elevation,
         t_offset=(
@@ -799,11 +797,15 @@ def run_monte_carlo(
             impulse_factor=1.0,
             fin_cant_deg=0.0,
         )
-        _, profile = run_trajectory(
+        summary, profile = run_trajectory(
             baseline_params, SCENARIO_MAP[scenario_name],
             keep_profile=True,
         )
         baseline_curves[scenario_name] = (profile.time, profile.altitude)
+        check_stability_compliance(
+            summary, sim_cfg.monte_carlo.acceptance,
+            f"Baseline '{scenario_name}'",
+        )
 
     return MonteCarloResult(
         all_results=all_results,
