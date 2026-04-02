@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 # ---------------------------------------------------------------------------
 # Ensure the project root is importable (replaces pyproject.toml pythonpath)
@@ -31,7 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Module-level default for tests that import EXAMPLE_SIM_DIR directly.
 # Fixtures use the configurable --sim-data / pytest.ini value instead.
-EXAMPLE_SIM_DIR = PROJECT_ROOT / "simulations" / "g2b2-safety-case"
+EXAMPLE_SIM_DIR = PROJECT_ROOT.parent / "simulations" / "cases" / "g2b2-cape-wrath"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -52,7 +53,7 @@ def _resolve_sim_dir(config: pytest.Config) -> Path:
     ini_value = config.getini("sim_data")
     if ini_value:
         return (PROJECT_ROOT / ini_value).resolve()
-    return PROJECT_ROOT / "simulations" / "g2b2-safety-case"
+    return PROJECT_ROOT.parent / "simulations" / "cases" / "g2b2-cape-wrath"
 
 
 # ---------------------------------------------------------------------------
@@ -65,37 +66,46 @@ def example_sim_dir(pytestconfig: pytest.Config) -> Path:
     return _resolve_sim_dir(pytestconfig)
 
 
+def _load_yaml(path: Path) -> dict:
+    """Load a YAML file and return the top-level dict."""
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
 @pytest.fixture(scope="session")
 def sim_yaml_path(example_sim_dir: Path) -> Path:
     """Path to the example simulation YAML, skipping if absent."""
-    p = example_sim_dir / "cape-wrath.yaml"
+    p = example_sim_dir / "config.yaml"
     if not p.exists():
-        pytest.skip("cape-wrath.yaml not present")
+        pytest.skip("config.yaml not present")
     return p
 
 
 @pytest.fixture(scope="session")
-def vehicle_yaml_path(example_sim_dir: Path) -> Path:
-    """Path to the example vehicle YAML, skipping if absent."""
-    p = example_sim_dir / "g2b2.yaml"
+def vehicle_yaml_path(sim_yaml_path: Path) -> Path:
+    """Path to the vehicle YAML referenced by the simulation config."""
+    cfg = _load_yaml(sim_yaml_path)
+    p = (sim_yaml_path.parent / cfg["vehicle"]).resolve()
     if not p.exists():
-        pytest.skip("g2b2.yaml not present")
+        pytest.skip(f"vehicle YAML not present: {p}")
     return p
 
 
 @pytest.fixture(scope="session")
-def motor_path(example_sim_dir: Path) -> Path:
-    """Path to the example motor file, skipping if absent."""
-    p = example_sim_dir / "o3400.eng"
+def motor_path(vehicle_yaml_path: Path) -> Path:
+    """Path to the motor file referenced by the vehicle config."""
+    vcfg = _load_yaml(vehicle_yaml_path)
+    p = (vehicle_yaml_path.parent / vcfg["motor"]).resolve()
     if not p.exists():
-        pytest.skip("o3400.eng not present")
+        pytest.skip(f"motor file not present: {p}")
     return p
 
 
 @pytest.fixture(scope="session")
-def aero_dir(example_sim_dir: Path) -> Path:
-    """Path to the example aero tables directory, skipping if absent/empty."""
-    p = example_sim_dir / "aero-tables"
+def aero_dir(vehicle_yaml_path: Path) -> Path:
+    """Path to the aero tables directory referenced by the vehicle config."""
+    vcfg = _load_yaml(vehicle_yaml_path)
+    p = (vehicle_yaml_path.parent / vcfg["aero_tables"]).resolve()
     if not p.exists() or not list(p.glob("*.csv")):
         pytest.skip("aero-tables not present or empty")
     return p

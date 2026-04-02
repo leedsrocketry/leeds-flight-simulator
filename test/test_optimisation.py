@@ -47,7 +47,7 @@ from geography import (
 # Paths (directory from conftest.py)
 # ---------------------------------------------------------------------------
 from conftest import EXAMPLE_SIM_DIR
-SIM_YAML = EXAMPLE_SIM_DIR / "cape-wrath.yaml"
+SIM_YAML = EXAMPLE_SIM_DIR / "config.yaml"
 
 # Launch site
 LAUNCH_LAT = 58.6104700
@@ -80,8 +80,11 @@ def propellant(vehicle_and_propellant):
 
 @pytest.fixture(scope="module")
 def aero_model(vehicle):
+    aero_path = vehicle.aero_tables
+    if not aero_path.exists() or not list(aero_path.glob("*.csv")):
+        pytest.skip("aero-tables not present or empty")
     return build_aero_model(
-        vehicle.aero_tables, fins_override=vehicle.fins_aero_table,
+        aero_path, fins_override=vehicle.fins_aero_table,
     )
 
 

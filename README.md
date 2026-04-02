@@ -59,12 +59,12 @@ python . --help
 ## Quick Start
 
 ```
-python . run simulations/g2b2-safety-case/cape-wrath.yaml
+python . run ../simulations/cases/g2b2-cape-wrath/config.yaml
 ```
 
 The simulator loads the configuration, runs verification (if configured), runs optimisation (if azimuth or inclination is `"auto"`), then executes the Monte Carlo analysis across all active descent scenarios. Progress bars update in the terminal, each showing an inline PASS/FAIL result as they complete. Warnings accumulate in a yellow-bordered panel.
 
-Results are saved to `simulations/g2b2-safety-case/results/`.
+Results are saved to `../simulations/cases/g2b2-cape-wrath/results/`.
 
 
 ## Usage
@@ -88,7 +88,7 @@ python . run <simulation.yaml>
 Example:
 
 ```
-python . run simulations/g2b2-safety-case/cape-wrath.yaml -q
+python . run ../simulations/cases/g2b2-cape-wrath/config.yaml -q
 ```
 
 ### Replaying Samples
@@ -96,22 +96,22 @@ python . run simulations/g2b2-safety-case/cape-wrath.yaml -q
 Replay a specific sample:
 
 ```
-python . replay simulations/g2b2-safety-case/results/summary.yaml --scenario nominal --sample 117
+python . replay ../simulations/cases/g2b2-cape-wrath/results/summary.yaml --scenario nominal --sample 117
 ```
 
 Replay all non-compliant samples from a completed run:
 
 ```
-python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant
+python . replay ../simulations/cases/g2b2-cape-wrath/results/summary.yaml --non-compliant
 ```
 
 Filter to a single scenario, a specific violation reason, or both — flags combine naturally:
 
 ```
-python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --scenario ballistic
-python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --reason stability
-python . replay simulations/g2b2-safety-case/results/summary.yaml --non-compliant --scenario drogue_only --reason footprint
-python . replay simulations/g2b2-safety-case/results/summary.yaml --compliant --scenario nominal
+python . replay ../simulations/cases/g2b2-cape-wrath/results/summary.yaml --non-compliant --scenario ballistic
+python . replay ../simulations/cases/g2b2-cape-wrath/results/summary.yaml --non-compliant --reason stability
+python . replay ../simulations/cases/g2b2-cape-wrath/results/summary.yaml --non-compliant --scenario drogue_only --reason footprint
+python . replay ../simulations/cases/g2b2-cape-wrath/results/summary.yaml --compliant --scenario nominal
 ```
 
 Valid reason keywords:
@@ -192,11 +192,11 @@ When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`
 
 ## Input Files
 
-Example input files are provided in `simulations/g2b2-safety-case/`. The values in those files are justified in the G2B2 safety case (see [Background](#background)).
+Example input files are provided in `../simulations/cases/g2b2-cape-wrath/`. The values in those files are justified in the G2B2 safety case (see [Background](#background)).
 
 ### `simulation.yaml`
 
-Main simulation configuration. All file paths are resolved relative to the directory containing the simulation YAML. See `simulations/g2b2-safety-case/cape-wrath.yaml` for a fully annotated example with comments for every parameter.
+Main simulation configuration. All file paths are resolved relative to the directory containing the simulation YAML. See `../simulations/cases/g2b2-cape-wrath/config.yaml` for a fully annotated example with comments for every parameter.
 
 Key sections:
 
@@ -266,7 +266,7 @@ where `f(t) = m_prop(t) / m_prop₀` is the remaining mass fraction. Propellant 
 
 The parallel-axis theorem transfers the dry and propellant contributions to the instantaneous vehicle CG at each timestep.
 
-See `simulations/g2b2-safety-case/g2b2.yaml` for a fully annotated example.
+See `../simulations/vehicles/g2b2/g2b2-o3400.yaml` for a fully annotated example.
 
 ### Motor File (`.eng`)
 
@@ -433,8 +433,8 @@ Azimuth is always zero for verification (wind is zero, so heading is irrelevant)
 Example:
 
 ```
-python . verify simulations/g2b2-safety-case/cape-wrath.yaml -i 85
-python . verify simulations/g2b2-safety-case/cape-wrath.yaml --dump-csv debug/verify_comparison.csv -q
+python . verify ../simulations/cases/g2b2-cape-wrath/config.yaml -i 85
+python . verify ../simulations/cases/g2b2-cape-wrath/config.yaml --dump-csv debug/verify_comparison.csv -q
 ```
 
 By default, the comparison figure is displayed interactively with linked zoom/pan across the time-series subplots. Pass `-q` to save to file instead.
