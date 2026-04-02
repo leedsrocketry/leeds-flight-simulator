@@ -175,7 +175,7 @@ The `wind_profiles` field in `simulation.yaml` can point to either a single `.np
 - **Single file** — one analysis run using this wind ensemble.
 - **Directory** — the full analysis runs independently for each `.npz` file, with output in sub-folders named after each profile (e.g. `results/day1/`, `results/day2/`). This allows a multi-day wind campaign to be assessed in a single invocation.
 
-The simulator has no knowledge of how the profiles were generated; all source-specific logic (EarthGRAM, GFS, ECMWF, radiosonde, perturbation modelling) is handled by a separate wind profile generator tool. Each `.npz` file must contain:
+The simulator has no knowledge of how the profiles were generated; all source-specific logic (EarthGRAM, GFS, ECMWF, radiosonde, perturbation modelling) is handled by [windgen](https://github.com/leedsrocketry/windgen). Each `.npz` file must contain:
 
 | Array Key | Shape | Description |
 |-----------|-------|-------------|
@@ -277,7 +277,7 @@ LFS reads both CA columns from each aero table CSV, sums them independently acro
 
 Vehicle-level switching is physically correct for the axial force: unlike the normal force (which must be resolved per-component to capture the correct moment arms for pitch/yaw damping), the axial force acts along the body axis and produces no pitch/yaw moment regardless of where along the body it acts. The total vehicle-level CA is therefore all that is needed.
 
-> **Note for RASAero II users:** RASAero applies the power-on/off base drag correction at the vehicle level, not per-component. When per-component data is extracted via successive differencing (<!-- TODO: link to rasaero-export-tool repository -->), the power-on/off delta appears only on one component in the subtraction chain. This is expected — once per-component CAs are summed back to a vehicle total, the correct vehicle-level values are recovered. LFS is agnostic to the source of aerodynamic data (RASAero, CFD, wind tunnel, etc.) — the same format is used regardless of provenance.
+> **Note for RASAero II users:** RASAero applies the power-on/off base drag correction at the vehicle level, not per-component. When per-component data is extracted via successive differencing ([pyrasaero](https://github.com/leedsrocketry/pyrasaero)), the power-on/off delta appears only on one component in the subtraction chain. This is expected — once per-component CAs are summed back to a vehicle total, the correct vehicle-level values are recovered. LFS is agnostic to the source of aerodynamic data (RASAero, CFD, wind tunnel, etc.) — the same format is used regardless of provenance.
 
 ### `danger_area.geojson`
 
@@ -467,6 +467,14 @@ A typical campaign uses the simulator at three stages:
 2. **Operations Planning (Days Before)** — Run with forecast-derived wind profiles (GFS, ECMWF, or similar). If the analysis fails, conditions may not be suitable for launch.
 
 3. **Launch Day Go/No-Go (Hours Before)** — Run with radiosonde-derived wind profiles from the launch site. Enable the surface wind override with the current anemometer reading. The launch director uses this result alongside all other go/no-go criteria to make the final call. Re-run with fresh data if conditions change.
+
+
+## Related Tools
+
+| Tool | Purpose |
+|------|---------|
+| [pyrasaero](https://github.com/leedsrocketry/pyrasaero) | Automates RASAero II to export aeroplot data and converts it to LFS-compatible per-component aero tables |
+| [windgen](https://github.com/leedsrocketry/windgen) | Generates the wind profile `.npz` ensembles that LFS reads as Monte Carlo wind input |
 
 
 ## Contact
