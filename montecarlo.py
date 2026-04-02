@@ -193,11 +193,14 @@ def build_sim_params(
         cp_comp=aero_model.cp_comp,
         has_components=aero_model.has_components,
         cn_alpha_fins=aero_model.cn_alpha_fins,
+        cn_alpha_comp=aero_model.cn_alpha_comp,
+        comp_names=aero_model.comp_names,
         # Geometry
         diameter=geom.diameter,
         length=geom.length,
         A_ref=geom.reference_area,
         fin_cp_radius=geom.fin_cp_radius,
+        fin_span=geom.fin_span,
         # Wind (single profile)
         wind_alt=wind_ensemble.altitude_m,
         wind_east=wind_ensemble.wind_east_ms[idx],

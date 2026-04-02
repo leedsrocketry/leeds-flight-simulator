@@ -9,6 +9,7 @@ geometry:
   length: 2.654          # total length (m)
   nozzle_diameter: 0.069 # nozzle exit diameter (m)
   fin_cp_radius: 0.095   # fin CP spanwise distance from centreline (m)
+  fin_span: 0.113        # fin semi-span, tip-to-root (m)
 
 mass:
   wet_mass: 24                 # total mass at launch — airframe + loaded motor (kg)

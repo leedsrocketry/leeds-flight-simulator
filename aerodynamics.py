@@ -90,6 +90,12 @@ class AeroModel:
     # Fin-only 2-D C_Nα [NM, NR] — for roll torques (Barrowman)
     cn_alpha_fins: np.ndarray  # [1/rad]
 
+    # Per-component 3-D C_Nα [N_comp, NM, NR] — for damping post-processing
+    cn_alpha_comp: np.ndarray  # [1/rad]
+
+    # Component names (stems of the CSV files, in the same order as cn_comp axis 0)
+    comp_names: list[str]
+
     # True when per-component data were loaded; False → single whole-vehicle file
     has_components: bool
 
@@ -158,13 +164,20 @@ def build_aero_model(
 # ---------------------------------------------------------------------------
 
 def _read_csv(path: Path) -> np.ndarray:
-    """Load a CSV → contiguous (N, 7) float64: Mach, Re, AoA_deg, CA_off, CA_on, CN, CP_m.
+    """Load a CSV → contiguous (N, 8) float64.
 
-    Supports two layouts:
+    Column layout (indices 0–7):
+        0 Mach, 1 Reynolds, 2 AoA_deg, 3 CA_off, 4 CA_on, 5 CN, 6 CP_m,
+        7 CN_alpha_per_rad
 
+    Supported input layouts:
+
+    * **8-column**: ``Mach,Reynolds,AoA_deg,CA_off,CA_on,CN,CP_m,CN_alpha_per_rad``
+      — standard per-component output from ``pyrasaero convert``.
     * **7-column**: ``Mach,Reynolds,AoA_deg,CA_off,CA_on,CN,CP_m``
+      — legacy format; column 7 (CN_alpha_per_rad) is set to NaN.
     * **6-column**: ``Mach,Reynolds,AoA_deg,CA,CN,CP_m``
-      — the single CA column is duplicated into both CA_off and CA_on.
+      — single CA duplicated into CA_off and CA_on; column 7 set to NaN.
     """
     try:
         data = np.loadtxt(path, delimiter=",", skiprows=1, dtype=np.float64)
@@ -173,18 +186,26 @@ def _read_csv(path: Path) -> np.ndarray:
     if data.ndim == 1:
         data = data[np.newaxis, :]
 
-    if data.shape[1] >= 7:
-        # 7-column format: Mach, Re, AoA_deg, CA_off, CA_on, CN, CP_m
-        data = data[:, :7]
+    if data.shape[1] >= 8:
+        # 8-column format: Mach, Re, AoA_deg, CA_off, CA_on, CN, CP_m, CN_alpha_per_rad
+        data = data[:, :8]
+    elif data.shape[1] >= 7:
+        # 7-column format: no CN_alpha_per_rad — append NaN column
+        d7 = data[:, :7]
+        data = np.empty((d7.shape[0], 8), dtype=np.float64)
+        data[:, :7] = d7
+        data[:, 7] = math.nan
     elif data.shape[1] >= 6:
         # 6-column format: Mach, Re, AoA_deg, CA, CN, CP_m
         d6 = data[:, :6]
-        # Duplicate CA into CA_off and CA_on
-        data = np.empty((d6.shape[0], 7), dtype=np.float64)
+        # Duplicate CA into CA_off and CA_on; no CN_alpha_per_rad
+        data = np.empty((d6.shape[0], 8), dtype=np.float64)
         data[:, :3] = d6[:, :3]       # Mach, Re, AoA_deg
         data[:, 3]  = d6[:, 3]        # CA_off = CA
         data[:, 4]  = d6[:, 3]        # CA_on  = CA
-        data[:, 5:] = d6[:, 4:]       # CN, CP_m
+        data[:, 5]  = d6[:, 4]        # CN
+        data[:, 6]  = d6[:, 5]        # CP_m
+        data[:, 7]  = math.nan        # CN_alpha_per_rad unavailable
     else:
         raise ValueError(
             f"{path.name}: expected ≥6 columns "
@@ -280,7 +301,8 @@ def _resample_3d(
     Parameters
     ----------
     src:
-        (N, 7) source data: Mach, Re, AoA_deg, CA_off, CA_on, CN, CP_m.
+        (N, 8) source data: Mach, Re, AoA_deg, CA_off, CA_on, CN, CP_m,
+        CN_alpha_per_rad.  Only columns 3–6 are used; column 7 is ignored.
     mach_g, re_g, alpha_g:
         Target grid axes (sorted 1-D arrays).
 
@@ -311,6 +333,47 @@ def _resample_3d(
         out.append(_trilinear(m_src, r_src, a_src, tbl, mach_g, re_g, alpha_g))
 
     return out[0], out[1], out[2], out[3]
+
+
+def _resample_cna_2d(
+    src: np.ndarray,
+    mach_g: np.ndarray,
+    re_g: np.ndarray,
+) -> np.ndarray:
+    """Build a (NM, NR) C_Nα table from the per-component source data.
+
+    Reads CN_alpha_per_rad from column 7 of *src*.  Values are averaged over
+    AoA ≤ 5° for each (Mach, Re) cell, then bilinearly interpolated onto the
+    target grid via :func:`_trilinear` with a singleton alpha axis.
+
+    Returns a zero array if column 7 is all NaN (legacy 7-column files).
+    """
+    cna_col = src[:, 7]
+    if np.all(np.isnan(cna_col)):
+        return np.zeros((len(mach_g), len(re_g)), dtype=np.float64)
+
+    m_src = np.unique(src[:, 0])
+    r_src = np.unique(src[:, 1])
+    a_src = np.unique(src[:, 2])
+    NM_s, NR_s, NA_s = len(m_src), len(r_src), len(a_src)
+
+    idx_sort = np.lexsort((src[:, 2], src[:, 1], src[:, 0]))
+    s = src[idx_sort]
+    cna_3d = s[:, 7].reshape(NM_s, NR_s, NA_s)
+
+    # Average over alpha ≤ 5° (linear regime)
+    alpha_mask = a_src <= 5.0
+    if not alpha_mask.any():
+        alpha_mask = np.ones(NA_s, dtype=bool)
+    cna_2d = np.mean(cna_3d[:, :, alpha_mask], axis=2)
+
+    # Bilinear interpolation via _trilinear with singleton alpha axis
+    cna_target = _trilinear(
+        m_src, r_src, np.array([0.0]),
+        cna_2d[:, :, np.newaxis],
+        mach_g, re_g, np.array([0.0]),
+    )
+    return np.ascontiguousarray(cna_target[:, :, 0], dtype=np.float64)
 
 
 def _trilinear(
@@ -423,12 +486,15 @@ def _build_single(path: Path) -> AeroModel:
     zeros_2d = np.zeros((NM, NR), dtype=np.float64)
     # Dummy per-component arrays — shape (1, NM, NR, NA), never used when has_components=False
     dummy = np.zeros((1, NM, NR, NA), dtype=np.float64)
+    dummy_cna = np.zeros((1, NM, NR), dtype=np.float64)
     return AeroModel(
         mach_grid=mach_g, re_grid=re_g, alpha_grid=alpha_g,
         ca_table_off=ca_off, ca_table_on=ca_on,
         cn_table=cn, cp_table=cp,
         cn_comp=dummy, cp_comp=dummy,
         cn_alpha_fins=zeros_2d,
+        cn_alpha_comp=dummy_cna,
+        comp_names=[],
         has_components=False,
     )
 
@@ -459,6 +525,8 @@ def _build_components(
 
     cn_comp_list: list[np.ndarray] = []
     cp_comp_list: list[np.ndarray] = []
+    cna_comp_list: list[np.ndarray] = []
+    comp_names: list[str] = []
 
     for path, src in datasets.items():
         ca_off_i, ca_on_i, cn_i, cp_i = _resample_3d(src, mach_g, re_g, alpha_g)
@@ -467,13 +535,19 @@ def _build_components(
         cn_comp_list.append(np.ascontiguousarray(cn_i, dtype=np.float64))
         cp_comp_list.append(np.ascontiguousarray(cp_i, dtype=np.float64))
 
+        # C_Nα from CSV column 7 (averaged over linear AoA regime)
+        cna_i = _resample_cna_2d(src, mach_g, re_g)
+        cna_comp_list.append(np.ascontiguousarray(cna_i, dtype=np.float64))
+        comp_names.append(path.stem)
+
         if path in fins_paths:
-            cna_i, _ = _fit_cna_cp(cn_i, cp_i, alpha_g)
             cna_fins += cna_i
 
     # Stack per-component tables: shape (N_comp, NM, NR, NA)
     cn_comp = np.ascontiguousarray(np.stack(cn_comp_list, axis=0), dtype=np.float64)
     cp_comp = np.ascontiguousarray(np.stack(cp_comp_list, axis=0), dtype=np.float64)
+    # Per-component C_Nα: shape (N_comp, NM, NR)
+    cn_alpha_comp = np.ascontiguousarray(np.stack(cna_comp_list, axis=0), dtype=np.float64)
 
     # Whole-vehicle CN and CP tables are not stored in per-component mode (§6.3).
     zeros_3d = np.zeros((NM, NR, NA), dtype=np.float64)
@@ -487,6 +561,8 @@ def _build_components(
         cn_comp=cn_comp,
         cp_comp=cp_comp,
         cn_alpha_fins=np.ascontiguousarray(cna_fins, dtype=np.float64),
+        cn_alpha_comp=cn_alpha_comp,
+        comp_names=comp_names,
         has_components=True,
     )
 
@@ -820,3 +896,19 @@ def cn_alpha_fins_at(
 ) -> float:
     """Fin-component C_Nα [1/rad] at (M, Re).  Used for roll torques."""
     return _interp2(mach_g, re_g, cna_fins, M, Re)
+
+
+@nb.njit(cache=True, fastmath=True)
+def cn_alpha_comp_at(
+    mach_g: np.ndarray,
+    re_g: np.ndarray,
+    cna_comp: np.ndarray,
+    M: float,
+    Re: float,
+    comp_idx: int,
+) -> float:
+    """Per-component C_Nα [1/rad] at (M, Re) for component *comp_idx*.
+
+    Used for damping post-processing.
+    """
+    return _interp2(mach_g, re_g, cna_comp[comp_idx], M, Re)

@@ -35,6 +35,7 @@ from config import load_simulation_config
 from montecarlo import (
     REASON_COLS,
     SCENARIO_LABELS,
+    build_sim_params,
     load_all_models,
     replay_compliant,
     replay_non_compliant,
@@ -49,6 +50,8 @@ from outputs import (
     save_replay_3d,
     save_replay_altitude,
     save_replay_aoa,
+    save_replay_c2a_breakdown,
+    save_replay_damping,
     save_replay_plan_view,
     save_replay_roll_rate,
     write_samples_csv,
@@ -697,6 +700,22 @@ def replay(
             console.print()
             return
 
+        # --- Damping post-processing ---
+        if aero_model.has_components:
+            from dynamics import compute_damping
+            display.update_status("Computing damping quantities...")
+            nominal_params = build_sim_params(
+                sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+                wind_profile_index=0,
+                azimuth_deg=azimuth_mean,
+                inclination_deg=inclination_mean,
+                impulse_factor=1.0,
+                fin_cant_deg=0.0,
+            )
+            for sr in results:
+                if sr.trajectory is not None:
+                    compute_damping(sr.trajectory, nominal_params)
+
         display.update_status("Generating plots...")
 
         # --- Generate replay figures ---
@@ -710,6 +729,8 @@ def replay(
             (save_replay_altitude, "altitude-time"),
             (save_replay_aoa, "angle of attack"),
             (save_replay_roll_rate, "roll rate"),
+            (save_replay_damping, "damping"),
+            (save_replay_c2a_breakdown, "C2A breakdown"),
         ]:
             try:
                 result = save_fn(results, sim_cfg, output_dir=out_dir)

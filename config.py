@@ -152,6 +152,7 @@ class VehicleGeometry:
     length: float           # m — total length
     nozzle_diameter: float  # m — nozzle exit diameter (for thrust correction)
     fin_cp_radius: float    # m — fin CP spanwise distance from centreline
+    fin_span: float         # m — fin semi-span (tip-to-root, one side)
 
     @property
     def reference_area(self) -> float:
@@ -529,11 +530,20 @@ def load_vehicle(path: Path | str) -> tuple[Vehicle, PropellantModel]:
     fins_raw = raw.get("fins_aero_table")
     fins_aero_table: Path | None = _resolve(fins_raw) if fins_raw is not None else None
 
+    fin_span_raw = geom_raw.get("fin_span")
+    if fin_span_raw is None:
+        warnings.warn(
+            "No fin_span specified in vehicle geometry; damping max roll "
+            "rate calculation will use fin_cp_radius as a fallback.",
+        )
+        fin_span_raw = geom_raw["fin_cp_radius"]
+
     geometry = VehicleGeometry(
         diameter=float(geom_raw["diameter"]),
         length=float(geom_raw["length"]),
         nozzle_diameter=float(geom_raw["nozzle_diameter"]),
         fin_cp_radius=float(geom_raw["fin_cp_radius"]),
+        fin_span=float(fin_span_raw),
     )
 
     # --- Load motor and build propellant model ---
