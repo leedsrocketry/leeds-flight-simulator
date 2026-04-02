@@ -148,11 +148,22 @@ class SimulationConfig:
 
 @dataclass(frozen=True)
 class VehicleGeometry:
-    diameter: float         # m — reference diameter
-    length: float           # m — total length
-    nozzle_diameter: float  # m — nozzle exit diameter (for thrust correction)
-    fin_cp_radius: float    # m — fin CP spanwise distance from centreline
-    fin_span: float         # m — fin semi-span (tip-to-root, one side)
+    diameter: float              # m — body diameter (from body_diameter_mm)
+    nozzle_diameter: float       # m — nozzle exit diameter (from nozzle_diameter_mm)
+    fin_span: float              # m — fin semi-span (from components.fins.span_mm)
+    _nosecone_length: float      # m — from components.nosecone.length_mm
+    _body_tube_length: float     # m — from components.body_tube.length_mm
+    _boattail_length: float      # m — from components.boattail.length_mm
+
+    @property
+    def length(self) -> float:
+        """Total vehicle length [m] — sum of component lengths."""
+        return self._nosecone_length + self._body_tube_length + self._boattail_length
+
+    @property
+    def fin_cp_radius(self) -> float:
+        """Distance from longitudinal axis to fin mid-span [m]."""
+        return self.diameter / 2 + self.fin_span / 2
 
     @property
     def reference_area(self) -> float:
@@ -504,7 +515,8 @@ def load_vehicle(path: Path | str) -> tuple[Vehicle, PropellantModel]:
     def _resolve(p: str) -> Path:
         return (base_dir / p).resolve()
 
-    geom_raw = raw["geometry"]
+    comp_raw = raw["components"]
+    fins_raw = comp_raw["fins"]
     mass = raw["mass"]
     recovery_raw = raw.get("recovery") or {}
 
@@ -514,7 +526,7 @@ def load_vehicle(path: Path | str) -> tuple[Vehicle, PropellantModel]:
             return None
         return ParachuteConfig(
             cd=float(r["cd"]),
-            diameter=float(r["diameter"]),
+            diameter=float(r["diameter_mm"]) / 1000,
             threshold=_parse_threshold(r["threshold"]),
         )
 
@@ -527,39 +539,32 @@ def load_vehicle(path: Path | str) -> tuple[Vehicle, PropellantModel]:
             "and main, main only, or neither."
         )
 
-    fins_raw = raw.get("fins_aero_table")
-    fins_aero_table: Path | None = _resolve(fins_raw) if fins_raw is not None else None
-
-    fin_span_raw = geom_raw.get("fin_span")
-    if fin_span_raw is None:
-        warnings.warn(
-            "No fin_span specified in vehicle geometry; damping max roll "
-            "rate calculation will use fin_cp_radius as a fallback.",
-        )
-        fin_span_raw = geom_raw["fin_cp_radius"]
+    fins_aero_raw = raw.get("fins_aero_table")
+    fins_aero_table: Path | None = _resolve(fins_aero_raw) if fins_aero_raw is not None else None
 
     geometry = VehicleGeometry(
-        diameter=float(geom_raw["diameter"]),
-        length=float(geom_raw["length"]),
-        nozzle_diameter=float(geom_raw["nozzle_diameter"]),
-        fin_cp_radius=float(geom_raw["fin_cp_radius"]),
-        fin_span=float(fin_span_raw),
+        diameter=float(raw["body_diameter_mm"]) / 1000,
+        nozzle_diameter=float(raw["nozzle_diameter_mm"]) / 1000,
+        fin_span=float(fins_raw["span_mm"]) / 1000,
+        _nosecone_length=float(comp_raw["nosecone"]["length_mm"]) / 1000,
+        _body_tube_length=float(comp_raw["body_tube"]["length_mm"]) / 1000,
+        _boattail_length=float(comp_raw["boattail"]["length_mm"]) / 1000,
     )
 
     # --- Load motor and build propellant model ---
     motor_path = _resolve(raw["motor"])
     motor_data = load_motor(motor_path)
 
-    prop_inner_raw = mass.get("propellant_inner_diameter")
-    prop_outer_raw = mass.get("propellant_outer_diameter")
+    prop_inner_raw = mass.get("propellant_inner_diameter_mm")
+    prop_outer_raw = mass.get("propellant_outer_diameter_mm")
     if prop_inner_raw is None:
         warnings.warn(
-            "No propellant_inner_diameter specified; assuming solid cylinder. "
+            "No propellant_inner_diameter_mm specified; assuming solid cylinder. "
             "Propellant roll inertia will be underestimated for hollow grains."
         )
     if prop_outer_raw is None:
         warnings.warn(
-            "No propellant_outer_diameter specified; assuming propellant fills "
+            "No propellant_outer_diameter_mm specified; assuming propellant fills "
             "the full motor diameter (no casing, liner, or insulator)."
         )
 
@@ -567,15 +572,15 @@ def load_vehicle(path: Path | str) -> tuple[Vehicle, PropellantModel]:
         motor_data,
         vehicle_length=geometry.length,
         nozzle_area=geometry.nozzle_area,
-        propellant_outer_diameter=float(prop_outer_raw) if prop_outer_raw is not None else None,
-        propellant_inner_diameter=float(prop_inner_raw) if prop_inner_raw is not None else None,
+        propellant_outer_diameter=float(prop_outer_raw) / 1000 if prop_outer_raw is not None else None,
+        propellant_inner_diameter=float(prop_inner_raw) / 1000 if prop_inner_raw is not None else None,
     )
 
     # --- Derive dry properties ---
-    wet_mass_val = float(mass["wet_mass"])
-    wet_cg_val = float(mass["wet_cg"])
-    wet_inertia_lateral_val = float(mass["wet_inertia_lateral"])
-    wet_inertia_roll_val = float(mass["wet_inertia_roll"])
+    wet_mass_val = float(mass["wet_mass_kg"])
+    wet_cg_val = float(mass["wet_cg_mm"]) / 1000
+    wet_inertia_lateral_val = float(mass["wet_inertia_lateral_kg_m2"])
+    wet_inertia_roll_val = float(mass["wet_inertia_roll_kg_m2"])
 
     m_dry, cg_dry, I_roll_dry, I_lateral_dry = _derive_dry_properties(
         propellant,

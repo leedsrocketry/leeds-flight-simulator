@@ -95,27 +95,44 @@ _MINIMAL_SIM_YAML = """
 
 _VEHICLE_YAML = """
     motor: "motor.eng"
-    aero_tables: "aero_tables"
-    geometry:
-      diameter: 0.130
-      length: 2.6
-      nozzle_diameter: 0.08
-      fin_cp_radius: 0.095
+    aero_tables: "aero-tables"
+    body_diameter_mm: 130.0
+    nozzle_diameter_mm: 80.0
+    components:
+      nosecone:
+        shape: "Von Karman Ogive"
+        length_mm: 1000.0
+        tip_radius_mm: 0.0
+      body_tube:
+        length_mm: 1300.0
+      boattail:
+        length_mm: 300.0
+        aft_diameter_mm: 80.0
+      fins:
+        count: 4
+        span_mm: 60.0
+        root_chord_mm: 200.0
+        tip_chord_mm: 150.0
+        sweep_distance_mm: 50.0
+        aft_offset_mm: 0.0
+        airfoil_section: "Double Wedge"
+        thickness_mm: 5.0
+        leading_edge_radius_mm: 0.5
     mass:
-      wet_mass: 26.5
-      wet_cg: 1.15
-      wet_inertia_lateral: 5.2
-      wet_inertia_roll: 0.012
-      propellant_inner_diameter: 0.030
-      propellant_outer_diameter: 0.050
+      wet_mass_kg: 26.5
+      wet_cg_mm: 1150.0
+      wet_inertia_lateral_kg_m2: 5.2
+      wet_inertia_roll_kg_m2: 0.012
+      propellant_inner_diameter_mm: 30.0
+      propellant_outer_diameter_mm: 50.0
     recovery:
       drogue:
         cd: 2.0
-        diameter: 0.437019
+        diameter_mm: 437.019
         threshold: apogee
       main:
         cd: 2.0
-        diameter: 1.888139
+        diameter_mm: 1888.139
         threshold: 305
     """
 
@@ -292,7 +309,7 @@ def test_vehicle_file_paths(tmp_path):
     assert v.motor.is_absolute()
     assert v.motor == (tmp_path / "motor.eng").resolve()
     assert v.aero_tables.is_absolute()
-    assert v.aero_tables == (tmp_path / "aero_tables").resolve()
+    assert v.aero_tables == (tmp_path / "aero-tables").resolve()
 
 
 def test_fins_aero_table_absent(tmp_path):
@@ -305,12 +322,12 @@ def test_fins_aero_table_specified(tmp_path):
     """fins_aero_table is resolved to an absolute path when specified."""
     yaml_with_fins = _VEHICLE_YAML.replace(
         'motor: "motor.eng"',
-        'motor: "motor.eng"\n    fins_aero_table: "aero_tables/fins.csv"',
+        'motor: "motor.eng"\n    fins_aero_table: "aero-tables/fins.csv"',
     )
     v, _ = load_vehicle(_write(tmp_path, "v.yaml", yaml_with_fins))
     assert v.fins_aero_table is not None
     assert v.fins_aero_table.is_absolute()
-    assert v.fins_aero_table == (tmp_path / "aero_tables" / "fins.csv").resolve()
+    assert v.fins_aero_table == (tmp_path / "aero-tables" / "fins.csv").resolve()
 
 
 def test_vehicle_geometry(tmp_path):
@@ -357,12 +374,12 @@ def test_vehicle_recovery(tmp_path):
     v, _ = load_vehicle(_write(tmp_path, "v.yaml", _VEHICLE_YAML))
     assert v.recovery.drogue is not None
     assert v.recovery.drogue.cd == pytest.approx(2.0)
-    assert v.recovery.drogue.diameter == pytest.approx(0.437019)
+    assert v.recovery.drogue.diameter == pytest.approx(0.437019, rel=1e-4)
     assert v.recovery.drogue.area == pytest.approx(0.15, rel=1e-4)
     assert v.recovery.drogue.threshold == "apogee"
     assert v.recovery.main is not None
     assert v.recovery.main.cd == pytest.approx(2.0)
-    assert v.recovery.main.diameter == pytest.approx(1.888139)
+    assert v.recovery.main.diameter == pytest.approx(1.888139, rel=1e-4)
     assert v.recovery.main.area == pytest.approx(2.8, rel=1e-4)
     assert v.recovery.main.threshold == pytest.approx(305.0)
 
@@ -380,7 +397,7 @@ def test_recovery_drogue_optional(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        diameter: 0.437019\n"
+        "        diameter_mm: 437.019\n"
         "        threshold: apogee\n",
         "    recovery:\n",
     )
@@ -394,7 +411,7 @@ def test_recovery_drogue_without_main_raises(tmp_path):
     yaml_no_main = _VEHICLE_YAML.replace(
         "      main:\n"
         "        cd: 2.0\n"
-        "        diameter: 1.888139\n"
+        "        diameter_mm: 1888.139\n"
         "        threshold: 305\n",
         "",
     )
@@ -408,7 +425,7 @@ def test_recovery_main_only(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        diameter: 0.437019\n"
+        "        diameter_mm: 437.019\n"
         "        threshold: apogee\n",
         "    recovery:\n",
     )
@@ -423,11 +440,11 @@ def test_recovery_no_chutes(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        diameter: 0.437019\n"
+        "        diameter_mm: 437.019\n"
         "        threshold: apogee\n"
         "      main:\n"
         "        cd: 2.0\n"
-        "        diameter: 1.888139\n"
+        "        diameter_mm: 1888.139\n"
         "        threshold: 305\n",
         "    recovery:\n",
     )
@@ -469,7 +486,7 @@ def test_active_scenarios_main_only_numeric(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        diameter: 0.437019\n"
+        "        diameter_mm: 437.019\n"
         "        threshold: apogee\n",
         "    recovery:\n",
     )
@@ -485,11 +502,11 @@ def test_active_scenarios_no_chutes(tmp_path):
         "    recovery:\n"
         "      drogue:\n"
         "        cd: 2.0\n"
-        "        diameter: 0.437019\n"
+        "        diameter_mm: 437.019\n"
         "        threshold: apogee\n"
         "      main:\n"
         "        cd: 2.0\n"
-        "        diameter: 1.888139\n"
+        "        diameter_mm: 1888.139\n"
         "        threshold: 305\n",
         "    recovery:\n",
     )

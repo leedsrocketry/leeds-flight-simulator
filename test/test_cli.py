@@ -103,28 +103,44 @@ def _write_aero_csv(path: Path) -> None:
 
 def _write_vehicle_yaml(tmp_path: Path) -> Path:
     _write_stub_motor(tmp_path / "motor.eng")
-    aero_dir = tmp_path / "aero_tables"
+    aero_dir = tmp_path / "aero-tables"
     for name in ["NoseCone", "BodyTube", "Fin", "BoatTail"]:
         _write_aero_csv(aero_dir / f"{name}.csv")
 
     veh = {
         "motor": "motor.eng",
-        "aero_tables": "aero_tables",
-        "geometry": {
-            "diameter": 0.13,
-            "length": 2.6,
-            "nozzle_diameter": 0.08,
-            "fin_cp_radius": 0.095,
+        "aero_tables": "aero-tables",
+        "body_diameter_mm": 130.0,
+        "nozzle_diameter_mm": 80.0,
+        "components": {
+            "nosecone": {
+                "shape": "Von Karman Ogive",
+                "length_mm": 1000.0,
+                "tip_radius_mm": 0.0,
+            },
+            "body_tube": {"length_mm": 1300.0},
+            "boattail": {"length_mm": 300.0, "aft_diameter_mm": 80.0},
+            "fins": {
+                "count": 4,
+                "span_mm": 60.0,
+                "root_chord_mm": 200.0,
+                "tip_chord_mm": 150.0,
+                "sweep_distance_mm": 50.0,
+                "aft_offset_mm": 0.0,
+                "airfoil_section": "Double Wedge",
+                "thickness_mm": 5.0,
+                "leading_edge_radius_mm": 0.5,
+            },
         },
         "mass": {
-            "wet_mass": 26.5,
-            "wet_cg": 1.15,
-            "wet_inertia_lateral": 5.2,
-            "wet_inertia_roll": 0.012,
+            "wet_mass_kg": 26.5,
+            "wet_cg_mm": 1150.0,
+            "wet_inertia_lateral_kg_m2": 5.2,
+            "wet_inertia_roll_kg_m2": 0.012,
         },
         "recovery": {
-            "drogue": {"cd": 2.0, "diameter": 0.44, "threshold": "apogee"},
-            "main": {"cd": 2.0, "diameter": 1.89, "threshold": 305},
+            "drogue": {"cd": 2.0, "diameter_mm": 440.0, "threshold": "apogee"},
+            "main": {"cd": 2.0, "diameter_mm": 1890.0, "threshold": 305},
         },
     }
     p = tmp_path / "vehicle.yaml"
@@ -579,36 +595,6 @@ class TestVerifyErrors:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestDiffArgs:
-    """Argument and option handling for ``diff``."""
-
-    def test_help(self):
-        result = _invoke("diff", "--help")
-        assert result.exit_code == 0
-        assert "-t" in result.output
-        assert "--threshold" in result.output
-        assert "-m" in result.output
-        assert "--motor" in result.output
-        assert "-f" in result.output
-        assert "--force" in result.output
-        assert "CONFIG_PATH" in result.output
-        assert "CDX1_PATH" in result.output
-
-    def test_missing_both_paths(self):
-        result = _invoke_catching("diff")
-        assert result.exit_code != 0
-
-    def test_missing_cdx1_path(self, tmp_path):
-        sim_yaml = _write_sim_yaml(tmp_path)
-        result = _invoke_catching("diff", str(sim_yaml))
-        assert result.exit_code != 0
-
-    def test_nonexistent_cdx1_path(self, tmp_path):
-        sim_yaml = _write_sim_yaml(tmp_path)
-        result = _invoke_catching("diff", str(sim_yaml), str(tmp_path / "nope.CDX1"))
-        assert result.exit_code != 0
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Top-level group
 # ═══════════════════════════════════════════════════════════════════════════
@@ -623,8 +609,6 @@ class TestGroup:
         assert "run" in result.output
         assert "replay" in result.output
         assert "verify" in result.output
-        assert "diff" in result.output
-
     def test_no_command_shows_help(self):
         result = _invoke_catching()
         assert "Usage:" in (result.output or "")
@@ -849,24 +833,6 @@ class TestEdgeCases:
         )
         assert "Invalid value" not in (result.output or "")
 
-    # -- diff --
-
-    def test_diff_threshold_accepts_float(self):
-        result = _invoke("diff", "--help")
-        assert "threshold" in result.output.lower()
-
-    def test_diff_threshold_negative(self, tmp_path):
-        """Click accepts negative floats — behaviour depends on the command."""
-        sim_yaml = _write_sim_yaml(tmp_path)
-        # Create a dummy CDX1 file (not valid, but Click only checks existence)
-        cdx1 = tmp_path / "dummy.CDX1"
-        cdx1.write_text("<xml/>", encoding="utf-8")
-        result = _invoke_catching(
-            "diff", str(sim_yaml), str(cdx1), "-t", "-0.5",
-        )
-        # Passes Click validation — fails later on CDX1 parsing
-        assert "Invalid value" not in (result.output or "")
-
     # -- run --
 
     def test_run_all_flags_together(self, tmp_path):
@@ -1003,4 +969,4 @@ class TestSourceConsistency:
 
     def test_all_commands_registered(self):
         """The group should have all four expected commands."""
-        assert set(main.commands) >= {"run", "replay", "verify", "diff"}
+        assert set(main.commands) >= {"run", "replay", "verify"}

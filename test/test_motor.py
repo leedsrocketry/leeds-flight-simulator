@@ -124,14 +124,20 @@ def test_real_motor_file_loads(motor_path):
 
 # Vehicle yaml for tests — matches _SIMPLE_ENG (m_prop=5.0 kg)
 _VEHICLE_YAML = (
-    "motor: \"motor.eng\"\naero_tables: \"aero_tables\"\n"
-    "geometry:\n  diameter: 0.1\n  length: 2.0\n"
-    "  nozzle_diameter: 0.05\n  fin_cp_radius: 0.09\n"
-    "mass:\n  wet_mass: 20.0\n  wet_cg: 0.90\n"
-    "  wet_inertia_lateral: 4.0\n  wet_inertia_roll: 0.010\n"
+    "motor: \"motor.eng\"\naero_tables: \"aero-tables\"\n"
+    "body_diameter_mm: 100.0\nnozzle_diameter_mm: 50.0\n"
+    "components:\n"
+    "  nosecone:\n    shape: \"Von Karman Ogive\"\n    length_mm: 800.0\n    tip_radius_mm: 0.0\n"
+    "  body_tube:\n    length_mm: 1000.0\n"
+    "  boattail:\n    length_mm: 200.0\n    aft_diameter_mm: 60.0\n"
+    "  fins:\n    count: 4\n    span_mm: 80.0\n    root_chord_mm: 200.0\n"
+    "    tip_chord_mm: 150.0\n    sweep_distance_mm: 50.0\n    aft_offset_mm: 0.0\n"
+    "    airfoil_section: \"Double Wedge\"\n    thickness_mm: 5.0\n    leading_edge_radius_mm: 0.5\n"
+    "mass:\n  wet_mass_kg: 20.0\n  wet_cg_mm: 900.0\n"
+    "  wet_inertia_lateral_kg_m2: 4.0\n  wet_inertia_roll_kg_m2: 0.010\n"
     "recovery:\n"
-    "  drogue:\n    cd: 1.5\n    diameter: 0.252313\n    threshold: apogee\n"
-    "  main:\n    cd: 2.2\n    diameter: 1.784124\n    threshold: 305\n"
+    "  drogue:\n    cd: 1.5\n    diameter_mm: 252.313\n    threshold: apogee\n"
+    "  main:\n    cd: 2.2\n    diameter_mm: 1784.124\n    threshold: 305\n"
 )
 # Derived values for hand-checking (m_prop=5.0, motor 98mm×732mm from _SIMPLE_ENG):
 #   motor_cg_loaded = 2.0 - 0.732/2 = 1.634 m

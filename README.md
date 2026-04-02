@@ -210,12 +210,27 @@ Key sections:
 
 ### `vehicle.yaml`
 
-Defines the vehicle's physical properties. All distances are in metres from the nosecone tip. All masses are in kg. Dry mass properties are derived automatically from the wet properties and motor geometry.
+Defines the vehicle's physical properties. All dimensions are in mm (with `_mm` suffix), masses in kg (`_kg`), inertias in kg·m² (`_kg_m2`). CG is measured from the nosecone tip. Dry mass properties are derived automatically from the wet properties and motor geometry. LFS converts mm to metres internally at the parsing boundary.
 
+Top-level fields:
+
+| Field | Description |
+|-------|-------------|
+| `motor` | Path to RASP `.eng` thrust curve file |
+| `aero_tables` | Path to aero CSV directory (or single file) |
+| `body_diameter_mm` | Overall body diameter [mm] |
+| `nozzle_diameter_mm` | Nozzle exit diameter [mm] |
+| `rasaero` | RASAero-specific properties (pyrasaero reads; LFS ignores) |
+
+The `components` section defines the vehicle geometry ordered forward-to-aft. Each sub-section (nosecone, body_tube, boattail, fins) contains that component's dimensions.
+
+Derived quantities:
+
+- **Total length:** Sum of component lengths (nosecone + body_tube + boattail; fins contribute 0)
 - **Reference area:** A_ref = π · d² / 4 (same convention as RASAero)
-- **Reference length:** Rocket's overall length, used for Reynolds number calculation (same convention as RASAero)
-- **Nozzle position:** Assumed at the aft end of the vehicle (= `length`); the motor is flush-mounted.
-- **Motor CG:** Derived from the `.eng` file header: `vehicle_length − motor_length / 2`. Stays fixed during the burn (inside-out burn model).
+- **Fin CP radius:** `body_diameter / 2 + fin_span / 2` — distance from longitudinal axis to fin mid-span
+- **Nozzle position:** Assumed at the aft end (= total length); the motor is flush-mounted
+- **Motor CG:** Derived from the `.eng` file header: `total_length − motor_length / 2`. Stays fixed during the burn (inside-out burn model).
 - **Propellant inertias:** Derived from the annular cross-section geometry (see below).
 
 #### Optional motor geometry fields
@@ -224,8 +239,8 @@ Two optional fields in the `mass` section refine the propellant inertia model:
 
 | Field | Default | Effect |
 |-------|---------|--------|
-| `propellant_outer_diameter` | motor diameter | Propellant grain outer diameter [m]. Accounts for casing, liner, and insulator thickness. |
-| `propellant_inner_diameter` | 0 (solid cylinder) | Propellant bore diameter [m]. Defines the inner radius of the propellant annulus. |
+| `propellant_outer_diameter_mm` | motor diameter | Propellant grain outer diameter [mm]. Accounts for casing, liner, and insulator thickness. |
+| `propellant_inner_diameter_mm` | 0 (solid cylinder) | Propellant bore diameter [mm]. Defines the inner radius of the propellant annulus. |
 
 A warning is emitted when either field is omitted, since the default assumptions (solid cylinder, full motor diameter) underestimate propellant roll inertia for hollow-grain motors.
 
@@ -427,35 +442,6 @@ By default, the comparison figure is displayed interactively with linked zoom/pa
 ![Verification plot](figures/verification_plot.png)
 
 Five time-series subplots (altitude, Mach, stability margin, thrust, mass) share a linked time axis. The bottom-right subplot shows drag coefficient vs Mach number over the reference simulation's Mach range. Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail).
-
-
-## Configuration Diff
-
-Compares the vehicle and launch configuration in the LFS YAML files against a RASAero II CDX1 file, highlighting any discrepancies. Useful for confirming that both tools are using the same inputs before relying on a cross-tool verification.
-
-```
-python . diff <simulation.yaml> <cdx1_file>
-```
-
-The motor is matched automatically: the stem of the `.eng` filename in `vehicle.yaml` (e.g. `o3400` from `o3400.eng`) is matched case-insensitively against the CDX1 simulation entries. If no match is found, the first entry is used and a warning is shown.
-
-**Flags:**
-
-| Flag | Effect |
-|------|--------|
-| `-t`, `--threshold` `FLOAT` | Acceptance threshold as a fraction (default `0.05` = 5%); a numeric row passes if its percentage difference is within this value |
-| `-m`, `--motor` `TEXT` | Override automatic motor matching; substring matched case-insensitively against CDX1 `SustainerEngine` entries |
-| `-f`, `--force` | Update the YAML configuration files to match CDX1 values for any failing numeric rows |
-
-Rows are sorted by descending percentage difference. String-only rows (deployment type, motor name) are shown at the bottom. Atmospheric values (temperature, pressure) are informational — they compare the CDX1 site conditions against the ISA model at the same altitude and cannot be force-updated.
-
-Example:
-
-```
-python . diff simulations/g2b2-safety-case/cape-wrath.yaml debug/g2b2.CDX1
-python . diff simulations/g2b2-safety-case/cape-wrath.yaml debug/g2b2.CDX1 -t 0.01
-python . diff simulations/g2b2-safety-case/cape-wrath.yaml debug/g2b2.CDX1 -f
-```
 
 
 ## Operational Workflow
