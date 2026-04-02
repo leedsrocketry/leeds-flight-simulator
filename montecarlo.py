@@ -12,8 +12,12 @@ Single-sample runner:
     run_sample             — draw inputs, run trajectory, check acceptance → SampleResult
 
 Orchestration:
-    run_scenario           — run N samples for one descent scenario (worker target)
-    run_monte_carlo        — top-level: all scenarios, parallel, aggregate results
+    run_monte_carlo        — top-level: all scenarios, parallel, aggregate results.
+                             Uses hand-over parallelisation: individual samples from
+                             all scenarios are dispatched to a shared process pool so
+                             that cores freed by shorter scenarios automatically pick
+                             up remaining work from longer ones.
+    run_scenario           — run N samples for one scenario sequentially (used by replay)
 
 Replay:
     replay_sample          — reconstruct and re-run a single sample
@@ -504,9 +508,10 @@ def run_scenario(
     inclination_mean: float,
     progress_queue: mp.Queue | None = None,
 ) -> list[SampleResult]:
-    """Run all samples for a single descent scenario.
+    """Run all samples for a single descent scenario sequentially.
 
-    This is the worker function for multiprocessing — one process per scenario.
+    Used by replay workflows.  The main ``run_monte_carlo`` path now
+    dispatches individual samples via ``_run_sample_task`` instead.
     """
     n_samples = sim_cfg.monte_carlo.samples
 
@@ -655,6 +660,44 @@ def load_all_models(
     return vehicle, propellant, aero_model, wind_ensemble
 
 
+def _run_sample_task(
+    scenario_name: str,
+    run_index: int,
+    sample_index: int,
+    sim_cfg: SimulationConfig,
+    vehicle: Vehicle,
+    propellant: PropellantModel,
+    aero_model: AeroModel,
+    wind_ensemble: WindEnsemble,
+    azimuth_mean: float,
+    inclination_mean: float,
+    geofence: tuple,
+) -> SampleResult:
+    """Top-level picklable wrapper for a single sample — pool worker target."""
+    (poly_e, poly_n, buffered_ceiling,
+     coastline_prepared,
+     station_norths, station_easts, station_radii) = geofence
+    return run_sample(
+        sample_index=sample_index,
+        run_index=run_index,
+        scenario_name=scenario_name,
+        sim_cfg=sim_cfg,
+        vehicle=vehicle,
+        propellant=propellant,
+        aero_model=aero_model,
+        wind_ensemble=wind_ensemble,
+        azimuth_mean=azimuth_mean,
+        inclination_mean=inclination_mean,
+        poly_e=poly_e,
+        poly_n=poly_n,
+        buffered_ceiling=buffered_ceiling,
+        coastline_prepared=coastline_prepared,
+        station_norths=station_norths,
+        station_easts=station_easts,
+        station_radii=station_radii,
+    )
+
+
 def run_monte_carlo(
     sim_cfg: SimulationConfig,
     vehicle: Vehicle,
@@ -667,6 +710,10 @@ def run_monte_carlo(
     scenario_done_callback=None,
 ) -> MonteCarloResult:
     """Run the full Monte Carlo analysis across all active scenarios.
+
+    Individual samples from all scenarios are dispatched across a shared
+    process pool so that cores freed by shorter scenarios automatically
+    pick up remaining work from longer ones.
 
     Parameters
     ----------
@@ -703,87 +750,65 @@ def run_monte_carlo(
                 f"for this vehicle configuration"
             )
 
-    # --- Run scenarios (sequential for now; multiprocessing optional) ---
-    # Each scenario is independent — use multiprocessing.Pool for parallelism.
+    n_samples = sim_cfg.monte_carlo.samples
+
+    # Prepare geofence once (same for all scenarios)
+    geofence = _prepare_geofence(sim_cfg)
+
+    # --- Dispatch all samples across a shared pool ---
+    # Each (scenario, sample_index) pair is an independent task.  Cores
+    # freed by shorter scenarios automatically pick up remaining work.
     all_results: list[SampleResult] = []
     scenario_stats: dict[str, ScenarioStats] = {}
 
-    n_samples = sim_cfg.monte_carlo.samples
+    ctx = mp.get_context("spawn")
+    n_workers = min(len(active) * n_samples, mp.cpu_count())
 
-    # Use a Queue for progress reporting if callback provided
-    if progress_callback is not None:
-        mgr = mp.Manager()
-        progress_queue: mp.Queue | None = mgr.Queue()
-    else:
-        progress_queue = None
-
-    # Run each scenario — use multiprocessing if more than one scenario
-    if len(active) > 1:
-        ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=min(len(active), mp.cpu_count())) as pool:
-            async_results = {}
-            for run_idx, scenario_name in enumerate(active):
+    with ctx.Pool(processes=n_workers) as pool:
+        # Submit all tasks
+        futures: list[tuple[str, mp.pool.AsyncResult]] = []
+        for run_idx, scenario_name in enumerate(active):
+            for sample_idx in range(n_samples):
                 ar = pool.apply_async(
-                    run_scenario,
+                    _run_sample_task,
                     args=(
-                        scenario_name, run_idx,
+                        scenario_name, run_idx, sample_idx,
                         sim_cfg, vehicle, propellant, aero_model,
                         wind_ensemble, azimuth_mean, inclination_mean,
-                        progress_queue,
+                        geofence,
                     ),
                 )
-                async_results[scenario_name] = ar
+                futures.append((scenario_name, ar))
 
-            # Drain progress queue while waiting, collecting results eagerly
-            completed_counts: dict[str, int] = {s: 0 for s in active}
-            collected: set[str] = set()
-            total_expected = len(active) * n_samples
-            total_done = 0
+        # Collect results, reporting progress per scenario
+        completed_counts: dict[str, int] = {s: 0 for s in active}
+        scenario_results: dict[str, list[SampleResult]] = {s: [] for s in active}
+        finished_scenarios: set[str] = set()
 
-            while len(collected) < len(active):
-                # Drain available progress messages
-                if progress_queue is not None:
-                    try:
-                        msg = progress_queue.get(timeout=0.2)
-                        if msg is not None:
-                            sc_name, count = msg
-                            completed_counts[sc_name] = count
-                            total_done = sum(completed_counts.values())
-                            if progress_callback:
-                                progress_callback(sc_name, count, n_samples)
-                    except Exception:
-                        pass
+        for scenario_name, ar in futures:
+            sr = ar.get()
+            all_results.append(sr)
+            scenario_results[scenario_name].append(sr)
+            completed_counts[scenario_name] += 1
 
-                # Collect any newly finished scenarios immediately
-                for sc_name, ar in async_results.items():
-                    if sc_name not in collected and ar.ready():
-                        scenario_results = ar.get()
-                        all_results.extend(scenario_results)
-                        stats = compute_scenario_stats(
-                            scenario_results, acc.compliance_threshold,
-                        )
-                        scenario_stats[sc_name] = stats
-                        collected.add(sc_name)
-                        if scenario_done_callback:
-                            scenario_done_callback(sc_name, stats)
-    else:
-        # Single scenario — run in-process
-        for run_idx, scenario_name in enumerate(active):
-            scenario_results = run_scenario(
-                scenario_name, run_idx,
-                sim_cfg, vehicle, propellant, aero_model,
-                wind_ensemble, azimuth_mean, inclination_mean,
-            )
-            # Report progress for each sample
             if progress_callback:
-                progress_callback(scenario_name, n_samples, n_samples)
-            all_results.extend(scenario_results)
-            stats = compute_scenario_stats(
-                scenario_results, acc.compliance_threshold,
-            )
-            scenario_stats[scenario_name] = stats
-            if scenario_done_callback:
-                scenario_done_callback(scenario_name, stats)
+                progress_callback(
+                    scenario_name,
+                    completed_counts[scenario_name],
+                    n_samples,
+                )
+
+            # Fire scenario-done callback once all samples for it are in
+            if (scenario_name not in finished_scenarios
+                    and completed_counts[scenario_name] == n_samples):
+                finished_scenarios.add(scenario_name)
+                stats = compute_scenario_stats(
+                    scenario_results[scenario_name],
+                    acc.compliance_threshold,
+                )
+                scenario_stats[scenario_name] = stats
+                if scenario_done_callback:
+                    scenario_done_callback(scenario_name, stats)
 
     all_passed = all(s.passed for s in scenario_stats.values())
 
