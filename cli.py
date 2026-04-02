@@ -740,8 +740,8 @@ def replay(
                     figure_paths.append(result)
                 else:
                     replay_figures.append(result)
-            except NotImplementedError:
-                display.add_warning(f"{name} replay plot not yet implemented.")
+            except NotImplementedError as exc:
+                display.add_warning(f"{name} plot skipped — {exc}")
 
         display.stop()
         console.print()

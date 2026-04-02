@@ -1619,7 +1619,7 @@ def save_replay_damping(
 
     if not trajectories:
         plt.close(fig)
-        raise NotImplementedError("No damping data available for plotting.")
+        raise NotImplementedError("requires multi-component aero tables")
 
     lw, alpha = _replay_line_style(len(trajectories))
 
@@ -1718,7 +1718,7 @@ def save_replay_damping_breakdown(
             break
 
     if profile is None or profile.comp_names is None or profile.c1_comp is None:
-        raise NotImplementedError("No per-component damping data available.")
+        raise NotImplementedError("requires multi-component aero tables")
 
     fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
     plt.subplots_adjust(hspace=0.30, wspace=0.30)
