@@ -10,8 +10,9 @@ save_dispersion_plot    — landing dispersion plot (§16.5)
 save_replay_3d          — 3D isometric replay plot (§16.4)
 save_replay_plan_view   — plan-view replay plot (§16.4)
 save_replay_altitude    — altitude-time replay plot (§16.4)
-save_replay_aoa         — angle-of-attack vs time replay plot (§16.4)
-ReplayPicker            — interactive pick handler for replay plots
+save_replay_aoa             — angle-of-attack vs time replay plot (§16.4)
+save_replay_damping_breakdown — per-component C1/C2A breakdown (§16.4)
+ReplayPicker                — interactive pick handler for replay plots
 """
 
 from __future__ import annotations
@@ -1693,23 +1694,21 @@ def save_replay_damping(
     return fig
 
 
-def save_replay_c2a_breakdown(
+def save_replay_damping_breakdown(
     replayed: list[SampleResult],
     sim_cfg: SimulationConfig,
     *,
     output_dir: Path | None = None,
 ) -> Path | plt.Figure:
-    """Generate C2A aerodynamic breakdown plot — 3 subplots, shared x-axis.
+    """Generate per-component damping breakdown plot — 2x2 grid.
 
     Subplots:
-        1. Per-component CN_alpha vs time
-        2. Per-component CP vs time
-        3. Per-component C2A contribution vs time
+        Top-left:     Per-component CN_alpha vs time
+        Top-right:    Per-component CP vs time
+        Bottom-left:  Per-component C1 contribution vs time
+        Bottom-right: Per-component C2A contribution vs time
     """
-    fig, axs = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
-    plt.subplots_adjust(hspace=0.25)
-
-    # Use the first replay with damping data
+    # Use the first replay with per-component damping data
     profile = None
     time = None
     for sr in replayed:
@@ -1718,9 +1717,16 @@ def save_replay_c2a_breakdown(
             time = profile.time
             break
 
-    if profile is None or profile.comp_names is None:
-        plt.close(fig)
+    if profile is None or profile.comp_names is None or profile.c1_comp is None:
         raise NotImplementedError("No per-component damping data available.")
+
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
+    plt.subplots_adjust(hspace=0.30, wspace=0.30)
+
+    ax_cna = axs[0, 0]
+    ax_cp = axs[0, 1]
+    ax_c1 = axs[1, 0]
+    ax_c2a = axs[1, 1]
 
     n_comp = profile.cn_alpha_comp.shape[0]
     colours = plt.cm.tab10(np.linspace(0, 1, max(n_comp, 1)))
@@ -1729,38 +1735,44 @@ def save_replay_c2a_breakdown(
         name = profile.comp_names[j] if j < len(profile.comp_names) else f"Comp {j}"
         colour = colours[j]
 
-        # CN_alpha
         mask = ~np.isnan(profile.cn_alpha_comp[j])
-        axs[0].plot(time[mask], profile.cn_alpha_comp[j][mask], color=colour, label=name)
+        ax_cna.plot(time[mask], profile.cn_alpha_comp[j][mask], color=colour, label=name)
 
-        # CP
         mask = ~np.isnan(profile.cp_comp[j])
-        axs[1].plot(time[mask], profile.cp_comp[j][mask], color=colour, label=name)
+        ax_cp.plot(time[mask], profile.cp_comp[j][mask], color=colour, label=name)
 
-        # C2A contribution
+        mask = ~np.isnan(profile.c1_comp[j])
+        ax_c1.plot(time[mask], profile.c1_comp[j][mask], color=colour, label=name)
+
         mask = ~np.isnan(profile.c2a_comp[j])
-        axs[2].plot(time[mask], profile.c2a_comp[j][mask], color=colour, label=name)
+        ax_c2a.plot(time[mask], profile.c2a_comp[j][mask], color=colour, label=name)
 
-    axs[0].set_ylabel(r"$C_{N\alpha}$ (1/rad)", fontsize=11)
-    axs[0].set_title(r"Component $C_{N\alpha}$ vs Time")
-    axs[0].legend(fontsize=9)
-    axs[0].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax_cna.set_ylabel(r"$C_{N\alpha}$ (1/rad)", fontsize=11)
+    ax_cna.set_title(r"Component $C_{N\alpha}$")
+    ax_cna.legend(fontsize=9)
+    ax_cna.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
-    axs[1].set_ylabel("CP (m from nosecone)", fontsize=11)
-    axs[1].set_title("Component Centre of Pressure vs Time")
-    axs[1].legend(fontsize=9)
-    axs[1].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax_cp.set_ylabel("CP (m from nosecone)", fontsize=11)
+    ax_cp.set_title("Component Centre of Pressure")
+    ax_cp.legend(fontsize=9)
+    ax_cp.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
-    axs[2].set_ylabel(r"Contribution to $C_{2A}$", fontsize=11)
-    axs[2].set_xlabel("Flight Time (s)", fontsize=11)
-    axs[2].set_title(r"Component Contribution to $C_{2A}$")
-    axs[2].legend(fontsize=9)
-    axs[2].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax_c1.set_ylabel(r"Contribution to $C_1$", fontsize=11)
+    ax_c1.set_xlabel("Flight Time (s)", fontsize=11)
+    ax_c1.set_title(r"Component Contribution to $C_1$")
+    ax_c1.legend(fontsize=9)
+    ax_c1.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
-    fig.suptitle("C2A Aerodynamic Breakdown", fontsize=14)
+    ax_c2a.set_ylabel(r"Contribution to $C_{2A}$", fontsize=11)
+    ax_c2a.set_xlabel("Flight Time (s)", fontsize=11)
+    ax_c2a.set_title(r"Component Contribution to $C_{2A}$")
+    ax_c2a.legend(fontsize=9)
+    ax_c2a.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+    fig.suptitle("Damping Breakdown", fontsize=14)
 
     if output_dir is not None:
-        save_path = output_dir / "replay_c2a_breakdown.png"
+        save_path = output_dir / "replay_damping_breakdown.png"
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return save_path

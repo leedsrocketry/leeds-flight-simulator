@@ -392,9 +392,10 @@ class TrajectoryProfile:
     omega_n: np.ndarray | None = None       # (K,) natural frequency (rad/s)
     omega_d: np.ndarray | None = None       # (K,) damped frequency (rad/s)
     max_roll_rate_hz: np.ndarray | None = None  # (K,) max permissible roll rate
-    # Per-component breakdown for C2A plots
+    # Per-component breakdown for damping plots
     cn_alpha_comp: np.ndarray | None = None  # (N_comp, K) CN_alpha per component
     cp_comp: np.ndarray | None = None        # (N_comp, K) CP per component
+    c1_comp: np.ndarray | None = None        # (N_comp, K) per-component C1 contribution
     c2a_comp: np.ndarray | None = None       # (N_comp, K) per-component C2A contribution
     comp_names: list[str] | None = None      # component names
 
@@ -1575,6 +1576,7 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
 
     cn_alpha_comp_buf = np.full((n_comp, K), math.nan, dtype=np.float64)
     cp_comp_buf = np.full((n_comp, K), math.nan, dtype=np.float64)
+    c1_comp_buf = np.full((n_comp, K), math.nan, dtype=np.float64)
     c2a_comp_buf = np.full((n_comp, K), math.nan, dtype=np.float64)
 
     if not p.has_components or apogee_idx == 0:
@@ -1589,6 +1591,7 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
         profile.max_roll_rate_hz = max_roll_hz
         profile.cn_alpha_comp = cn_alpha_comp_buf
         profile.cp_comp = cp_comp_buf
+        profile.c1_comp = c1_comp_buf
         profile.c2a_comp = c2a_comp_buf
         profile.comp_names = p.comp_names
         return
@@ -1642,7 +1645,7 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
         c1_val = 0.5 * rho * V * V * p.A_ref * cna_total * (cp_total - cg)
         c1[i] = c1_val
 
-        # C2A — aerodynamic damping moment coefficient (p. 202), per-component sum
+        # C1 and C2A per-component contributions
         c2a_val = 0.0
         for j in range(n_comp):
             c_cp = cp_comp_buf[j, i]
@@ -1651,7 +1654,11 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
                 c_cp = cg
             # Stability guard: clip CP distance from CG
             c_cp = max(cg - max_dist_m, min(c_cp, cg + max_dist_m))
-            contrib = 0.5 * rho * V * p.A_ref * c_cna * (c_cp - cg) ** 2
+            lever = c_cp - cg
+            # C1_j = 0.5 ρ V² S_ref CNα_j (CP_j − CG)
+            c1_comp_buf[j, i] = 0.5 * rho * V * V * p.A_ref * c_cna * lever
+            # C2A_j = 0.5 ρ V S_ref CNα_j (CP_j − CG)²
+            contrib = 0.5 * rho * V * p.A_ref * c_cna * lever * lever
             c2a_comp_buf[j, i] = contrib
             c2a_val += contrib
         c2a[i] = c2a_val
@@ -1695,6 +1702,7 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
     profile.max_roll_rate_hz = max_roll_hz
     profile.cn_alpha_comp = cn_alpha_comp_buf
     profile.cp_comp = cp_comp_buf
+    profile.c1_comp = c1_comp_buf
     profile.c2a_comp = c2a_comp_buf
     profile.comp_names = p.comp_names
 

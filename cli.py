@@ -50,7 +50,7 @@ from outputs import (
     save_replay_3d,
     save_replay_altitude,
     save_replay_aoa,
-    save_replay_c2a_breakdown,
+    save_replay_damping_breakdown,
     save_replay_damping,
     save_replay_plan_view,
     save_replay_roll_rate,
@@ -732,7 +732,7 @@ def replay(
             (save_replay_aoa, "angle of attack"),
             (save_replay_roll_rate, "roll rate"),
             (save_replay_damping, "damping"),
-            (save_replay_c2a_breakdown, "C2A breakdown"),
+            (save_replay_damping_breakdown, "damping breakdown"),
         ]:
             try:
                 result = save_fn(results, sim_cfg, output_dir=out_dir)
