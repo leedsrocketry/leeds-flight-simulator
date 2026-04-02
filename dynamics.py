@@ -378,10 +378,10 @@ class TrajectoryProfile:
     cd: np.ndarray            # (K,) vehicle CD during ascent,
                               #       parachute CD from config during descent
     roll_rate_hz: np.ndarray  # (K,) roll rate in Hz; NaN during rail & parachute descent
-    cg: np.ndarray            # (K,) centre of gravity from nose tip [m]; NaN during descent
-    I_roll: np.ndarray        # (K,) roll moment of inertia [kg·m²]; NaN during descent
-    I_lateral: np.ndarray     # (K,) lateral moment of inertia [kg·m²]; NaN during descent
-    mdot: np.ndarray          # (K,) mass flow rate [kg/s]; 0 after burnout, NaN during descent
+    cg: np.ndarray            # (K,) centre of gravity from nose tip [m]; dry CG during descent
+    I_roll: np.ndarray        # (K,) roll moment of inertia [kg·m²]; dry value during descent
+    I_lateral: np.ndarray     # (K,) lateral moment of inertia [kg·m²]; dry value during descent
+    mdot: np.ndarray          # (K,) mass flow rate [kg/s]; 0 after burnout
 
     # --- Damping quantities (computed by compute_damping, NaN until then) ---
     c1: np.ndarray | None = None            # (K,) corrective moment coefficient
@@ -1747,10 +1747,10 @@ def _build_profile(
     rail_cd = np.empty(nr, dtype=np.float64)
     rail_aoa = np.zeros(nr, dtype=np.float64)
     rail_roll_hz = np.full(nr, math.nan, dtype=np.float64)
-    rail_cg = np.full(nr, math.nan, dtype=np.float64)
-    rail_I_roll = np.full(nr, math.nan, dtype=np.float64)
-    rail_I_lateral = np.full(nr, math.nan, dtype=np.float64)
-    rail_mdot = np.full(nr, math.nan, dtype=np.float64)
+    rail_cg = np.empty(nr, dtype=np.float64)
+    rail_I_roll = np.empty(nr, dtype=np.float64)
+    rail_I_lateral = np.empty(nr, dtype=np.float64)
+    rail_mdot = np.empty(nr, dtype=np.float64)
 
     for i in range(nr):
         ti = float(rail_t[i])
@@ -1773,6 +1773,16 @@ def _build_profile(
             p.motor_times, p.motor_thrusts, p.m_prop_0, p.total_impulse,
             p.m_dry, p.cg_dry, p.motor_cg_loaded, ti,
         )
+        i_roll, i_lat = inertia_at(
+            p.motor_times, p.motor_thrusts, p.m_prop_0, p.total_impulse,
+            p.m_dry, p.cg_dry, p.motor_cg_loaded,
+            p.I_roll_dry, p.I_lateral_dry,
+            p.prop_r_outer, p.prop_r_inner_0, p.prop_length, ti,
+        )
+        rail_cg[i] = cg
+        rail_I_roll[i] = i_roll
+        rail_I_lateral[i] = i_lat
+        rail_mdot[i] = mdot_at(p.motor_times, p.motor_thrusts, p.m_prop_0, p.total_impulse, ti)
         Re = rho * V * p.length / mu if V > _EPS_V and mu > 0.0 else 0.0
         # SM from whole-vehicle (no lateral flow on rail)
         _, _, _, _, _, cp_whole = aero_forces_moments(
@@ -1891,10 +1901,10 @@ def _build_profile(
         desc_mass = np.full(n_desc, p.m_dry, dtype=np.float64)
         desc_aoa = np.full(n_desc, math.nan, dtype=np.float64)
         desc_roll_hz = np.full(n_desc, math.nan, dtype=np.float64)
-        desc_cg = np.full(n_desc, math.nan, dtype=np.float64)
-        desc_I_roll = np.full(n_desc, math.nan, dtype=np.float64)
-        desc_I_lateral = np.full(n_desc, math.nan, dtype=np.float64)
-        desc_mdot = np.full(n_desc, math.nan, dtype=np.float64)
+        desc_cg = np.full(n_desc, p.cg_dry, dtype=np.float64)
+        desc_I_roll = np.full(n_desc, p.I_roll_dry, dtype=np.float64)
+        desc_I_lateral = np.full(n_desc, p.I_lateral_dry, dtype=np.float64)
+        desc_mdot = np.zeros(n_desc, dtype=np.float64)
         desc_cd = np.empty(n_desc, dtype=np.float64)
 
         for i in range(n_desc):
