@@ -11,6 +11,7 @@ save_replay_3d          — 3D isometric replay plot (§16.4)
 save_replay_plan_view   — plan-view replay plot (§16.4)
 save_replay_altitude    — altitude-time replay plot (§16.4)
 save_replay_aoa         — angle-of-attack vs time replay plot (§16.4)
+ReplayPicker            — interactive pick handler for replay plots
 """
 
 from __future__ import annotations
@@ -1154,6 +1155,7 @@ def _extract_replay_trajectory(sr: SampleResult) -> dict | None:
     label = SCENARIO_LABELS.get(sr.scenario, sr.scenario)
 
     return {
+        "sample_id": sr.sample_id,
         "north_km": profile.position_ned[:, 0] / 1000.0,
         "east_km": profile.position_ned[:, 1] / 1000.0,
         "alt_m": profile.altitude.copy(),
@@ -1184,6 +1186,190 @@ def _replay_line_style(n_lines: int) -> tuple[float, float]:
     lw = 1.8 + t * (0.3 - 1.8)
     alpha = 0.8 + t * (0.08 - 0.8)
     return lw, alpha
+
+
+# Attribute name set on each Line2D to identify which sample it belongs to.
+_TAG_ATTR = "_replay_sample_id"
+
+
+def _tag_line(line, sample_id: int) -> None:
+    """Mark a Line2D as belonging to *sample_id* and enable picking."""
+    setattr(line, _TAG_ATTR, sample_id)
+    line.set_picker(5)  # 5-pixel tolerance
+
+
+class ReplayPicker:
+    """Cross-figure pick handler for interactive replay plots.
+
+    After all ``save_replay_*`` figures have been created, construct a
+    ``ReplayPicker`` with the list of figures and the corresponding
+    ``SampleResult`` list.  It wires up ``pick_event`` and
+    ``button_press_event`` on every figure so that:
+
+    * Clicking a sample trace **hides every other sample** across all
+      figures and prints a detail panel to the terminal.
+    * Clicking empty space **on the same figure** restores all traces.
+    """
+
+    def __init__(
+        self,
+        figures: list[plt.Figure],
+        replayed: list[SampleResult],
+    ) -> None:
+        # Build sample_id → SampleResult lookup
+        self._samples: dict[int, SampleResult] = {
+            sr.sample_id: sr for sr in replayed
+        }
+        self._figures = figures
+        self._selected_id: int | None = None
+
+        # Collect every tagged line across all figures, grouped by sample_id
+        self._lines_by_id: dict[int, list] = {}
+        self._all_tagged_lines: list = []
+        for fig in figures:
+            for ax in fig.get_axes():
+                for line in ax.get_lines():
+                    sid = getattr(line, _TAG_ATTR, None)
+                    if sid is not None:
+                        self._lines_by_id.setdefault(sid, []).append(line)
+                        self._all_tagged_lines.append(line)
+
+        # Store original visual properties so we can restore on deselect
+        self._original_props: dict[int, list[tuple[float, float]]] = {}
+        for sid, lines in self._lines_by_id.items():
+            self._original_props[sid] = [
+                (ln.get_alpha() or 1.0, ln.get_linewidth()) for ln in lines
+            ]
+
+        # Track whether the current click cycle triggered a pick
+        self._pick_handled = False
+
+        # Connect events
+        self._cids: list = []
+        for fig in figures:
+            cid_btn = fig.canvas.mpl_connect("button_press_event", self._on_button_press)
+            cid_pick = fig.canvas.mpl_connect("pick_event", self._on_pick)
+            cid_rel = fig.canvas.mpl_connect("button_release_event", self._on_button_release)
+            self._cids.append((fig, cid_btn, cid_pick, cid_rel))
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _on_button_press(self, event) -> None:
+        """Reset pick-handled flag at the start of each click."""
+        self._pick_handled = False
+
+    def _on_pick(self, event) -> None:
+        """Handle a pick on a tagged line."""
+        artist = event.artist
+        sid = getattr(artist, _TAG_ATTR, None)
+        if sid is None:
+            return
+        self._pick_handled = True
+        if self._selected_id == sid:
+            return  # already selected — release handler will not deselect
+        self._selected_id = sid
+        self._isolate(sid)
+        self._print_detail(sid)
+
+    def _on_button_release(self, event) -> None:
+        """Deselect if the click did not hit any tagged line."""
+        if self._selected_id is None:
+            return
+        if self._pick_handled:
+            return  # click landed on a trace
+        # Click on empty space — deselect
+        self._restore_all()
+        self._selected_id = None
+        for f in self._figures:
+            f.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Visual state
+    # ------------------------------------------------------------------
+
+    def _isolate(self, sid: int) -> None:
+        """Hide all traces except *sid*, then redraw all figures."""
+        for other_sid, lines in self._lines_by_id.items():
+            if other_sid == sid:
+                for ln in lines:
+                    ln.set_visible(True)
+                    ln.set_alpha(1.0)
+                    ln.set_linewidth(2.0)
+            else:
+                for ln in lines:
+                    ln.set_visible(False)
+        for fig in self._figures:
+            fig.canvas.draw_idle()
+
+    def _restore_all(self) -> None:
+        """Restore all traces to their original appearance."""
+        for sid, lines in self._lines_by_id.items():
+            props = self._original_props[sid]
+            for ln, (alpha, lw) in zip(lines, props):
+                ln.set_visible(True)
+                ln.set_alpha(alpha)
+                ln.set_linewidth(lw)
+
+    # ------------------------------------------------------------------
+    # Terminal detail panel
+    # ------------------------------------------------------------------
+
+    def _print_detail(self, sid: int) -> None:
+        """Print a rich panel with sample details to the terminal."""
+        from rich.console import Console
+        from rich.panel import Panel
+
+        sr = self._samples.get(sid)
+        if sr is None:
+            return
+
+        console = Console()
+
+        # Build compliance lines
+        checks = [
+            ("footprint", sr.footprint_compliant, "trajectory exited danger area"),
+            ("ceiling", sr.ceiling_compliant, "apogee above altitude ceiling"),
+            ("stability", sr.stability_compliant, "static margin violation"),
+        ]
+        if sr.landing_at_sea is not None:
+            checks.append(("coastline", not sr.landing_at_sea, "landing at sea"))
+        if sr.in_coverage is not None:
+            checks.append(("monitor", sr.in_coverage, "outside monitored area"))
+
+        compliance_lines: list[str] = []
+        for name, passed, reason in checks:
+            if passed:
+                compliance_lines.append(f"  [green]✓[/green] {name}")
+            else:
+                compliance_lines.append(f"  [red]✗[/red] {name}  ({reason})")
+
+        status = "[green]PASS[/green]" if sr.compliant else "[red]FAIL[/red]"
+        label = SCENARIO_LABELS.get(sr.scenario, sr.scenario)
+
+        text = (
+            f"[bold]Sample {sr.sample_id}[/bold] / {label}\n"
+            f"\n"
+            f"Inputs:\n"
+            f"  Azimuth:       {sr.azimuth_deg:.1f}°\n"
+            f"  Inclination:   {sr.inclination_deg:.1f}°\n"
+            f"  Fin cant:      {sr.fin_cant_deg:.4f}°\n"
+            f"  Impulse:       ×{sr.impulse_factor:.3f}\n"
+            f"  Wind profile:  {sr.wind_profile_index}\n"
+            f"\n"
+            f"Compliance:  {status}\n"
+            + "\n".join(compliance_lines)
+        )
+
+        console.print()
+        console.print(Panel(
+            text,
+            border_style="white",
+            title="SAMPLE DETAIL",
+            title_align="left",
+        ))
+        console.print()
 
 
 def save_replay_altitude(
@@ -1267,8 +1453,10 @@ def save_replay_altitude(
         legend_seen.add(legend_key)
 
         kw = dict(color=t["colour"], linewidth=lw, alpha=alpha)
-        ax_l.plot(t["t_s"], alt_ft, **kw)
-        ax_r.plot(t["t_s"], alt_ft, **kw)
+        for ln in ax_l.plot(t["t_s"], alt_ft, **kw):
+            _tag_line(ln, t["sample_id"])
+        for ln in ax_r.plot(t["t_s"], alt_ft, **kw):
+            _tag_line(ln, t["sample_id"])
 
         if show_label:
             legend_handles.append(mlines.Line2D(
@@ -1317,7 +1505,8 @@ def save_replay_aoa(
     lw, alpha = _replay_line_style(len(trajectories))
 
     for t in trajectories:
-        ax.plot(t["t_aoa_s"], t["aoa_deg"], color="black", linewidth=lw, alpha=alpha)
+        for ln in ax.plot(t["t_aoa_s"], t["aoa_deg"], color="black", linewidth=lw, alpha=alpha):
+            _tag_line(ln, t["sample_id"])
 
     ax.set_xlabel("Flight Time (s)", fontsize=11)
     ax.set_ylabel("Angle of Attack (deg)", fontsize=11)
@@ -1366,7 +1555,8 @@ def save_replay_roll_rate(
         ts = t["t_s"]
         rr = t["roll_rate_hz"]
         mask = ~np.isnan(rr)
-        ax.plot(ts[mask], rr[mask], color="black", linewidth=lw, alpha=alpha)
+        for ln in ax.plot(ts[mask], rr[mask], color="black", linewidth=lw, alpha=alpha):
+            _tag_line(ln, t["sample_id"])
 
         # Overlay max permissible roll rate from damping post-processing
         if not max_roll_plotted and sr.trajectory is not None:
@@ -1432,33 +1622,38 @@ def save_replay_damping(
 
     lw, alpha = _replay_line_style(len(trajectories))
 
+    def _plot_tagged(ax, x, y, sid, **kw):
+        for ln in ax.plot(x, y, **kw):
+            _tag_line(ln, sid)
+
     for t, prof in zip(trajectories, profiles):
         ts = t["t_s"]
+        sid = t["sample_id"]
 
         # Zeta
         mask = ~np.isnan(prof.zeta)
-        axs[0].plot(ts[mask], prof.zeta[mask], color="black", linewidth=lw, alpha=alpha)
+        _plot_tagged(axs[0], ts[mask], prof.zeta[mask], sid, color="black", linewidth=lw, alpha=alpha)
 
         # C1
         mask = ~np.isnan(prof.c1)
-        axs[1].plot(ts[mask], prof.c1[mask], color="red", linewidth=lw, alpha=alpha)
+        _plot_tagged(axs[1], ts[mask], prof.c1[mask], sid, color="red", linewidth=lw, alpha=alpha)
 
         # C2 breakdown
         mask = ~np.isnan(prof.c2)
-        axs[2].plot(ts[mask], prof.c2[mask], color="blue", linewidth=lw * 1.2, alpha=alpha, label="C2 (total)" if prof is profiles[0] else None)
+        _plot_tagged(axs[2], ts[mask], prof.c2[mask], sid, color="blue", linewidth=lw * 1.2, alpha=alpha, label="C2 (total)" if prof is profiles[0] else None)
         mask = ~np.isnan(prof.c2a)
-        axs[2].plot(ts[mask], prof.c2a[mask], color="blue", linestyle="--", linewidth=lw, alpha=alpha * 0.7, label="C2A (aerodynamic)" if prof is profiles[0] else None)
+        _plot_tagged(axs[2], ts[mask], prof.c2a[mask], sid, color="blue", linestyle="--", linewidth=lw, alpha=alpha * 0.7, label="C2A (aerodynamic)" if prof is profiles[0] else None)
         mask = ~np.isnan(prof.c2r)
-        axs[2].plot(ts[mask], prof.c2r[mask], color="blue", linestyle=":", linewidth=lw, alpha=alpha * 0.7, label="C2R (jet)" if prof is profiles[0] else None)
+        _plot_tagged(axs[2], ts[mask], prof.c2r[mask], sid, color="blue", linestyle=":", linewidth=lw, alpha=alpha * 0.7, label="C2R (jet)" if prof is profiles[0] else None)
 
         mask = ~np.isnan(prof.I_lateral)
-        axs[3].plot(ts[mask], prof.I_lateral[mask], color="green", linewidth=lw, alpha=alpha)
+        _plot_tagged(axs[3], ts[mask], prof.I_lateral[mask], sid, color="green", linewidth=lw, alpha=alpha)
 
         # Frequencies
         mask = ~np.isnan(prof.omega_n)
-        axs[4].plot(ts[mask], prof.omega_n[mask], color="purple", linewidth=lw, alpha=alpha, label=r"$\omega_n$" if prof is profiles[0] else None)
+        _plot_tagged(axs[4], ts[mask], prof.omega_n[mask], sid, color="purple", linewidth=lw, alpha=alpha, label=r"$\omega_n$" if prof is profiles[0] else None)
         mask = ~np.isnan(prof.omega_d)
-        axs[4].plot(ts[mask], prof.omega_d[mask], color="orange", linestyle="--", linewidth=lw, alpha=alpha, label=r"$\omega_d$" if prof is profiles[0] else None)
+        _plot_tagged(axs[4], ts[mask], prof.omega_d[mask], sid, color="orange", linestyle="--", linewidth=lw, alpha=alpha, label=r"$\omega_d$" if prof is profiles[0] else None)
 
     # Zeta recommended range band
     axs[0].axhspan(0.05, 0.3, facecolor="green", alpha=0.15)
@@ -1774,10 +1969,11 @@ def save_replay_3d(
         east_plot = t["east_km"][mask]
         alt_plot = t["alt_m"][mask]
 
-        ax.plot(
+        for ln in ax.plot(
             east_plot, north_plot, alt_plot / 1000.0,
             color=t["colour"], linewidth=lw, alpha=alpha,
-        )
+        ):
+            _tag_line(ln, t["sample_id"])
         if show_label:
             legend_handles.append(mlines.Line2D(
                 [], [], color=t["colour"], linewidth=2.0,
@@ -1867,10 +2063,11 @@ def save_replay_plan_view(
         show_label = legend_key not in legend_seen
         legend_seen.add(legend_key)
 
-        ax.plot(
+        for ln in ax.plot(
             wm_pts[:, 0], wm_pts[:, 1],
             color=t["colour"], linewidth=lw, alpha=alpha, zorder=8,
-        )
+        ):
+            _tag_line(ln, t["sample_id"])
         if show_label:
             legend_handles.append(mlines.Line2D(
                 [], [], color=t["colour"], linewidth=2.0,

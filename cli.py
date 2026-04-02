@@ -54,6 +54,7 @@ from outputs import (
     save_replay_damping,
     save_replay_plan_view,
     save_replay_roll_rate,
+    ReplayPicker,
     write_samples_csv,
     write_summary_yaml,
 )
@@ -723,6 +724,7 @@ def replay(
 
         out_dir = summary_dir if no_popup else None
         figure_paths: list[Path] = []
+        replay_figures: list[plt.Figure] = []
         for save_fn, name in [
             (save_replay_3d, "3D isometric"),
             (save_replay_plan_view, "plan view"),
@@ -736,6 +738,8 @@ def replay(
                 result = save_fn(results, sim_cfg, output_dir=out_dir)
                 if isinstance(result, Path):
                     figure_paths.append(result)
+                else:
+                    replay_figures.append(result)
             except NotImplementedError:
                 display.add_warning(f"{name} replay plot not yet implemented.")
 
@@ -743,6 +747,8 @@ def replay(
         console.print()
 
         if not no_popup:
+            if replay_figures:
+                _picker = ReplayPicker(replay_figures, results)  # noqa: F841
             plt.show()
 
     finally:
