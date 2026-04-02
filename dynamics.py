@@ -1613,9 +1613,10 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
 
         Re = rho * V * p.length / mu if mu > 0.0 else 0.0
 
-        cg    = float(profile.cg[i])
-        I_lat = float(profile.I_lateral[i])
-        m_dot = float(profile.mdot[i])
+        cg      = float(profile.cg[i])
+        I_lat   = float(profile.I_lateral[i])
+        I_roll  = float(profile.I_roll[i])
+        m_dot   = float(profile.mdot[i])
 
         if math.isnan(cg) or math.isnan(I_lat) or math.isnan(m_dot):
             continue
@@ -1672,13 +1673,14 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
         c2_val = c2a_val + c2r_val
         c2[i] = c2_val
 
-        # Damping ratio
-        if c1_val > 0.0 and I_lat > 0.0:
-            product = c1_val * I_lat
+        # Damping ratio — coupled (rolling) form: I_L replaced by (I_L + I_R)
+        I_total = I_lat + I_roll
+        if c1_val > 0.0 and I_total > 0.0:
+            product = c1_val * I_total
             zeta_val = c2_val / (2.0 * math.sqrt(product))
             zeta[i] = zeta_val
 
-            omega_n_val = math.sqrt(c1_val / I_lat)
+            omega_n_val = math.sqrt(c1_val / I_total)
             omega_n[i] = omega_n_val
 
             discriminant = 1.0 - zeta_val * zeta_val
