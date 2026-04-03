@@ -440,20 +440,15 @@ def run_verification(
         "cd": ver_cfg.cd_tolerance,
     }
 
-    # For CD, truncate at apogee (post-apogee CD is parachute drag, not
-    # body aero) and strip NaN values (below aero table Mach range).
-    ref_apogee = int(np.argmax(ref_data["altitude"])) + 1
-    sim_apogee = int(np.argmax(sim_data["altitude"])) + 1
-
     comparisons: dict[str, QuantityComparison] = {}
     for qty in _COMPARED_QUANTITIES:
         if qty not in ref_data:
             continue
         if qty == "cd":
-            ref_t = ref_data["time"][:ref_apogee]
-            ref_v = ref_data["cd"][:ref_apogee]
-            sim_t = sim_data["time"][:sim_apogee]
-            sim_v = sim_data["cd"][:sim_apogee]
+            ref_t = ref_data["time"]
+            ref_v = ref_data["cd"]
+            sim_t = sim_data["time"]
+            sim_v = sim_data["cd"]
             # Drop points outside the valid aero table range: NaN from
             # the simulator (below mach_grid lower bound) and zero from
             # the reference (RASAero reports CD=0 at zero velocity).

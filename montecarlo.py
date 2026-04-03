@@ -219,6 +219,8 @@ def build_sim_params(
         # Recovery
         drogue_cda=drogue_cda,
         main_cda=main_cda,
+        drogue_cd=recovery.drogue.cd if has_drogue else 0.0,
+        main_cd=recovery.main.cd if has_main else 0.0,
         main_deploy_alt=main_deploy_alt,
         has_drogue=has_drogue,
         has_main=has_main,

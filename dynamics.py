@@ -281,6 +281,8 @@ class SimParams:
     # Recovery (CdA values; 0.0 if not configured)
     drogue_cda: float
     main_cda: float
+    drogue_cd: float              # parachute CD (for profile output only)
+    main_cd: float                # parachute CD (for profile output only)
     main_deploy_alt: float        # m AGL; negative sentinel if deploy-at-apogee
     has_drogue: bool
     has_main: bool
@@ -1294,6 +1296,23 @@ def _parachute_cda(
 
 
 @nb.njit(cache=True, fastmath=True)
+def _parachute_cd(
+    h: float,
+    drogue_cd: float, main_cd: float, main_deploy_alt: float,
+    scenario: int,
+) -> float:
+    """Return the dominant parachute CD for profile output."""
+    if scenario == SCENARIO_NOMINAL:
+        if h <= main_deploy_alt:
+            return main_cd
+        return drogue_cd
+    elif scenario == SCENARIO_DROGUE_ONLY:
+        return drogue_cd
+    else:  # SCENARIO_PREMATURE_MAIN
+        return main_cd
+
+
+@nb.njit(cache=True, fastmath=True)
 def _descent_deriv(
     t: float, state: np.ndarray, dy: np.ndarray,
     # Wind
@@ -1794,15 +1813,10 @@ def _build_profile(
         rail_I_lateral[i] = i_lat
         rail_mdot[i] = mdot_at(p.motor_times, p.motor_thrusts, p.m_prop_0, p.total_impulse, ti)
         Re = rho * V * p.length / mu if V > _EPS_V and mu > 0.0 else 0.0
-        # SM from whole-vehicle (no lateral flow on rail)
-        _, _, _, _, _, cp_whole = aero_forces_moments(
-            p.mach_g, p.re_g, p.alpha_g,
-            p.ca_tbl_off, p.ca_tbl_on, ti <= t_burnout,
-            p.cn_tbl, p.cp_tbl,
-            p.cn_comp, p.cp_comp, p.has_components,
-            M, Re, rho, V, p.A_ref,
-            V, 0.0, 0.0, 0.0, 0.0, cg,
-        )
+        # SM from table CP directly (no lateral flow on rail, so CN=0
+        # and aero_forces_moments would return cp_whole=cg giving SM=0)
+        _, cp_whole = cn_cp_at(p.mach_g, p.re_g, p.alpha_g,
+                               p.cn_tbl, p.cp_tbl, M, Re, 0.0)
         rail_sm[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
 
         if M >= p.mach_g[0]:
@@ -1922,11 +1936,10 @@ def _build_profile(
             _, _, _, a, _ = isa_at_site(h, p.site_elevation, p.t_offset)
             vD = float(state_desc[i, 5])
             desc_mach[i] = abs(vD) / a if a > 0.0 else 0.0
-            # Parachute CD from config (constant per chute, switches at main deploy)
-            cda = _parachute_cda(
-                h, p.drogue_cda, p.main_cda, p.main_deploy_alt, scenario,
+            # Parachute CD (of the dominant active chute, for profile display)
+            desc_cd[i] = _parachute_cd(
+                h, p.drogue_cd, p.main_cd, p.main_deploy_alt, scenario,
             )
-            desc_cd[i] = cda / p.A_ref if p.A_ref > 0.0 else 0.0
 
         t_desc_trimmed = t_desc[:n_desc]
     else:
