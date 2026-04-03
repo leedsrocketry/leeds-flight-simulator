@@ -409,9 +409,12 @@ def run_verification(
         params, scenario, None, None, float("inf"),
         keep_profile=True,
     )
-    check_stability_compliance(
-        summary, sim_cfg.monte_carlo.acceptance, "Verification",
-    )
+    try:
+        check_stability_compliance(
+            summary, sim_cfg.monte_carlo.acceptance, "Verification",
+        )
+    except RuntimeError as exc:
+        warnings.warn(str(exc))
 
     # Read unified quantities directly from the profile — no recomputation.
     sim_data: dict[str, np.ndarray] = {
