@@ -582,6 +582,9 @@ def _make_parabolic_trajectory() -> TrajectoryProfile:
     mdot = np.concatenate([np.linspace(2.5, 0.0, n_asc),
                            np.full(n_desc - 1, np.nan)])
 
+    cp = np.concatenate([np.linspace(1.8, 2.0, n_asc),
+                          np.full(n_desc - 1, np.nan)])
+
     return TrajectoryProfile(
         time=time,
         position_ned=position_ned,
@@ -589,6 +592,7 @@ def _make_parabolic_trajectory() -> TrajectoryProfile:
         mach=mach,
         aoa_deg=aoa_deg,
         sm=sm,
+        cp=cp,
         thrust=thrust,
         mass=mass,
         cd=cd,

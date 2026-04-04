@@ -375,6 +375,7 @@ class TrajectoryProfile:
     mach: np.ndarray          # (K,)
     aoa_deg: np.ndarray       # (K,) NaN during descent
     sm: np.ndarray            # (K,) calibres
+    cp: np.ndarray            # (K,) whole-vehicle centre of pressure from nose tip [m]; NaN during descent
     thrust: np.ndarray        # (K,) Newtons, 0 after burnout
     mass: np.ndarray          # (K,) kg
     cd: np.ndarray            # (K,) vehicle CD during ascent,
@@ -1772,7 +1773,7 @@ def _build_profile(
     rail_mach = np.empty(nr, dtype=np.float64)
     rail_thrust = np.empty(nr, dtype=np.float64)
     rail_mass = np.empty(nr, dtype=np.float64)
-    rail_sm = np.empty(nr, dtype=np.float64)
+    rail_cp = np.empty(nr, dtype=np.float64)
     rail_cd = np.empty(nr, dtype=np.float64)
     rail_aoa = np.zeros(nr, dtype=np.float64)
     rail_roll_hz = np.full(nr, math.nan, dtype=np.float64)
@@ -1813,11 +1814,11 @@ def _build_profile(
         rail_I_lateral[i] = i_lat
         rail_mdot[i] = mdot_at(p.motor_times, p.motor_thrusts, p.m_prop_0, p.total_impulse, ti)
         Re = rho * V * p.length / mu if V > _EPS_V and mu > 0.0 else 0.0
-        # SM from table CP directly (no lateral flow on rail, so CN=0
+        # CP from table directly (no lateral flow on rail, so CN=0
         # and aero_forces_moments would return cp_whole=cg giving SM=0)
         _, cp_whole = cn_cp_at(p.mach_g, p.re_g, p.alpha_g,
                                p.cn_tbl, p.cp_tbl, M, Re, 0.0)
-        rail_sm[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+        rail_cp[i] = cp_whole
 
         if M >= p.mach_g[0]:
             ca_tbl = p.ca_tbl_on if ti <= t_burnout else p.ca_tbl_off
@@ -1834,7 +1835,7 @@ def _build_profile(
     asc_mach = np.empty(n_asc, dtype=np.float64)
     asc_thrust = np.empty(n_asc, dtype=np.float64)
     asc_mass = np.empty(n_asc, dtype=np.float64)
-    asc_sm = np.empty(n_asc, dtype=np.float64)
+    asc_cp = np.empty(n_asc, dtype=np.float64)
     asc_cd = np.empty(n_asc, dtype=np.float64)
     asc_aoa = np.empty(n_asc, dtype=np.float64)
     asc_cg = np.empty(n_asc, dtype=np.float64)
@@ -1901,7 +1902,7 @@ def _build_profile(
             M, Re, rho, V, p.A_ref,
             u, v, w, q_rate, r_rate, cg,
         )
-        asc_sm[i] = (cp_whole - cg) / diameter if diameter > 0.0 else 0.0
+        asc_cp[i] = cp_whole
 
         if M >= p.mach_g[0]:
             ca_tbl = p.ca_tbl_on if power_on else p.ca_tbl_off
@@ -1920,7 +1921,7 @@ def _build_profile(
         desc_alt = -state_desc[:n_desc, 2].copy()
 
         desc_mach = np.empty(n_desc, dtype=np.float64)
-        desc_sm = np.zeros(n_desc, dtype=np.float64)
+        desc_cp = np.zeros(n_desc, dtype=np.float64)
         desc_thrust = np.zeros(n_desc, dtype=np.float64)
         desc_mass = np.full(n_desc, p.m_dry, dtype=np.float64)
         desc_aoa = np.full(n_desc, math.nan, dtype=np.float64)
@@ -1953,7 +1954,7 @@ def _build_profile(
     parts_alt = [np.array([max(float(rail_alt[i]), 0.0) for i in range(nr)])]
     parts_mach = [rail_mach]
     parts_aoa = [rail_aoa]
-    parts_sm = [rail_sm]
+    parts_cp = [rail_cp]
     parts_thrust = [rail_thrust]
     parts_mass = [rail_mass]
     parts_cd = [rail_cd]
@@ -1970,7 +1971,7 @@ def _build_profile(
         parts_alt.append(asc_alt[1:])
         parts_mach.append(asc_mach[1:])
         parts_aoa.append(asc_aoa[1:])
-        parts_sm.append(asc_sm[1:])
+        parts_cp.append(asc_cp[1:])
         parts_thrust.append(asc_thrust[1:])
         parts_mass.append(asc_mass[1:])
         parts_cd.append(asc_cd[1:])
@@ -1986,7 +1987,7 @@ def _build_profile(
         parts_alt.append(asc_alt)
         parts_mach.append(asc_mach)
         parts_aoa.append(asc_aoa)
-        parts_sm.append(asc_sm)
+        parts_cp.append(asc_cp)
         parts_thrust.append(asc_thrust)
         parts_mass.append(asc_mass)
         parts_cd.append(asc_cd)
@@ -2002,7 +2003,7 @@ def _build_profile(
         parts_alt.append(desc_alt[1:])
         parts_mach.append(desc_mach[1:])
         parts_aoa.append(desc_aoa[1:])
-        parts_sm.append(desc_sm[1:])
+        parts_cp.append(desc_cp[1:])
         parts_thrust.append(desc_thrust[1:])
         parts_mass.append(desc_mass[1:])
         parts_cd.append(desc_cd[1:])
@@ -2012,18 +2013,28 @@ def _build_profile(
         parts_I_lateral.append(desc_I_lateral[1:])
         parts_mdot.append(desc_mdot[1:])
 
+    # Derive SM from stored CP and CG — NaN CP (descent) gives SM = 0
+    cp_arr = np.concatenate(parts_cp)
+    cg_arr = np.concatenate(parts_cg)
+    sm_arr = np.where(
+        np.isfinite(cp_arr) & (diameter > 0.0),
+        (cp_arr - cg_arr) / diameter,
+        0.0,
+    )
+
     return TrajectoryProfile(
         time=np.concatenate(parts_t),
         position_ned=np.concatenate(parts_pos, axis=0),
         altitude=np.concatenate(parts_alt),
         mach=np.concatenate(parts_mach),
         aoa_deg=np.concatenate(parts_aoa),
-        sm=np.concatenate(parts_sm),
+        sm=sm_arr,
+        cp=cp_arr,
         thrust=np.concatenate(parts_thrust),
         mass=np.concatenate(parts_mass),
         cd=np.concatenate(parts_cd),
         roll_rate_hz=np.concatenate(parts_roll_hz),
-        cg=np.concatenate(parts_cg),
+        cg=cg_arr,
         I_roll=np.concatenate(parts_I_roll),
         I_lateral=np.concatenate(parts_I_lateral),
         mdot=np.concatenate(parts_mdot),

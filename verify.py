@@ -39,6 +39,7 @@ from dynamics import (
     SCENARIO_NOMINAL,
     SCENARIO_BALLISTIC,
 )
+from atmosphere import isa_at_site, compute_t_offset
 from montecarlo import build_sim_params
 
 
@@ -59,6 +60,9 @@ _TOLERANCE_FLOORS: dict[str, float] = {
     "mass": 0.1,        # kg
     "thrust": 10.0,     # newtons
     "cd": 0.01,         # dimensionless
+    "drag": 1.0,        # newtons
+    "cg": 0.01,         # metres
+    "cp": 0.01,         # metres
 }
 
 # Column alias map: quantity → list of substrings to match (case-insensitive).
@@ -71,6 +75,9 @@ _COLUMN_ALIASES: dict[str, list[str]] = {
     "sm": ["stability margin", "stability", "sm"],
     "thrust": ["thrust", "force"],
     "cd": ["cd", "drag coeff"],
+    "drag": ["drag"],
+    "cg": ["cg", "centre of gravity", "center of gravity"],
+    "cp": ["cp", "centre of pressure", "center of pressure"],
 }
 
 # Plot labels for each quantity
@@ -81,6 +88,9 @@ _PLOT_LABELS: dict[str, str] = {
     "thrust": "Thrust (N)",
     "mass": "Mass (kg)",
     "cd": "CD",
+    "drag": "Drag (N)",
+    "cg": "CG (m from nose)",
+    "cp": "CP (m from nose)",
 }
 
 # Quantities to compare — 3×2 grid
@@ -248,9 +258,13 @@ def _build_comparison_figure(
     Six time-series quantities fill all positions in a 3×2 grid, sharing
     a common time x-axis.  Reference in grey with tolerance band;
     simulator overlay in green (pass) or red (fail).
+
+    If *comparisons* contains ``"cg"`` and/or ``"cp"`` entries, they are
+    drawn on the stability-margin subplot using a second left y-axis
+    (metres from nose) rather than occupying their own subplot.
     """
     fig = plt.figure(figsize=(12, 9))
-    fig.subplots_adjust(hspace=0.30, wspace=0.25, left=0.08, right=0.96,
+    fig.subplots_adjust(hspace=0.30, wspace=0.25, left=0.12, right=0.96,
                         top=0.95, bottom=0.07)
 
     gs = fig.add_gridspec(3, 2)
@@ -271,9 +285,18 @@ def _build_comparison_figure(
         ax = time_axes[idx]
         cmp = comparisons[qty_name]
 
+        # Subplots with overlays use explicit labels; others use generic ones
+        has_overlay = (
+            (qty_name == "sm" and ("cg" in comparisons or "cp" in comparisons))
+            or (qty_name == "thrust" and "drag" in comparisons)
+        )
+        qty_label = _PLOT_LABELS[qty_name].split(" (")[0]  # e.g. "Thrust"
+        ref_label = f"{qty_label} (Reference)" if has_overlay else "Reference"
+        sim_label = f"{qty_label} (LFS)" if has_overlay else "LFS"
+
         # Reference: grey line + tolerance band
         ax.plot(cmp.ref_time, cmp.ref_values,
-                color="grey", linewidth=1.5, label="Reference")
+                color="grey", linewidth=1.5, label=ref_label)
         ax.fill_between(
             cmp.ref_time,
             cmp.ref_values * (1.0 - cmp.tolerance),
@@ -284,11 +307,56 @@ def _build_comparison_figure(
         # Simulator overlay: green if passed, red if failed
         sim_colour = "#2d7a2d" if cmp.passed else "red"
         ax.plot(cmp.ref_time, cmp.sim_values,
-                color=sim_colour, linewidth=1.2, label="LFS")
+                color=sim_colour, linewidth=1.2, label=sim_label)
 
         ax.set_ylabel(_PLOT_LABELS[qty_name])
-        ax.legend(fontsize=8)
         ax.spines[["right", "top"]].set_visible(False)
+
+        # --- CG / CP overlay on the SM subplot ---
+        if qty_name == "sm" and ("cg" in comparisons or "cp" in comparisons):
+            ax2 = ax.twinx()
+            ax2.yaxis.set_label_position("left")
+            ax2.yaxis.tick_left()
+            ax2.spines["left"].set_position(("outward", 50))
+            ax2.spines[["right", "top"]].set_visible(False)
+            ax2.set_ylabel("CG / CP (m from nose)")
+
+            _SM_OVERLAY_STYLES: dict[str, tuple[str, str]] = {
+                "cg": ("--", "CG"),
+                "cp": (":", "CP"),
+            }
+            for oq, (linestyle, label) in _SM_OVERLAY_STYLES.items():
+                if oq not in comparisons:
+                    continue
+                oc = comparisons[oq]
+                ax2.plot(oc.ref_time, oc.ref_values,
+                         color="grey", linewidth=1.2, linestyle=linestyle,
+                         label=f"{label} (Reference)")
+                oc_colour = "#2d7a2d" if oc.passed else "red"
+                ax2.plot(oc.ref_time, oc.sim_values,
+                         color=oc_colour, linewidth=1.0, linestyle=linestyle,
+                         label=f"{label} (LFS)")
+
+            # Combined legend from both axes
+            h1, l1 = ax.get_legend_handles_labels()
+            h2, l2 = ax2.get_legend_handles_labels()
+            ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="best")
+
+        # --- Drag overlay on the Thrust subplot (shared y-axis, both in N) ---
+        elif qty_name == "thrust" and "drag" in comparisons:
+            dc = comparisons["drag"]
+            ax.plot(dc.ref_time, dc.ref_values,
+                    color="grey", linewidth=1.2, linestyle="--",
+                    label="Drag (Reference)")
+            dc_colour = "#2d7a2d" if dc.passed else "red"
+            ax.plot(dc.ref_time, dc.sim_values,
+                    color=dc_colour, linewidth=1.0, linestyle="--",
+                    label="Drag (LFS)")
+            ax.set_ylabel("Force (N)")
+            ax.legend(fontsize=7, loc="best")
+
+        else:
+            ax.legend(fontsize=8)
 
     # Hide unused time axes
     for idx in range(len(plotted_quantities), len(time_axes)):
@@ -417,6 +485,21 @@ def run_verification(
         warnings.warn(str(exc))
 
     # Read unified quantities directly from the profile — no recomputation.
+    # Drag force is derived from CD, atmosphere, and reference area.
+    site_elev = sim_cfg.site.elevation
+    t_offset = (
+        compute_t_offset(site_elev, sim_cfg.site.temperature)
+        if sim_cfg.site.temperature is not None
+        else 0.0
+    )
+    A_ref = vehicle.geometry.reference_area
+    drag = np.empty_like(profile.cd)
+    for i in range(len(drag)):
+        h = max(float(profile.altitude[i]), 0.0)
+        _, _, rho, a, _ = isa_at_site(h, site_elev, t_offset)
+        V = float(profile.mach[i]) * a
+        drag[i] = 0.5 * rho * V * V * A_ref * float(profile.cd[i])
+
     sim_data: dict[str, np.ndarray] = {
         "time": profile.time,
         "altitude": profile.altitude,
@@ -425,6 +508,9 @@ def run_verification(
         "thrust": profile.thrust,
         "mass": profile.mass,
         "cd": profile.cd,
+        "drag": drag,
+        "cg": profile.cg,
+        "cp": profile.cp,
     }
 
     # --- Load reference CSV ---
@@ -438,35 +524,35 @@ def run_verification(
         "thrust": ver_cfg.thrust_tolerance,
         "mass": ver_cfg.mass_tolerance,
         "cd": ver_cfg.cd_tolerance,
+        "drag": ver_cfg.drag_tolerance,
+        "cg": ver_cfg.cg_tolerance,
+        "cp": ver_cfg.cp_tolerance,
     }
 
     comparisons: dict[str, QuantityComparison] = {}
     for qty in _COMPARED_QUANTITIES:
         if qty not in ref_data:
             continue
-        if qty == "cd":
-            ref_t = ref_data["time"]
-            ref_v = ref_data["cd"]
-            sim_t = sim_data["time"]
-            sim_v = sim_data["cd"]
-            # Drop points outside the valid aero table range: NaN from
-            # the simulator (below mach_grid lower bound) and zero from
-            # the reference (RASAero reports CD=0 at zero velocity).
-            ref_valid = ref_v > 0.0
-            ref_t, ref_v = ref_t[ref_valid], ref_v[ref_valid]
-            sim_valid = np.isfinite(sim_v)
-            sim_t, sim_v = sim_t[sim_valid], sim_v[sim_valid]
-        else:
-            ref_t = ref_data["time"]
-            ref_v = ref_data[qty]
-            sim_t = sim_data["time"]
-            sim_v = sim_data[qty]
         comparisons[qty] = _compare_quantity(
             name=qty,
-            ref_time=ref_t,
-            ref_values=ref_v,
-            sim_time=sim_t,
-            sim_values=sim_v,
+            ref_time=ref_data["time"],
+            ref_values=ref_data[qty],
+            sim_time=sim_data["time"],
+            sim_values=sim_data[qty],
+            tolerance=tolerance_map[qty],
+            exceedance_fraction=ver_cfg.exceedance_fraction,
+        )
+
+    # --- Overlay comparisons (CG/CP on SM, drag on thrust) ---
+    for qty in ("cg", "cp", "drag"):
+        if qty not in ref_data or qty not in tolerance_map:
+            continue
+        comparisons[qty] = _compare_quantity(
+            name=qty,
+            ref_time=ref_data["time"],
+            ref_values=ref_data[qty],
+            sim_time=sim_data["time"],
+            sim_values=sim_data[qty],
             tolerance=tolerance_map[qty],
             exceedance_fraction=ver_cfg.exceedance_fraction,
         )

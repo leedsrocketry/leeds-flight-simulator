@@ -407,7 +407,7 @@ Checks ISA against published tables, quaternion maths, launch rail exit velocity
 
 ### Trajectory Comparison Tool
 
-An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, thrust, mass, CD. Column names are matched case-insensitively; missing columns are skipped.
+An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, thrust, mass, CD, drag, CG, CP. Column names are matched case-insensitively; missing columns are skipped.
 
 > **Note:** The reference CSV is assumed to use SI units (metres, seconds, calibres). There is no unit sanitisation and no check that both simulators used the same input parameters — ensure your reference data is in SI and that vehicle, motor, and atmospheric inputs match before running verification.
 
@@ -441,7 +441,7 @@ By default, the comparison figure is displayed interactively with linked zoom/pa
 
 ![Verification plot](figures/verification_plot.png)
 
-Five time-series subplots (altitude, Mach, stability margin, thrust, mass) share a linked time axis. The bottom-right subplot shows drag coefficient vs Mach number over the reference simulation's Mach range. Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail).
+Six time-series subplots (altitude, Mach, stability margin, thrust, mass, drag coefficient) share a linked time axis. Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail). If CG and CP columns are present in the reference CSV, they are overlaid on the stability margin subplot using a second left y-axis (dashed for CG, dotted for CP). If a drag force column is present, drag is overlaid on the thrust subplot as a dashed line sharing the same y-axis.
 
 
 ## Operational Workflow
