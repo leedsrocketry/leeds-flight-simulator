@@ -50,8 +50,8 @@ from outputs import (
     save_replay_3d,
     save_replay_altitude,
     save_replay_aoa,
-    save_replay_damping_breakdown,
-    save_replay_damping,
+    save_damping_breakdown,
+    save_damping,
     save_replay_plan_view,
     save_replay_roll_rate,
     ReplayPicker,
@@ -573,8 +573,8 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
                 )
                 damping_results = [nominal_sr]
                 for save_fn, name in [
-                    (save_replay_damping, "damping"),
-                    (save_replay_damping_breakdown, "damping breakdown"),
+                    (save_damping, "damping"),
+                    (save_damping_breakdown, "damping breakdown"),
                 ]:
                     try:
                         result = save_fn(damping_results, sim_cfg,
@@ -937,8 +937,8 @@ def damping(config_path: Path, no_popup: bool) -> None:
 
     figure_paths: list[Path] = []
     for save_fn, name in [
-        (save_replay_damping, "damping"),
-        (save_replay_damping_breakdown, "damping breakdown"),
+        (save_damping, "damping"),
+        (save_damping_breakdown, "damping breakdown"),
     ]:
         try:
             result = save_fn(results, sim_cfg, output_dir=out_dir)

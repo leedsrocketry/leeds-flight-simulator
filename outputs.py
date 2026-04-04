@@ -11,7 +11,7 @@ save_replay_3d          — 3D isometric replay plot (§16.4)
 save_replay_plan_view   — plan-view replay plot (§16.4)
 save_replay_altitude    — altitude-time replay plot (§16.4)
 save_replay_aoa             — angle-of-attack vs time replay plot (§16.4)
-save_replay_damping_breakdown — per-component C1/C2A breakdown (§16.4)
+save_damping_breakdown — per-component C1/C2A breakdown (§16.4)
 ReplayPicker                — interactive pick handler for replay plots
 """
 
@@ -1589,25 +1589,25 @@ def save_replay_roll_rate(
     return fig
 
 
-def save_replay_damping(
+def save_damping(
     replayed: list[SampleResult],
     sim_cfg: SimulationConfig,
     *,
     output_dir: Path | None = None,
 ) -> Path | plt.Figure:
-    """Generate damping diagnostics plot — 5 subplots, shared x-axis (time).
+    """Generate damping assessment plot — 2-row layout, x-axis 0 to apogee.
 
-    Subplots:
-        1. zeta (damping ratio) with recommended range band (0.05–0.3)
-        2. C1 (corrective moment coefficient)
-        3. C2 breakdown: total, C2A aerodynamic (dashed), C2R jet (dotted)
-        4. Vehicle mass
-        5. omega_n and omega_d (natural and damped frequencies)
-
-    Only plotted when damping post-processing has been run.
+    Top row (2 plots):  damping ratio, damped natural frequency
+    Bottom row (3 plots): C1, C2 breakdown, lateral moment of inertia
     """
-    fig, axs = plt.subplots(5, 1, figsize=(12, 15), sharex=True)
-    plt.subplots_adjust(hspace=0.25)
+    fig = plt.figure(figsize=(14, 9))
+    gs = fig.add_gridspec(2, 6, hspace=0.35, wspace=0.55)
+    ax_zeta = fig.add_subplot(gs[0, :3])
+    ax_fd   = fig.add_subplot(gs[0, 3:])
+    ax_c1   = fig.add_subplot(gs[1, :2])
+    ax_c2   = fig.add_subplot(gs[1, 2:4])
+    ax_il   = fig.add_subplot(gs[1, 4:])
+    axs_all = [ax_zeta, ax_fd, ax_c1, ax_c2, ax_il]
 
     trajectories: list[dict] = []
     profiles = []
@@ -1623,6 +1623,12 @@ def save_replay_damping(
 
     lw, alpha = _replay_line_style(len(trajectories))
 
+    # Determine apogee time for x-limit
+    t_apogee = 0.0
+    for prof in profiles:
+        idx = int(np.argmax(prof.altitude))
+        t_apogee = max(t_apogee, float(prof.time[idx]))
+
     def _plot_tagged(ax, x, y, sid, **kw):
         for ln in ax.plot(x, y, **kw):
             _tag_line(ln, sid)
@@ -1630,63 +1636,61 @@ def save_replay_damping(
     for t, prof in zip(trajectories, profiles):
         ts = t["t_s"]
         sid = t["sample_id"]
+        apo = int(np.argmax(prof.altitude)) + 1
 
         # Zeta
-        mask = ~np.isnan(prof.zeta)
-        _plot_tagged(axs[0], ts[mask], prof.zeta[mask], sid, color="black", linewidth=lw, alpha=alpha)
+        mask = ~np.isnan(prof.zeta[:apo])
+        _plot_tagged(ax_zeta, ts[:apo][mask], prof.zeta[:apo][mask], sid, color="black", linewidth=lw, alpha=alpha)
+
+        # Damped natural frequency in Hz
+        mask = ~np.isnan(prof.omega_d[:apo])
+        fd_hz = prof.omega_d[:apo] / (2.0 * np.pi)
+        _plot_tagged(ax_fd, ts[:apo][mask], fd_hz[mask], sid, color="orange", linewidth=lw, alpha=alpha)
 
         # C1
-        mask = ~np.isnan(prof.c1)
-        _plot_tagged(axs[1], ts[mask], prof.c1[mask], sid, color="red", linewidth=lw, alpha=alpha)
+        mask = ~np.isnan(prof.c1[:apo])
+        _plot_tagged(ax_c1, ts[:apo][mask], prof.c1[:apo][mask], sid, color="red", linewidth=lw, alpha=alpha)
 
         # C2 breakdown
-        mask = ~np.isnan(prof.c2)
-        _plot_tagged(axs[2], ts[mask], prof.c2[mask], sid, color="blue", linewidth=lw * 1.2, alpha=alpha, label="C2 (total)" if prof is profiles[0] else None)
-        mask = ~np.isnan(prof.c2a)
-        _plot_tagged(axs[2], ts[mask], prof.c2a[mask], sid, color="blue", linestyle="--", linewidth=lw, alpha=alpha * 0.7, label="C2A (aerodynamic)" if prof is profiles[0] else None)
-        mask = ~np.isnan(prof.c2r)
-        _plot_tagged(axs[2], ts[mask], prof.c2r[mask], sid, color="blue", linestyle=":", linewidth=lw, alpha=alpha * 0.7, label="C2R (jet)" if prof is profiles[0] else None)
+        first = prof is profiles[0]
+        mask = ~np.isnan(prof.c2[:apo])
+        _plot_tagged(ax_c2, ts[:apo][mask], prof.c2[:apo][mask], sid, color="blue", linewidth=lw * 1.2, alpha=alpha, label=r"$C_2$" if first else None)
+        mask = ~np.isnan(prof.c2a[:apo])
+        _plot_tagged(ax_c2, ts[:apo][mask], prof.c2a[:apo][mask], sid, color="blue", linestyle="--", linewidth=lw, alpha=alpha * 0.7, label=r"$C_{2A}$" if first else None)
+        mask = ~np.isnan(prof.c2r[:apo])
+        _plot_tagged(ax_c2, ts[:apo][mask], prof.c2r[:apo][mask], sid, color="blue", linestyle=":", linewidth=lw, alpha=alpha * 0.7, label=r"$C_{2R}$" if first else None)
 
-        mask = ~np.isnan(prof.I_lateral)
-        _plot_tagged(axs[3], ts[mask], prof.I_lateral[mask], sid, color="green", linewidth=lw, alpha=alpha)
-
-        # Frequencies
-        mask = ~np.isnan(prof.omega_n)
-        _plot_tagged(axs[4], ts[mask], prof.omega_n[mask], sid, color="purple", linewidth=lw, alpha=alpha, label=r"$\omega_n$" if prof is profiles[0] else None)
-        mask = ~np.isnan(prof.omega_d)
-        _plot_tagged(axs[4], ts[mask], prof.omega_d[mask], sid, color="orange", linestyle="--", linewidth=lw, alpha=alpha, label=r"$\omega_d$" if prof is profiles[0] else None)
+        # I_lateral
+        mask = ~np.isnan(prof.I_lateral[:apo])
+        _plot_tagged(ax_il, ts[:apo][mask], prof.I_lateral[:apo][mask], sid, color="green", linewidth=lw, alpha=alpha)
 
     # Zeta recommended range band
-    axs[0].axhspan(0.05, 0.3, facecolor="green", alpha=0.15)
-    axs[0].axhline(0.05, color="green", linestyle="--", linewidth=0.8)
-    axs[0].axhline(0.3, color="green", linestyle="--", linewidth=0.8)
-    axs[0].set_ylabel(r"$\zeta$", fontsize=11)
-    axs[0].set_title("Damping Ratio")
-    axs[0].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax_zeta.axhspan(0.05, 0.3, facecolor="green", alpha=0.15)
+    ax_zeta.axhline(0.05, color="green", linestyle="--", linewidth=0.8)
+    ax_zeta.axhline(0.3, color="green", linestyle="--", linewidth=0.8)
+    ax_zeta.set_ylabel(r"$\zeta$", fontsize=11)
+    ax_zeta.set_title(r"$\zeta$ (damping ratio)")
 
-    axs[1].set_ylabel(r"$C_1$", fontsize=11)
-    axs[1].set_title("Corrective Moment Coefficient (C1)")
-    axs[1].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax_fd.set_ylabel(r"$f_d$ (Hz)", fontsize=11)
+    ax_fd.set_title(r"$f_d$ (damped natural frequency)")
 
-    axs[2].set_ylabel(r"$C_2$", fontsize=11)
-    axs[2].set_title("Damping Moment Coefficient Breakdown (C2)")
-    axs[2].legend(fontsize=9)
-    axs[2].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax_c1.set_ylabel(r"$C_1$", fontsize=11)
+    ax_c1.set_title(r"$C_1$ (corrective moment)")
 
-    axs[3].set_ylabel(r"$I_\mathrm{lat}$ (kg·m²)", fontsize=11)
-    axs[3].set_title("Lateral Moment of Inertia")
-    axs[3].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax_c2.set_ylabel(r"$C_2$", fontsize=11)
+    ax_c2.set_title(r"$C_2$ (damping moment)")
+    ax_c2.legend(fontsize=9)
 
-    axs[4].set_ylabel("Frequency (rad/s)", fontsize=11)
-    axs[4].set_xlabel("Flight Time (s)", fontsize=11)
-    axs[4].set_title("Natural & Damped Frequencies")
-    axs[4].legend(fontsize=9)
-    axs[4].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax_il.set_ylabel(r"$I_L$ (kg$\cdot$m²)", fontsize=11)
+    ax_il.set_title(r"$I_L$ (lateral inertia)")
 
-    fig.suptitle("Damping Assessment", fontsize=14)
+    for ax in axs_all:
+        ax.set_xlabel("Flight Time (s)", fontsize=10)
+        ax.set_xlim(0, t_apogee * 1.02)
+        ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     if output_dir is not None:
-        save_path = output_dir / "replay_damping.png"
+        save_path = output_dir / "damping.png"
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return save_path
@@ -1694,7 +1698,7 @@ def save_replay_damping(
     return fig
 
 
-def save_replay_damping_breakdown(
+def save_damping_breakdown(
     replayed: list[SampleResult],
     sim_cfg: SimulationConfig,
     *,
@@ -1703,25 +1707,27 @@ def save_replay_damping_breakdown(
     """Generate per-component damping breakdown plot — 2x2 grid.
 
     Subplots:
-        Top-left:     Per-component CN_alpha vs time
+        Top-left:     Per-component C_Nalpha vs time
         Top-right:    Per-component CP vs time
         Bottom-left:  Per-component C1 contribution vs time
         Bottom-right: Per-component C2A contribution vs time
     """
     # Use the first replay with per-component damping data
     profile = None
-    time = None
     for sr in replayed:
         if sr.trajectory is not None and sr.trajectory.cn_alpha_comp is not None:
             profile = sr.trajectory
-            time = profile.time
             break
 
     if profile is None or profile.comp_names is None or profile.c1_comp is None:
         raise NotImplementedError("requires multi-component aero tables")
 
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
-    plt.subplots_adjust(hspace=0.30, wspace=0.30)
+    time = profile.time
+    apo = int(np.argmax(profile.altitude)) + 1
+    t_apogee = float(time[apo - 1])
+
+    fig, axs = plt.subplots(2, 2, figsize=(14, 9))
+    plt.subplots_adjust(hspace=0.35, wspace=0.30)
 
     ax_cna = axs[0, 0]
     ax_cp = axs[0, 1]
@@ -1735,44 +1741,41 @@ def save_replay_damping_breakdown(
         name = profile.comp_names[j] if j < len(profile.comp_names) else f"Comp {j}"
         colour = colours[j]
 
-        mask = ~np.isnan(profile.cn_alpha_comp[j])
-        ax_cna.plot(time[mask], profile.cn_alpha_comp[j][mask], color=colour, label=name)
+        mask = ~np.isnan(profile.cn_alpha_comp[j, :apo])
+        ax_cna.plot(time[:apo][mask], profile.cn_alpha_comp[j, :apo][mask], color=colour, label=name)
 
-        mask = ~np.isnan(profile.cp_comp[j])
-        ax_cp.plot(time[mask], profile.cp_comp[j][mask], color=colour, label=name)
+        mask = ~np.isnan(profile.cp_comp[j, :apo])
+        ax_cp.plot(time[:apo][mask], profile.cp_comp[j, :apo][mask], color=colour, label=name)
 
-        mask = ~np.isnan(profile.c1_comp[j])
-        ax_c1.plot(time[mask], profile.c1_comp[j][mask], color=colour, label=name)
+        mask = ~np.isnan(profile.c1_comp[j, :apo])
+        ax_c1.plot(time[:apo][mask], profile.c1_comp[j, :apo][mask], color=colour, label=name)
 
-        mask = ~np.isnan(profile.c2a_comp[j])
-        ax_c2a.plot(time[mask], profile.c2a_comp[j][mask], color=colour, label=name)
+        mask = ~np.isnan(profile.c2a_comp[j, :apo])
+        ax_c2a.plot(time[:apo][mask], profile.c2a_comp[j, :apo][mask], color=colour, label=name)
 
     ax_cna.set_ylabel(r"$C_{N\alpha}$ (1/rad)", fontsize=11)
-    ax_cna.set_title(r"Component $C_{N\alpha}$")
+    ax_cna.set_title(r"$C_{N\alpha}$")
     ax_cna.legend(fontsize=9)
-    ax_cna.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     ax_cp.set_ylabel("CP (m from nosecone)", fontsize=11)
-    ax_cp.set_title("Component Centre of Pressure")
+    ax_cp.set_title(r"$C_P$")
     ax_cp.legend(fontsize=9)
-    ax_cp.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     ax_c1.set_ylabel(r"Contribution to $C_1$", fontsize=11)
-    ax_c1.set_xlabel("Flight Time (s)", fontsize=11)
-    ax_c1.set_title(r"Component Contribution to $C_1$")
+    ax_c1.set_title(r"$C_1$ per component")
     ax_c1.legend(fontsize=9)
-    ax_c1.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     ax_c2a.set_ylabel(r"Contribution to $C_{2A}$", fontsize=11)
-    ax_c2a.set_xlabel("Flight Time (s)", fontsize=11)
-    ax_c2a.set_title(r"Component Contribution to $C_{2A}$")
+    ax_c2a.set_title(r"$C_{2A}$ per component")
     ax_c2a.legend(fontsize=9)
-    ax_c2a.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
-    fig.suptitle("Damping Breakdown", fontsize=14)
+    for ax in axs.flat:
+        ax.set_xlabel("Flight Time (s)", fontsize=10)
+        ax.set_xlim(0, t_apogee * 1.02)
+        ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     if output_dir is not None:
-        save_path = output_dir / "replay_damping_breakdown.png"
+        save_path = output_dir / "damping_breakdown.png"
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return save_path
