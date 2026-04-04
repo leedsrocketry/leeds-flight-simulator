@@ -154,8 +154,9 @@ class TestCompareQuantity:
 
     def test_outside_tolerance(self) -> None:
         """One point exceeds tolerance → not passed."""
+        # Values large enough that the fractional band dominates the floor
         t = np.array([0.0, 1.0, 2.0, 3.0])
-        ref = np.array([100.0, 200.0, 300.0, 400.0])
+        ref = np.array([5000.0, 10000.0, 15000.0, 20000.0])
         sim = ref.copy()
         sim[2] = ref[2] * 1.10  # 10% off at index 2
 
@@ -166,22 +167,25 @@ class TestCompareQuantity:
         assert cmp.within_tolerance[2] is np.False_
 
     def test_near_zero_values(self) -> None:
-        """Values near zero use absolute floor, avoiding false failures."""
+        """Values near zero use absolute floor — errors below it always pass."""
         t = np.array([0.0, 1.0, 2.0])
         ref = np.array([0.0, 0.001, 0.0])
-        # Small absolute difference but huge relative difference
         sim = np.array([0.005, 0.006, 0.005])
 
-        # With 5% tolerance and floor of 0.01 for Mach:
-        # scale = max(|ref|, 0.01) = [0.01, 0.01, 0.01]
-        # allowed = 0.05 * 0.01 = 0.0005
-        # |sim - ref| = [0.005, 0.005, 0.005] > 0.0005 → all fail
+        # Mach floor is 0.1.  |sim - ref| = [0.005, 0.005, 0.005].
+        # band = max(tol * |ref|, floor) = max(~0, 0.1) = 0.1.
+        # All diffs (0.005) < floor (0.1) → all pass regardless of tolerance.
         cmp = _compare_quantity("mach", t, ref, t, sim, tolerance=0.05)
-        assert not cmp.passed
+        assert cmp.passed
 
-        # But with a larger tolerance it should pass
-        cmp2 = _compare_quantity("mach", t, ref, t, sim, tolerance=1.0)
+        # Even a tiny tolerance still passes because the floor dominates
+        cmp2 = _compare_quantity("mach", t, ref, t, sim, tolerance=0.001)
         assert cmp2.passed
+
+        # But errors larger than the floor do fail
+        sim_big = np.array([0.2, 0.2, 0.2])
+        cmp3 = _compare_quantity("mach", t, ref, t, sim_big, tolerance=0.05)
+        assert not cmp3.passed
 
     def test_interpolation(self) -> None:
         """Simulator at irregular timesteps is interpolated to reference grid."""

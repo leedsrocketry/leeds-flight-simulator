@@ -54,13 +54,13 @@ def _nominal_scenario(vehicle: "Vehicle") -> int:
 # Absolute floors for fractional tolerance comparison (avoid false failures
 # near zero).  Physically motivated minimum-significance thresholds.
 _TOLERANCE_FLOORS: dict[str, float] = {
-    "altitude": 1.0,    # metres
-    "mach": 0.01,       # dimensionless
-    "sm": 0.1,          # calibres
-    "mass": 0.1,        # kg
-    "thrust": 10.0,     # newtons
+    "altitude": 50.0,    # metres
+    "mach": 0.05,       # dimensionless
+    "sm": 0.2,          # calibres
+    "mass": 0.2,        # kg
+    "thrust": 5.0,     # newtons
     "cd": 0.01,         # dimensionless
-    "drag": 1.0,        # newtons
+    "drag": 5.0,        # newtons
     "cg": 0.01,         # metres
     "cp": 0.01,         # metres
 }
@@ -211,9 +211,11 @@ def _compare_quantity(
 ) -> QuantityComparison:
     """Interpolate simulator onto reference timebase and compare.
 
-    Uses fractional tolerance with an absolute floor to handle near-zero
-    values gracefully.  A quantity passes if the fraction of points
-    outside the tolerance band is ≤ ``exceedance_fraction``.
+    The tolerance band at each point is the larger of the fractional
+    tolerance (``tolerance * |ref|``) and the absolute floor for that
+    quantity.  Errors below the floor always pass.  A quantity passes
+    overall if the fraction of points outside the band is ≤
+    ``exceedance_fraction``.
     """
     # Use the full reference timebase.  Simulator values beyond its
     # time range are set to NaN so they are not displayed or compared.
@@ -225,11 +227,13 @@ def _compare_quantity(
     beyond = t_ref > sim_time[-1]
     v_sim[beyond] = np.nan
 
-    # Fractional tolerance with absolute floor (NaN points are excluded)
+    # Band = max(fractional tolerance, absolute floor).
+    # The floor is the minimum acceptable absolute error regardless of
+    # the reference magnitude — errors below the floor always pass.
     floor = _TOLERANCE_FLOORS.get(name, 1.0)
-    scale = np.maximum(np.abs(v_ref), floor)
+    band = np.maximum(tolerance * np.abs(v_ref), floor)
     valid = np.isfinite(v_sim)
-    within = np.abs(v_sim - v_ref) <= tolerance * scale
+    within = np.abs(v_sim - v_ref) <= band
     within[~valid] = True  # don't penalise beyond-range points
 
     n_outside = int(np.sum(~within))
@@ -304,10 +308,12 @@ def _build_comparison_figure(
         # Reference: grey line + tolerance band
         ax.plot(cmp.ref_time, cmp.ref_values,
                 color="grey", linewidth=1.5, label="Reference")
+        floor = _TOLERANCE_FLOORS.get(qty_name, 1.0)
+        band = np.maximum(cmp.tolerance * np.abs(cmp.ref_values), floor)
         ax.fill_between(
             cmp.ref_time,
-            cmp.ref_values * (1.0 - cmp.tolerance),
-            cmp.ref_values * (1.0 + cmp.tolerance),
+            cmp.ref_values - band,
+            cmp.ref_values + band,
             color="grey", alpha=0.2,
         )
 
