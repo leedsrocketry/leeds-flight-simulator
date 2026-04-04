@@ -380,6 +380,7 @@ class TrajectoryProfile:
     mass: np.ndarray          # (K,) kg
     cd: np.ndarray            # (K,) vehicle CD during ascent,
                               #       parachute CD from config during descent
+    rail_exit_time: float     # seconds from ignition
     roll_rate_hz: np.ndarray  # (K,) roll rate in Hz; NaN during rail & parachute descent
     cg: np.ndarray            # (K,) centre of gravity from nose tip [m]; dry CG during descent
     I_roll: np.ndarray        # (K,) roll moment of inertia [kg·m²]; dry value during descent
@@ -1862,6 +1863,7 @@ def _build_profile(
         thrust=np.concatenate(parts_thrust),
         mass=np.concatenate(parts_mass),
         cd=np.concatenate(parts_cd),
+        rail_exit_time=float(rail_t[nr - 1]) if nr > 0 else 0.0,
         roll_rate_hz=np.concatenate(parts_roll_hz),
         cg=cg_arr,
         I_roll=np.concatenate(parts_I_roll),

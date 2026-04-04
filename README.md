@@ -306,6 +306,8 @@ For a statically stable rocket the net sum is dominated by fin surfaces (large p
 
 The formulation requires only the per-component C\_Nα and C\_P at the current flight condition (Mach, Reynolds) — no re-query of the aero tables at a different angle. The linearised approximation is accurate for sounding rockets where angle of attack remains within a few degrees (well within the linear C\_Nα regime).
 
+Damping quantities are only computed and plotted from **rail exit to apogee**. During the rail phase, the vehicle is contrained and airspeed is too low for aerodynamic forces to be meaningful — the corrective moment coefficient C\_1 (proportional to V²) approaches zero while jet damping C\_{2R} (proportional to mass flow rate, independent of airspeed) remains finite. This causes the damping ratio ζ = C\_2 / (2√(C\_1 · I)) to diverge mathematically, which is an artefact of the linearised formulation rather than a physical instability.
+
 > **Note for RASAero II users:** RASAero applies the power-on/off base drag correction at the vehicle level, not per-component. When per-component data is extracted via successive differencing ([pyrasaero](https://github.com/leedsrocketry/pyrasaero)), the power-on/off delta appears only on one component in the subtraction chain. This is expected — once per-component CAs are summed back to a vehicle total, the correct vehicle-level values are recovered. LFS is agnostic to the source of aerodynamic data (RASAero, CFD, wind tunnel, etc.) — the same format is used regardless of provenance.
 
 ### `danger_area.geojson`

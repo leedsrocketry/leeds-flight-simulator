@@ -74,10 +74,14 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
         profile.comp_names = p.comp_names
         return
 
+    # Skip rail phase — damping quantities are meaningless before free flight
+    t_exit = profile.rail_exit_time
+    rail_exit_idx = int(np.searchsorted(profile.time, t_exit))
+
     # Roll rate characteristic radius
     r_roll = (p.diameter + p.fin_span) / 2.0
 
-    for i in range(apogee_idx + 1):
+    for i in range(rail_exit_idx, apogee_idx + 1):
         h = max(float(profile.altitude[i]), 0.0)
         M = float(profile.mach[i])
 

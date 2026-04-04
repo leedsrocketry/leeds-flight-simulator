@@ -596,6 +596,7 @@ def _make_parabolic_trajectory() -> TrajectoryProfile:
         thrust=thrust,
         mass=mass,
         cd=cd,
+        rail_exit_time=0.0,
         roll_rate_hz=roll_rate_hz,
         cg=cg,
         I_roll=i_roll,

@@ -1623,7 +1623,8 @@ def save_damping(
 
     lw, alpha = _replay_line_style(len(trajectories))
 
-    # Determine apogee time for x-limit
+    # Determine rail exit and apogee times for x-limits
+    t_rail_exit = min(prof.rail_exit_time for prof in profiles)
     t_apogee = 0.0
     for prof in profiles:
         idx = int(np.argmax(prof.altitude))
@@ -1686,7 +1687,7 @@ def save_damping(
 
     for ax in axs_all:
         ax.set_xlabel("Flight Time (s)", fontsize=10)
-        ax.set_xlim(0, t_apogee * 1.02)
+        ax.set_xlim(t_rail_exit, t_apogee * 1.02)
         ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     if output_dir is not None:
@@ -1723,6 +1724,8 @@ def save_damping_breakdown(
         raise NotImplementedError("requires multi-component aero tables")
 
     time = profile.time
+    t_rail_exit = profile.rail_exit_time
+    rail_idx = int(np.searchsorted(time, t_rail_exit))
     apo = int(np.argmax(profile.altitude)) + 1
     t_apogee = float(time[apo - 1])
 
@@ -1737,21 +1740,22 @@ def save_damping_breakdown(
     n_comp = profile.cn_alpha_comp.shape[0]
     colours = plt.cm.tab10(np.linspace(0, 1, max(n_comp, 1)))
 
+    s = slice(rail_idx, apo)
     for j in range(n_comp):
         name = profile.comp_names[j] if j < len(profile.comp_names) else f"Comp {j}"
         colour = colours[j]
 
-        mask = ~np.isnan(profile.cn_alpha_comp[j, :apo])
-        ax_cna.plot(time[:apo][mask], profile.cn_alpha_comp[j, :apo][mask], color=colour, label=name)
+        mask = ~np.isnan(profile.cn_alpha_comp[j, s])
+        ax_cna.plot(time[s][mask], profile.cn_alpha_comp[j, s][mask], color=colour, label=name)
 
-        mask = ~np.isnan(profile.cp_comp[j, :apo])
-        ax_cp.plot(time[:apo][mask], profile.cp_comp[j, :apo][mask], color=colour, label=name)
+        mask = ~np.isnan(profile.cp_comp[j, s])
+        ax_cp.plot(time[s][mask], profile.cp_comp[j, s][mask], color=colour, label=name)
 
-        mask = ~np.isnan(profile.c1_comp[j, :apo])
-        ax_c1.plot(time[:apo][mask], profile.c1_comp[j, :apo][mask], color=colour, label=name)
+        mask = ~np.isnan(profile.c1_comp[j, s])
+        ax_c1.plot(time[s][mask], profile.c1_comp[j, s][mask], color=colour, label=name)
 
-        mask = ~np.isnan(profile.c2a_comp[j, :apo])
-        ax_c2a.plot(time[:apo][mask], profile.c2a_comp[j, :apo][mask], color=colour, label=name)
+        mask = ~np.isnan(profile.c2a_comp[j, s])
+        ax_c2a.plot(time[s][mask], profile.c2a_comp[j, s][mask], color=colour, label=name)
 
     ax_cna.set_ylabel(r"$C_{N\alpha}$ (1/rad)", fontsize=11)
     ax_cna.set_title(r"$C_{N\alpha}$")
@@ -1771,7 +1775,7 @@ def save_damping_breakdown(
 
     for ax in axs.flat:
         ax.set_xlabel("Flight Time (s)", fontsize=10)
-        ax.set_xlim(0, t_apogee * 1.02)
+        ax.set_xlim(t_rail_exit, t_apogee * 1.02)
         ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     if output_dir is not None:
