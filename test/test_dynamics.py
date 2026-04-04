@@ -53,8 +53,8 @@ def _zero_aero():
     z3 = np.zeros((2, 2, 2), dtype=np.float64)
     cn_comp = np.zeros((1, 2, 2, 2), dtype=np.float64)
     cp_comp = np.zeros((1, 2, 2, 2), dtype=np.float64)
-    cna_fins = np.zeros((2, 2), dtype=np.float64)
-    return mach_g, re_g, alpha_g, z3, z3, z3, cn_comp, cp_comp, cna_fins
+    cna_comp = np.zeros((1, 2, 2), dtype=np.float64)
+    return mach_g, re_g, alpha_g, z3, z3, z3, cn_comp, cp_comp, cna_comp
 
 
 def _dead_motor():
@@ -496,7 +496,7 @@ def test_sixdof_gravity_only_apogee():
         0.01, 0.01, 0.01, 0.0, 0.1,  # I_roll_dry, I_lat_dry, prop_r_outer, prop_r_inner_0, prop_length
         1.0,                   # impulse_factor
         mg, rg, ag, cat, cat, cnt, cpt, cnc, cpc,
-        False, cnaf,           # no components
+        False, cnaf, -1,       # no components, no fin index
         0.1, 1.0, 0.01, 0.05, # diameter, length, A_ref, fin_cp_radius
         wa, we, wn,
         0.0,                   # fin_cant
@@ -545,7 +545,7 @@ def test_integrator_convergence():
         ca_tbl_off=cat, ca_tbl_on=cat,
         cn_tbl=cnt, cp_tbl=cpt,
         cn_comp=cnc, cp_comp=cpc,
-        has_components=False, cn_alpha_fins_tbl=cnaf,
+        has_components=False, cn_alpha_comp=cnaf, fin_comp_idx=-1,
         diameter=0.1, ref_length=1.0, A_ref=0.01, fin_cp_radius=0.05,
         wind_alt=wa, wind_east=we, wind_north=wn,
         fin_cant_rad=0.0,
@@ -638,7 +638,7 @@ def test_sixdof_deriv_gravity_direction():
         10.0, 0.5, 0.5,
         0.01, 0.01, 0.01, 0.0, 0.1,  # I_roll_dry, I_lat_dry, prop_r_outer, prop_r_inner_0, prop_length
         1.0,
-        mg, rg, ag, cat, cat, 0.001, cnt, cpt, cnc, cpc, False, cnaf,
+        mg, rg, ag, cat, cat, 0.001, cnt, cpt, cnc, cpc, False, cnaf, -1,
         0.1, 1.0, 0.01, 0.05,
         wa, we, wn,
         0.0,

@@ -22,7 +22,8 @@ from aerodynamics import (
     aero_forces_moments,
     ca_at,
     cn_cp_at,
-    cn_alpha_fins_at,
+    cn_alpha_comp_at,
+    _interp2,
 )
 
 
@@ -197,7 +198,7 @@ def test_grid_shapes_consistent(tmp_path):
     assert model.ca_table_on.shape == (NM, NR, NA)
     assert model.cn_comp.shape == (N, NM, NR, NA)
     assert model.cp_comp.shape == (N, NM, NR, NA)
-    assert model.cn_alpha_fins.shape == (NM, NR)
+    assert model.fin_comp_idx >= 0
 
 
 def test_grids_are_sorted(tmp_path):
@@ -327,7 +328,7 @@ def test_cp_moment_balance(tmp_path):
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
-        m.cn_comp, m.cp_comp, m.has_components,
+        m.cn_comp, m.cp_comp, m.has_components, m.cn_alpha_comp,
         0.5, 1e6,
         1.0, V, 1.0,        # rho, V, A_ref
         u_rel, 0.0, w_rel,  # u_rel, v_rel, w_rel
@@ -338,23 +339,22 @@ def test_cp_moment_balance(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# cn_alpha_fins_at tests
+# fin_comp_idx / cn_alpha_comp tests
 # ---------------------------------------------------------------------------
 
-def test_cn_alpha_fins_nonzero_with_fins_file(tmp_path):
+def test_fin_comp_idx_valid_with_fins_file(tmp_path):
     m = build_aero_model(_component_dir(tmp_path))
-    result = cn_alpha_fins_at(m.mach_grid, m.re_grid, m.cn_alpha_fins,
-                              0.5, 1e6)
+    assert m.fin_comp_idx >= 0
+    result = _interp2(m.mach_grid, m.re_grid,
+                      m.cn_alpha_comp[m.fin_comp_idx], 0.5, 1e6)
     assert result == pytest.approx(0.5, rel=1e-3)
 
 
-def test_cn_alpha_fins_zero_single_file(tmp_path):
+def test_fin_comp_idx_negative_single_file(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         m = build_aero_model(_single_dir(tmp_path))
-    result = cn_alpha_fins_at(m.mach_grid, m.re_grid, m.cn_alpha_fins,
-                              0.5, 1e6)
-    assert result == pytest.approx(0.0, abs=1e-10)
+    assert m.fin_comp_idx == -1
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +371,7 @@ def test_pitch_damping_matches_mandell_small_q(tmp_path, q_rate):
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
-        m.cn_comp, m.cp_comp, m.has_components,
+        m.cn_comp, m.cp_comp, m.has_components, m.cn_alpha_comp,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
         _DAMP_V, 0.0, 0.0,   # u_rel, v_rel, w_rel
@@ -392,7 +392,7 @@ def test_yaw_damping_matches_mandell_small_r(tmp_path, q_rate):
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
-        m.cn_comp, m.cp_comp, m.has_components,
+        m.cn_comp, m.cp_comp, m.has_components, m.cn_alpha_comp,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
         _DAMP_V, 0.0, 0.0,
@@ -415,7 +415,7 @@ def test_pitch_damping_opposes_positive_q(tmp_path):
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
-        m.cn_comp, m.cp_comp, m.has_components,
+        m.cn_comp, m.cp_comp, m.has_components, m.cn_alpha_comp,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
         _DAMP_V, 0.0, 0.0,
@@ -432,7 +432,7 @@ def test_yaw_damping_opposes_positive_r(tmp_path):
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
-        m.cn_comp, m.cp_comp, m.has_components,
+        m.cn_comp, m.cp_comp, m.has_components, m.cn_alpha_comp,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
         _DAMP_V, 0.0, 0.0,
@@ -457,7 +457,7 @@ def test_restoring_moment_no_rotation(tmp_path):
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
-        m.cn_comp, m.cp_comp, m.has_components,
+        m.cn_comp, m.cp_comp, m.has_components, m.cn_alpha_comp,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
         u_rel, 0.0, w_rel,
@@ -484,7 +484,7 @@ def test_cp_whole_at_nonzero_aoa(tmp_path):
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
-        m.cn_comp, m.cp_comp, m.has_components,
+        m.cn_comp, m.cp_comp, m.has_components, m.cn_alpha_comp,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
         u_rel, 0.0, w_rel,
@@ -501,7 +501,7 @@ def test_cp_whole_fallback_to_cg_at_zero_aoa(tmp_path):
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
-        m.cn_comp, m.cp_comp, m.has_components,
+        m.cn_comp, m.cp_comp, m.has_components, m.cn_alpha_comp,
         _DAMP_MACH, 1e6,
         _DAMP_RHO, _DAMP_V, _DAMP_A_REF,
         _DAMP_V, 0.0, 0.0,  # pure axial, zero lateral

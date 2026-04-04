@@ -52,8 +52,8 @@ from aerodynamics import (
     aero_forces_moments,
     ca_at,
     cn_cp_at,
-    cn_alpha_fins_at,
     cn_alpha_comp_at,
+    _interp2,
     _interp3,
 )
 from motor import (
@@ -253,8 +253,8 @@ class SimParams:
     cn_comp: np.ndarray
     cp_comp: np.ndarray
     has_components: bool
-    cn_alpha_fins: np.ndarray
     cn_alpha_comp: np.ndarray    # [N_comp, NM, NR] per-component C_Nα
+    fin_comp_idx: int            # index into cn_alpha_comp for fins (-1 if none)
     comp_names: list[str]
 
     # Geometry
@@ -804,7 +804,7 @@ def _sixdof_deriv(
     t_burnout: float,
     cn_tbl: np.ndarray, cp_tbl: np.ndarray,
     cn_comp: np.ndarray, cp_comp: np.ndarray,
-    has_components: bool, cn_alpha_fins_tbl: np.ndarray,
+    has_components: bool, cn_alpha_comp: np.ndarray, fin_comp_idx: int,
     # Geometry
     diameter: float, ref_length: float, A_ref: float, fin_cp_radius: float,
     # Wind
@@ -893,7 +893,7 @@ def _sixdof_deriv(
         mach_g, re_g, alpha_g,
         ca_tbl_off, ca_tbl_on, power_on,
         cn_tbl, cp_tbl,
-        cn_comp, cp_comp, has_components,
+        cn_comp, cp_comp, has_components, cn_alpha_comp,
         M, Re, rho, V, A_ref,
         u_rel, v_rel, w_rel, q_r, r_r, cg,
     )
@@ -907,10 +907,8 @@ def _sixdof_deriv(
 
     # --- Roll torques (Barrowman, section 6.5) ---
     tau_roll = 0.0
-    if has_components and V > _EPS_V:
-        cna_fins = cn_alpha_fins_at(
-            mach_g, re_g, cn_alpha_fins_tbl, M, Re,
-        )
+    if has_components and fin_comp_idx >= 0 and V > _EPS_V:
+        cna_fins = _interp2(mach_g, re_g, cn_alpha_comp[fin_comp_idx], M, Re)
         r_fin_d = fin_cp_radius / diameter
         C_l_delta = cna_fins * r_fin_d
         C_l_p = -cna_fins * r_fin_d * r_fin_d * (4.0 / 3.0)
@@ -987,7 +985,7 @@ def integrate_sixdof(
     ca_tbl_off: np.ndarray, ca_tbl_on: np.ndarray,
     cn_tbl: np.ndarray, cp_tbl: np.ndarray,
     cn_comp: np.ndarray, cp_comp: np.ndarray,
-    has_components: bool, cn_alpha_fins_tbl: np.ndarray,
+    has_components: bool, cn_alpha_comp: np.ndarray, fin_comp_idx: int,
     # Geometry
     diameter: float, ref_length: float, A_ref: float, fin_cp_radius: float,
     # Wind
@@ -1071,7 +1069,7 @@ def integrate_sixdof(
     _coff = ca_tbl_off; _con = ca_tbl_on; _tb = t_burnout
     _cnt = cn_tbl; _cpt = cp_tbl
     _cnc = cn_comp; _cpc = cp_comp
-    _hc = has_components; _cnaf = cn_alpha_fins_tbl
+    _hc = has_components; _cnac = cn_alpha_comp; _fci = fin_comp_idx
     _d = diameter; _rl = ref_length; _ar = A_ref; _fr = fin_cp_radius
     _wa = wind_alt; _we = wind_east; _wn = wind_north
     _fc = fin_cant_rad
@@ -1082,7 +1080,7 @@ def integrate_sixdof(
         t, y, k1,
         _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
         _ird, _ild, _pro, _pri, _pl, _if,
-        _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+        _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnac, _fci,
         _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
         _se, _to,
     )
@@ -1100,7 +1098,7 @@ def integrate_sixdof(
             t + DP_C[1] * h_step, ys, k2,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnac, _fci,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1112,7 +1110,7 @@ def integrate_sixdof(
             t + DP_C[2] * h_step, ys, k3,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnac, _fci,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1126,7 +1124,7 @@ def integrate_sixdof(
             t + DP_C[3] * h_step, ys, k4,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnac, _fci,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1141,7 +1139,7 @@ def integrate_sixdof(
             t + DP_C[4] * h_step, ys, k5,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnac, _fci,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1157,7 +1155,7 @@ def integrate_sixdof(
             t + DP_C[5] * h_step, ys, k6,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnac, _fci,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1174,7 +1172,7 @@ def integrate_sixdof(
             t + h_step, y_new, k7,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
-            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnaf,
+            _mg, _rg, _ag, _coff, _con, _tb, _cnt, _cpt, _cnc, _cpc, _hc, _cnac, _fci,
             _d, _rl, _ar, _fr, _wa, _we, _wn, _fc,
             _se, _to,
         )
@@ -1560,176 +1558,6 @@ def _descent_mach(
 
 
 # ---------------------------------------------------------------------------
-# Damping post-processing (plain Python — vectorised NumPy over trajectory)
-# ---------------------------------------------------------------------------
-
-def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
-    """Compute damping quantities as a post-processing pass over the ascent.
-
-    Mutates *profile* in place, filling all damping-related fields.
-    Quantities are only meaningful during the ascent phase (up to apogee);
-    descent and rail values are NaN.
-
-    Definitions (ref: "Advanced Topics in Model Rocketry" pp. 201–202):
-      C1   — corrective moment coefficient:  0.5 ρ V² S_ref C_Nα (X_CP − X_CG)
-      C2   — damping moment coefficient:     C2A + C2R
-      C2A  — aerodynamic damping:            Σ_j 0.5 ρ V S_ref C_Nα_j (X_CPj − X_CG)²
-      C2R  — jet damping (eq. 99):           ṁ (L_ne − X_CG)²
-    where L_ne is the nozzle exit position (distance from nose tip).
-    """
-    p = params
-    K = len(profile.time)
-    n_comp = p.cn_alpha_comp.shape[0] if p.has_components else 0
-
-    # Find apogee index
-    apogee_idx = int(np.argmax(profile.altitude))
-
-    # Allocate output arrays (NaN everywhere)
-    c1 = np.full(K, math.nan, dtype=np.float64)
-    c2 = np.full(K, math.nan, dtype=np.float64)
-    c2a = np.full(K, math.nan, dtype=np.float64)
-    c2r = np.full(K, math.nan, dtype=np.float64)
-    zeta = np.full(K, math.nan, dtype=np.float64)
-    omega_n = np.full(K, math.nan, dtype=np.float64)
-    omega_d = np.full(K, math.nan, dtype=np.float64)
-    max_roll_hz = np.full(K, math.nan, dtype=np.float64)
-
-    cn_alpha_comp_buf = np.full((n_comp, K), math.nan, dtype=np.float64)
-    cp_comp_buf = np.full((n_comp, K), math.nan, dtype=np.float64)
-    c1_comp_buf = np.full((n_comp, K), math.nan, dtype=np.float64)
-    c2a_comp_buf = np.full((n_comp, K), math.nan, dtype=np.float64)
-
-    if not p.has_components or apogee_idx == 0:
-        # Cannot compute damping without per-component data
-        profile.c1 = c1
-        profile.c2 = c2
-        profile.c2a = c2a
-        profile.c2r = c2r
-        profile.zeta = zeta
-        profile.omega_n = omega_n
-        profile.omega_d = omega_d
-        profile.max_roll_rate_hz = max_roll_hz
-        profile.cn_alpha_comp = cn_alpha_comp_buf
-        profile.cp_comp = cp_comp_buf
-        profile.c1_comp = c1_comp_buf
-        profile.c2a_comp = c2a_comp_buf
-        profile.comp_names = p.comp_names
-        return
-
-    # Max CP distance clip (stability guard, 1000 mm)
-    max_dist_m = 1.0
-
-    # Roll rate characteristic radius
-    r_roll = (p.diameter + p.fin_span) / 2.0
-
-    for i in range(apogee_idx + 1):
-        h = max(float(profile.altitude[i]), 0.0)
-        M = float(profile.mach[i])
-
-        _, _, rho, a, mu = isa_at_site(h, p.site_elevation, p.t_offset)
-        V = M * a  # reconstruct velocity from Mach
-        if V < _EPS_V:
-            continue
-
-        Re = rho * V * p.length / mu if mu > 0.0 else 0.0
-
-        cg      = float(profile.cg[i])
-        I_lat   = float(profile.I_lateral[i])
-        I_roll  = float(profile.I_roll[i])
-        m_dot   = float(profile.mdot[i])
-
-        if math.isnan(cg) or math.isnan(I_lat) or math.isnan(m_dot):
-            continue
-
-        # Whole-vehicle CN_alpha (sum of per-component)
-        cna_total = 0.0
-        for j in range(n_comp):
-            cna_j = cn_alpha_comp_at(p.mach_g, p.re_g, p.cn_alpha_comp, M, Re, j)
-            cn_alpha_comp_buf[j, i] = cna_j
-            cna_total += cna_j
-
-        # Whole-vehicle CP (from per-component CN_alpha-weighted average)
-        cp_total = 0.0
-        if cna_total > 1e-9:
-            for j in range(n_comp):
-                cp_j = _interp3(p.mach_g, p.re_g, p.alpha_g, p.cp_comp[j], M, Re, 2.0)
-                cp_comp_buf[j, i] = cp_j
-                cp_total += cn_alpha_comp_buf[j, i] * cp_j
-            cp_total /= cna_total
-        else:
-            cp_total = cg
-            for j in range(n_comp):
-                cp_j = _interp3(p.mach_g, p.re_g, p.alpha_g, p.cp_comp[j], M, Re, 2.0)
-                cp_comp_buf[j, i] = cp_j
-
-        # C1 — corrective moment coefficient (p. 201)
-        c1_val = 0.5 * rho * V * V * p.A_ref * cna_total * (cp_total - cg)
-        c1[i] = c1_val
-
-        # C1 and C2A per-component contributions
-        c2a_val = 0.0
-        for j in range(n_comp):
-            c_cp = cp_comp_buf[j, i]
-            c_cna = cn_alpha_comp_buf[j, i]
-            if math.isnan(c_cp):
-                c_cp = cg
-            # Stability guard: clip CP distance from CG
-            c_cp = max(cg - max_dist_m, min(c_cp, cg + max_dist_m))
-            lever = c_cp - cg
-            # C1_j = 0.5 ρ V² S_ref CNα_j (CP_j − CG)
-            c1_comp_buf[j, i] = 0.5 * rho * V * V * p.A_ref * c_cna * lever
-            # C2A_j = 0.5 ρ V S_ref CNα_j (CP_j − CG)²
-            contrib = 0.5 * rho * V * p.A_ref * c_cna * lever * lever
-            c2a_comp_buf[j, i] = contrib
-            c2a_val += contrib
-        c2a[i] = c2a_val
-
-        # C2R — jet damping moment coefficient (eq. 99): ṁ (L_ne − X_CG)²
-        lever = p.nozzle_position - cg
-        c2r_val = m_dot * lever * lever
-        c2r[i] = c2r_val
-
-        # C2 — total damping moment coefficient
-        c2_val = c2a_val + c2r_val
-        c2[i] = c2_val
-
-        # Damping ratio — coupled (rolling) form: I_L replaced by (I_L + I_R)
-        I_total = I_lat + I_roll
-        if c1_val > 0.0 and I_total > 0.0:
-            product = c1_val * I_total
-            zeta_val = c2_val / (2.0 * math.sqrt(product))
-            zeta[i] = zeta_val
-
-            omega_n_val = math.sqrt(c1_val / I_total)
-            omega_n[i] = omega_n_val
-
-            discriminant = 1.0 - zeta_val * zeta_val
-            if discriminant > 0.0:
-                omega_d[i] = omega_n_val * math.sqrt(discriminant)
-            else:
-                omega_d[i] = 0.0
-
-        # Max permissible roll rate
-        if r_roll > 0.0:
-            max_roll_hz[i] = V / r_roll / (2.0 * math.pi)
-
-    # Store results on profile
-    profile.c1 = c1
-    profile.c2 = c2
-    profile.c2a = c2a
-    profile.c2r = c2r
-    profile.zeta = zeta
-    profile.omega_n = omega_n
-    profile.omega_d = omega_d
-    profile.max_roll_rate_hz = max_roll_hz
-    profile.cn_alpha_comp = cn_alpha_comp_buf
-    profile.cp_comp = cp_comp_buf
-    profile.c1_comp = c1_comp_buf
-    profile.c2a_comp = c2a_comp_buf
-    profile.comp_names = p.comp_names
-
-
-# ---------------------------------------------------------------------------
 # Profile builder (plain Python — NOT exposed outside dynamics.py)
 # ---------------------------------------------------------------------------
 
@@ -1898,7 +1726,7 @@ def _build_profile(
             p.mach_g, p.re_g, p.alpha_g,
             p.ca_tbl_off, p.ca_tbl_on, power_on,
             p.cn_tbl, p.cp_tbl,
-            p.cn_comp, p.cp_comp, p.has_components,
+            p.cn_comp, p.cp_comp, p.has_components, p.cn_alpha_comp,
             M, Re, rho, V, p.A_ref,
             u, v, w, q_rate, r_rate, cg,
         )
@@ -2126,7 +1954,7 @@ def run_trajectory(
         p.mach_g, p.re_g, p.alpha_g,
         p.ca_tbl_off, p.ca_tbl_on,
         p.cn_tbl, p.cp_tbl,
-        p.cn_comp, p.cp_comp, p.has_components, p.cn_alpha_fins,
+        p.cn_comp, p.cp_comp, p.has_components, p.cn_alpha_comp, p.fin_comp_idx,
         p.diameter, p.length, p.A_ref, p.fin_cp_radius,
         p.wind_alt, p.wind_east, p.wind_north,
         p.fin_cant_rad,

@@ -548,6 +548,42 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
         if isinstance(disp_result, Path):
             figure_paths.append(disp_result)
 
+        # --- Damping assessment (from nominal baseline) ---
+        if "nominal" in mc_result.baseline_curves:
+            nominal_profile = mc_result.baseline_curves["nominal"][3]
+            if nominal_profile.zeta is not None:
+                from montecarlo import SampleResult
+                nominal_sr = SampleResult(
+                    sample_id=0, scenario="nominal", run_index=0,
+                    apogee_m=0.0, apogee_lat=0.0, apogee_lon=0.0,
+                    landing_lat=0.0, landing_lon=0.0,
+                    apogee_north=0.0, apogee_east=0.0,
+                    landing_north=0.0, landing_east=0.0,
+                    flight_time_s=0.0, peak_mach=0.0, max_aoa_deg=0.0,
+                    min_sm_subsonic=0.0, min_sm_supersonic=0.0,
+                    compliant=True, footprint_compliant=True,
+                    ceiling_compliant=True, stability_compliant=True,
+                    landing_at_sea=None, in_coverage=None,
+                    violation_reason="",
+                    wind_profile_index=0, impulse_factor=1.0,
+                    azimuth_deg=azimuth_mean,
+                    inclination_deg=inclination_mean,
+                    fin_cant_deg=0.0,
+                    trajectory=nominal_profile,
+                )
+                damping_results = [nominal_sr]
+                for save_fn, name in [
+                    (save_replay_damping, "damping"),
+                    (save_replay_damping_breakdown, "damping breakdown"),
+                ]:
+                    try:
+                        result = save_fn(damping_results, sim_cfg,
+                                         output_dir=plot_dir)
+                        if isinstance(result, Path):
+                            figure_paths.append(result)
+                    except NotImplementedError as exc:
+                        display.add_warning(f"{name} plot skipped — {exc}")
+
     _stop_warning_capture(_orig_warn)
     display.stop()
     console.print()
@@ -701,22 +737,6 @@ def replay(
             console.print()
             return
 
-        # --- Damping post-processing ---
-        if aero_model.has_components:
-            from dynamics import compute_damping
-            display.update_status("Computing damping quantities...")
-            nominal_params = build_sim_params(
-                sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
-                wind_profile_index=0,
-                azimuth_deg=azimuth_mean,
-                inclination_deg=inclination_mean,
-                impulse_factor=1.0,
-                fin_cant_deg=0.0,
-            )
-            for sr in results:
-                if sr.trajectory is not None:
-                    compute_damping(sr.trajectory, nominal_params)
-
         display.update_status("Generating plots...")
 
         # --- Generate replay figures ---
@@ -731,8 +751,6 @@ def replay(
             (save_replay_altitude, "altitude-time"),
             (save_replay_aoa, "angle of attack"),
             (save_replay_roll_rate, "roll rate"),
-            (save_replay_damping, "damping"),
-            (save_replay_damping_breakdown, "damping breakdown"),
         ]:
             try:
                 result = save_fn(results, sim_cfg, output_dir=out_dir)
@@ -834,5 +852,109 @@ def verify(config_path: Path, inclination: float | None,
             console.print(f"Figure saved to: {fig_path}")
         else:
             plt.show()
+
+    console.print()
+
+
+@main.command()
+@click.argument("config_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-q", "--no-popup", is_flag=True,
+              help="Do not open figures after execution.")
+def damping(config_path: Path, no_popup: bool) -> None:
+    """Run a mean-wind nominal trajectory and assess pitch/yaw damping."""
+    import matplotlib.pyplot as plt
+
+    config_path = Path(config_path).resolve()
+    sim_cfg = load_simulation_config(config_path)
+
+    display = _RunDisplay(console)
+    _, _orig_warn = _start_warning_capture(display)
+
+    display.start()
+
+    display.update_status("Loading configuration and models...")
+    vehicle, propellant, aero_model, wind_ensemble = load_all_models(sim_cfg)
+
+    if not aero_model.has_components:
+        _error_exit(
+            "Damping assessment requires per-component aero tables "
+            "(directory of CSVs, not a single file).",
+            display,
+        )
+
+    # Resolve rail angles (fixed values — no optimisation)
+    rail = sim_cfg.launch.rail
+    azimuth_deg = 0.0 if rail.azimuth == "auto" else float(rail.azimuth)
+    inclination_deg = 85.0 if rail.inclination == "auto" else float(rail.inclination)
+
+    display.update_status("Running mean-wind nominal trajectory...")
+    from dynamics import run_trajectory, SCENARIO_NOMINAL
+    from damping import compute_damping
+    from montecarlo import SampleResult
+
+    params = build_sim_params(
+        sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+        wind_profile_index=0,
+        azimuth_deg=azimuth_deg,
+        inclination_deg=inclination_deg,
+        impulse_factor=1.0,
+        fin_cant_deg=0.0,
+        wind_east_override=wind_ensemble.mean_east_ms,
+        wind_north_override=wind_ensemble.mean_north_ms,
+    )
+    summary, profile = run_trajectory(params, SCENARIO_NOMINAL, keep_profile=True)
+
+    display.update_status("Computing damping quantities...")
+    compute_damping(profile, params)
+
+    display.update_status("Generating plots...")
+
+    nominal_sr = SampleResult(
+        sample_id=0, scenario="nominal", run_index=0,
+        apogee_m=summary.apogee, apogee_lat=0.0, apogee_lon=0.0,
+        landing_lat=0.0, landing_lon=0.0,
+        apogee_north=0.0, apogee_east=0.0,
+        landing_north=0.0, landing_east=0.0,
+        flight_time_s=0.0, peak_mach=summary.max_mach,
+        max_aoa_deg=summary.max_aoa_deg,
+        min_sm_subsonic=summary.min_sm_subsonic,
+        min_sm_supersonic=summary.min_sm_supersonic,
+        compliant=True, footprint_compliant=True,
+        ceiling_compliant=True, stability_compliant=True,
+        landing_at_sea=None, in_coverage=None,
+        violation_reason="",
+        wind_profile_index=0, impulse_factor=1.0,
+        azimuth_deg=azimuth_deg,
+        inclination_deg=inclination_deg,
+        fin_cant_deg=0.0,
+        trajectory=profile,
+    )
+    results = [nominal_sr]
+
+    results_dir = config_path.parent / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = results_dir if no_popup else None
+
+    figure_paths: list[Path] = []
+    for save_fn, name in [
+        (save_replay_damping, "damping"),
+        (save_replay_damping_breakdown, "damping breakdown"),
+    ]:
+        try:
+            result = save_fn(results, sim_cfg, output_dir=out_dir)
+            if isinstance(result, Path):
+                figure_paths.append(result)
+        except NotImplementedError as exc:
+            display.add_warning(f"{name} plot skipped — {exc}")
+
+    _stop_warning_capture(_orig_warn)
+    display.stop()
+    console.print()
+
+    if figure_paths:
+        for fp in figure_paths:
+            console.print(f"Saved: {fp}")
+    elif not no_popup:
+        plt.show()
 
     console.print()

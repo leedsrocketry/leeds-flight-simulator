@@ -435,7 +435,7 @@ def _make_broken_altitude_axes(
 
 
 def save_altitude_plot(
-    scenarios: dict[str, tuple[FlightSummary, np.ndarray, np.ndarray]],
+    scenarios: dict[str, tuple],
     burnout_time_s: float,
     output_dir: Path | None = None,
 ) -> Path | plt.Figure:
@@ -443,9 +443,9 @@ def save_altitude_plot(
 
     Parameters
     ----------
-    scenarios : dict[str, tuple[FlightSummary, np.ndarray, np.ndarray]]
-        Mapping of scenario key → (summary, time_s, altitude_m).
-        Only active scenarios need be present.
+    scenarios : dict[str, tuple]
+        Mapping of scenario key → (summary, time_s, altitude_m, ...).
+        Only the first three elements are used.
     burnout_time_s : float
         Motor burnout time in seconds.
     output_dir : Path or None

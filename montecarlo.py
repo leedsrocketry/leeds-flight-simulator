@@ -141,11 +141,18 @@ def build_sim_params(
     inclination_deg: float,
     impulse_factor: float,
     fin_cant_deg: float,
+    *,
+    wind_east_override: np.ndarray | None = None,
+    wind_north_override: np.ndarray | None = None,
 ) -> SimParams:
     """Construct a SimParams from configs and per-sample stochastic draws.
 
     Dry vehicle properties are read from the Vehicle dataclass
     (computed once during vehicle loading).
+
+    If *wind_east_override* and *wind_north_override* are given they replace
+    the ensemble profile selected by *wind_profile_index*.  Use
+    ``wind_ensemble.mean_east_ms`` / ``mean_north_ms`` for mean-wind runs.
     """
     geom = vehicle.geometry
     recovery = vehicle.recovery
@@ -196,8 +203,8 @@ def build_sim_params(
         cn_comp=aero_model.cn_comp,
         cp_comp=aero_model.cp_comp,
         has_components=aero_model.has_components,
-        cn_alpha_fins=aero_model.cn_alpha_fins,
         cn_alpha_comp=aero_model.cn_alpha_comp,
+        fin_comp_idx=aero_model.fin_comp_idx,
         comp_names=aero_model.comp_names,
         # Geometry
         diameter=geom.diameter,
@@ -205,10 +212,12 @@ def build_sim_params(
         A_ref=geom.reference_area,
         fin_cp_radius=geom.fin_cp_radius,
         fin_span=geom.fin_span,
-        # Wind (single profile)
+        # Wind (single profile or override)
         wind_alt=wind_ensemble.altitude_m,
-        wind_east=wind_ensemble.wind_east_ms[idx],
-        wind_north=wind_ensemble.wind_north_ms[idx],
+        wind_east=(wind_east_override if wind_east_override is not None
+                   else wind_ensemble.wind_east_ms[idx]),
+        wind_north=(wind_north_override if wind_north_override is not None
+                    else wind_ensemble.wind_north_ms[idx]),
         # Rail
         rail_azimuth_rad=azimuth_deg * _DEG2RAD,
         rail_inclination_rad=inclination_deg * _DEG2RAD,
@@ -635,10 +644,9 @@ class MonteCarloResult:
     warnings: list[str]
     azimuth_mean: float
     inclination_mean: float
-    # Deterministic baseline per scenario: (FlightSummary, time_s, altitude_m).
-    baseline_curves: dict[str, tuple[FlightSummary, np.ndarray, np.ndarray]] = field(
-        default_factory=dict,
-    )
+    # Deterministic baseline per scenario:
+    #   (FlightSummary, time_s, altitude_m, TrajectoryProfile)
+    baseline_curves: dict[str, tuple] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -816,9 +824,10 @@ def run_monte_carlo(
 
     # --- Baseline altitude-time curves ---
     # One deterministic trajectory per scenario: all uncertainties zero,
-    # mean wind profile.  These are cheap (one run each) and give the
-    # altitude plot its reference line without re-running later.
-    baseline_curves: dict[str, tuple[FlightSummary, np.ndarray, np.ndarray]] = {}
+    # mean wind (including surface override).  These are cheap (one run
+    # each) and give the altitude plot its reference line.  The nominal
+    # scenario's profile is kept for damping post-processing.
+    baseline_curves: dict[str, tuple] = {}
     for scenario_name in active:
         baseline_params = build_sim_params(
             sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
@@ -827,16 +836,26 @@ def run_monte_carlo(
             inclination_deg=inclination_mean,
             impulse_factor=1.0,
             fin_cant_deg=0.0,
+            wind_east_override=wind_ensemble.mean_east_ms,
+            wind_north_override=wind_ensemble.mean_north_ms,
         )
         summary, profile = run_trajectory(
             baseline_params, SCENARIO_MAP[scenario_name],
             keep_profile=True,
         )
-        baseline_curves[scenario_name] = (summary, profile.time, profile.altitude)
+        baseline_curves[scenario_name] = (
+            summary, profile.time, profile.altitude, profile,
+        )
         check_stability_compliance(
             summary, sim_cfg.monte_carlo.acceptance,
             f"Baseline '{scenario_name}'",
         )
+
+    # --- Damping assessment on nominal baseline ---
+    if "nominal" in baseline_curves and aero_model.has_components:
+        from damping import compute_damping
+        nominal_profile = baseline_curves["nominal"][3]
+        compute_damping(nominal_profile, baseline_params)
 
     return MonteCarloResult(
         all_results=all_results,

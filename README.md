@@ -277,7 +277,7 @@ Standard RASP/RockSim `.eng` file. Downloadable from [thrustcurve.org](https://w
 The `aero_tables` field in `vehicle.yaml` can point to either a single `.csv` file or a directory of `.csv` files:
 
 - **Single file** — whole-vehicle mode. Per-component forces, pitch/yaw damping, and roll are disabled. A warning is issued.
-- **Directory** — one `.csv` per aerodynamic component (nosecone, body tube, fin set, boattail, etc.), enabling full 6-DoF with per-component local angle-of-attack forces and moments, pitch/yaw damping, and roll torques.
+- **Directory** — one `.csv` per aerodynamic component (nosecone, body tube, fin set, boattail, etc.), enabling full 6-DoF with per-component restoring forces, analytical pitch/yaw damping, and roll torques.
 
 Each `.csv` must use one of two column layouts. CP_m is in metres from the nosecone tip. The grid need not be uniformly spaced.
 
@@ -291,6 +291,20 @@ The axial force coefficient CA depends on whether the motor is burning. When the
 LFS reads both CA columns from each aero table CSV, sums them independently across components into two vehicle-level tables, and selects the appropriate table at each timestep based on whether the current time is before or after motor burnout. This applies to both the launch rail and free-flight phases.
 
 Vehicle-level switching is physically correct for the axial force: unlike the normal force (which must be resolved per-component to capture the correct moment arms for pitch/yaw damping), the axial force acts along the body axis and produces no pitch/yaw moment regardless of where along the body it acts. The total vehicle-level CA is therefore all that is needed.
+
+#### Per-Component Force Model and Pitch/Yaw Damping
+
+When aero tables are provided as a directory of per-component CSVs, LFS computes normal forces and moments per component to capture both the restoring moment and pitch/yaw damping.
+
+**Restoring forces** are computed by looking up each component's C_N and C_P at the **vehicle (bulk) angle of attack**. This is physically correct because the source aerodynamic code (e.g. RASAero II) computes all components simultaneously at a common vehicle AoA. The per-component values derived by differencing cumulative assemblies encode inter-component interference (wake effects, upwash/downwash) at whole-vehicle flow conditions — not isolated component response to a local angle. Querying these tables at a per-component local AoA would ask the table a question it was never designed to answer.
+
+**Pitch/yaw damping** is computed analytically using the Mandell linearised damping formula. When the rocket pitches at rate *q*, each component at position X\_CP\_j experiences a crossflow perturbation δα\_j = q × (X\_CP\_j − X\_CG) / V. The resulting damping moment is:
+
+    δτ = −0.5 × ρ × V × A_ref × q × Σ_j C_Nα_j × (X_CP_j − X_CG)²
+
+For a statically stable rocket the net sum is dominated by fin surfaces (large positive C\_Nα, large lever arm) and the damping is stabilising — it opposes the angular rate. Components with negative C\_Nα (e.g. boattails) contribute anti-damping; the sign of the net effect depends on the vehicle design.
+
+The formulation requires only the per-component C\_Nα and C\_P at the current flight condition (Mach, Reynolds) — no re-query of the aero tables at a different angle. The linearised approximation is accurate for sounding rockets where angle of attack remains within a few degrees (well within the linear C\_Nα regime).
 
 > **Note for RASAero II users:** RASAero applies the power-on/off base drag correction at the vehicle level, not per-component. When per-component data is extracted via successive differencing ([pyrasaero](https://github.com/leedsrocketry/pyrasaero)), the power-on/off delta appears only on one component in the subtraction chain. This is expected — once per-component CAs are summed back to a vehicle total, the correct vehicle-level values are recovered. LFS is agnostic to the source of aerodynamic data (RASAero, CFD, wind tunnel, etc.) — the same format is used regardless of provenance.
 
@@ -403,7 +417,7 @@ Before relying on the simulator for a safety case, verify it against an independ
 python -m pytest test/
 ```
 
-Checks ISA against published tables, quaternion maths, launch rail exit velocity, terminal descent, aero interpolation and per-component local AoA damping, the `.eng` parser, AoA computation, and wind `.npz` loading.
+Checks ISA against published tables, quaternion maths, launch rail exit velocity, terminal descent, aero interpolation and per-component analytical damping, the `.eng` parser, AoA computation, and wind `.npz` loading.
 
 ### Trajectory Comparison Tool
 
