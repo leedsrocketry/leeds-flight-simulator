@@ -248,7 +248,7 @@ class TestPlotGeneration:
             qty: self._make_comparison(qty, True)
             for qty in _COMPARED_QUANTITIES
         }
-        fig = _build_comparison_figure(comparisons)
+        fig = _build_comparison_figure(comparisons, 10.0, 10.0)
 
         visible = [ax for ax in fig.axes if ax.get_visible()]
         assert len(visible) == len(_COMPARED_QUANTITIES)
@@ -260,14 +260,15 @@ class TestPlotGeneration:
             qty: self._make_comparison(qty, True)
             for qty in _COMPARED_QUANTITIES
         }
-        fig = _build_comparison_figure(comparisons)
+        fig = _build_comparison_figure(comparisons, 10.0, 10.0)
 
-        # All subplot lines should use the pass colour (green)
+        # All subplot sim lines should use the pass colour (green).
+        # Line 0 = reference, line 1 = simulator overlay.
+        from matplotlib.colors import to_hex
         for ax in fig.axes:
             lines = ax.get_lines()
             if len(lines) >= 2:
-                sim_line = lines[-1]  # simulator overlay is drawn last
-                from matplotlib.colors import to_hex
+                sim_line = lines[1]
                 assert to_hex(sim_line.get_color()) == "#2d7a2d"
         plt.close(fig)
 
@@ -277,7 +278,7 @@ class TestPlotGeneration:
             qty: self._make_comparison(qty, qty != "mach")
             for qty in _COMPARED_QUANTITIES
         }
-        fig = _build_comparison_figure(comparisons)
+        fig = _build_comparison_figure(comparisons, 10.0, 10.0)
 
         # The figure should have no suptitle (title removed)
         assert fig._suptitle is None or fig._suptitle.get_text() == ""

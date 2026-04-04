@@ -2013,11 +2013,12 @@ def _build_profile(
         parts_I_lateral.append(desc_I_lateral[1:])
         parts_mdot.append(desc_mdot[1:])
 
-    # Derive SM from stored CP and CG — NaN CP (descent) gives SM = 0
+    # Derive SM from stored CP and CG.  During descent CP is 0.0
+    # (no aerodynamic stability under parachute); SM = 0 there.
     cp_arr = np.concatenate(parts_cp)
     cg_arr = np.concatenate(parts_cg)
     sm_arr = np.where(
-        np.isfinite(cp_arr) & (diameter > 0.0),
+        (cp_arr != 0.0) & (diameter > 0.0),
         (cp_arr - cg_arr) / diameter,
         0.0,
     )

@@ -407,7 +407,7 @@ Checks ISA against published tables, quaternion maths, launch rail exit velocity
 
 ### Trajectory Comparison Tool
 
-An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, thrust, mass, CD, drag, CG, CP. Column names are matched case-insensitively; missing columns are skipped.
+An optional single-trajectory comparison against an external flight simulator. Add a `verification` section to `simulation.yaml` with a reference `.csv` path and per-quantity tolerance bands. The reference `.csv` must contain a time column and at least one of: altitude, Mach, stability margin, thrust, mass, drag, CD, CG, CP. Column names are matched case-insensitively; missing columns are skipped.
 
 > **Note:** The reference CSV is assumed to use SI units (metres, seconds, calibres). There is no unit sanitisation and no check that both simulators used the same input parameters — ensure your reference data is in SI and that vehicle, motor, and atmospheric inputs match before running verification.
 
@@ -437,11 +437,27 @@ python . verify ../simulations/cases/g2b2-cape-wrath/config.yaml -i 85
 python . verify ../simulations/cases/g2b2-cape-wrath/config.yaml --dump-csv debug/verify_comparison.csv -q
 ```
 
-By default, the comparison figure is displayed interactively with linked zoom/pan across the time-series subplots. Pass `-q` to save to file instead.
+#### Acceptance
+
+Each compared quantity is checked against its configured fractional tolerance band. A quantity passes if the fraction of comparison points outside the band is within the `exceedance_fraction` threshold.
+
+Stability margin, thrust, mass, and drag force are compared over the **ascent phase only** (up to LFS apogee). Descent-phase values for these quantities are physically meaningless (no aerodynamic stability under parachute, no thrust, constant mass) and are excluded from both the comparison and the plot. Altitude and Mach are compared over the full flight.
+
+CD, CG, and CP are compared over the full flight and included in the CSV dump but are not plotted.
+
+The overall verification result passes if every compared quantity passes.
+
+#### Comparison Figure
+
+By default, the comparison figure is displayed interactively. Pass `-q` to save to file instead.
 
 ![Verification plot](figures/verification_plot.png)
 
-Six time-series subplots (altitude, Mach, stability margin, thrust, mass, drag coefficient) share a linked time axis. Reference data is plotted in grey with tolerance bands; the simulator output is overlaid in green (pass) or red (fail). If CG and CP columns are present in the reference CSV, they are overlaid on the stability margin subplot using a second left y-axis (dashed for CG, dotted for CP). If a drag force column is present, drag is overlaid on the thrust subplot as a dashed line sharing the same y-axis.
+Six time-series subplots in a 3×2 grid. The top row (altitude, Mach) shows the full flight from launch to landing. The bottom four (stability margin, thrust, mass, drag force) show the ascent phase only, trimmed to apogee. Reference data is plotted in grey with fractional tolerance bands; the LFS output is overlaid in green (pass) or red (fail). LFS apogee time is marked on all subplots as a grey dashed vertical line; the reference apogee time is additionally marked on the altitude subplot.
+
+#### CSV Dump
+
+When `--dump-csv` is used, a CSV file is written with columns for each compared quantity: `ref_{qty}`, `lfs_{qty}`, `err_{qty}`. The time column uses the longest (full-flight) time base; ascent-only quantities have empty cells after apogee.
 
 
 ## Operational Workflow

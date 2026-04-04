@@ -801,7 +801,9 @@ def verify(config_path: Path, inclination: float | None,
         import csv
         dump_path = Path(dump_csv).resolve()
         qty_names = list(ver_result.comparisons.keys())
-        first = ver_result.comparisons[qty_names[0]]
+        # Use the longest timebase (full-flight quantities) for the row count
+        max_len = max(len(c.ref_time) for c in ver_result.comparisons.values())
+        longest = max(ver_result.comparisons.values(), key=lambda c: len(c.ref_time))
 
         with open(dump_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
@@ -810,13 +812,16 @@ def verify(config_path: Path, inclination: float | None,
                 header.extend([f"ref_{q}", f"lfs_{q}", f"err_{q}"])
             writer.writerow(header)
 
-            for i in range(len(first.ref_time)):
-                row: list[object] = [f"{first.ref_time[i]:.6f}"]
+            for i in range(max_len):
+                row: list[object] = [f"{longest.ref_time[i]:.6f}"]
                 for q in qty_names:
                     c = ver_result.comparisons[q]
-                    row.append(f"{c.ref_values[i]:.6f}")
-                    row.append(f"{c.sim_values[i]:.6f}")
-                    row.append(f"{c.sim_values[i] - c.ref_values[i]:.6f}")
+                    if i < len(c.ref_time):
+                        row.append(f"{c.ref_values[i]:.6f}")
+                        row.append(f"{c.sim_values[i]:.6f}")
+                        row.append(f"{c.sim_values[i] - c.ref_values[i]:.6f}")
+                    else:
+                        row.extend(["", "", ""])
                 writer.writerow(row)
 
         console.print(f"Comparison data written to: {dump_path}")

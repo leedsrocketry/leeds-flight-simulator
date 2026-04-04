@@ -93,8 +93,9 @@ _PLOT_LABELS: dict[str, str] = {
     "cp": "CP (m from nose)",
 }
 
-# Quantities to compare — 3×2 grid
-_COMPARED_QUANTITIES: list[str] = ["altitude", "mach", "sm", "thrust", "mass", "cd"]
+# Quantities to compare — 3×2 grid (CD is compared but not plotted; drag
+# takes its grid slot since the force is more physically meaningful).
+_COMPARED_QUANTITIES: list[str] = ["altitude", "mach", "sm", "thrust", "mass", "drag"]
 
 
 # ---------------------------------------------------------------------------
@@ -250,32 +251,47 @@ def _compare_quantity(
 # Plot generation
 # ---------------------------------------------------------------------------
 
+_ASCENT_ONLY_QUANTITIES = {"sm", "thrust", "mass", "drag"}
+
+_VLINE_KW: dict = dict(color="grey", linewidth=0.9, linestyle="--", zorder=0)
+_VLINE_BBOX: dict = dict(boxstyle="round,pad=0.15", fc="white", ec="none",
+                         alpha=0.8)
+
+
 def _build_comparison_figure(
     comparisons: dict[str, QuantityComparison],
+    t_apogee_lfs: float,
+    t_apogee_ref: float,
 ) -> matplotlib.figure.Figure:
     """Build a 3×2 comparison figure.
 
-    Six time-series quantities fill all positions in a 3×2 grid, sharing
-    a common time x-axis.  Reference in grey with tolerance band;
-    simulator overlay in green (pass) or red (fail).
-
-    If *comparisons* contains ``"cg"`` and/or ``"cp"`` entries, they are
-    drawn on the stability-margin subplot using a second left y-axis
-    (metres from nose) rather than occupying their own subplot.
+    Top row (altitude, Mach) uses the full flight time base.  Bottom
+    four (SM, thrust, mass, drag) use an ascent-only time base trimmed
+    to apogee.  CG, CP, and CD comparisons are included in the data
+    but not plotted; drag force takes the sixth grid slot instead of CD.
     """
     fig = plt.figure(figsize=(12, 9))
-    fig.subplots_adjust(hspace=0.30, wspace=0.25, left=0.12, right=0.96,
+    fig.subplots_adjust(hspace=0.30, wspace=0.25, left=0.08, right=0.96,
                         top=0.95, bottom=0.07)
 
     gs = fig.add_gridspec(3, 2)
+
+    # Two sharex groups: top row (full flight) and bottom four (ascent)
+    ax_top_first: matplotlib.axes.Axes | None = None
+    ax_bot_first: matplotlib.axes.Axes | None = None
     time_axes: list[matplotlib.axes.Axes] = []
-    first_ax: matplotlib.axes.Axes | None = None
     for row in range(3):
         for col in range(2):
-            ax = fig.add_subplot(gs[row, col], sharex=first_ax)
+            idx = row * 2 + col
+            if row == 0:
+                ax = fig.add_subplot(gs[row, col], sharex=ax_top_first)
+                if ax_top_first is None:
+                    ax_top_first = ax
+            else:
+                ax = fig.add_subplot(gs[row, col], sharex=ax_bot_first)
+                if ax_bot_first is None:
+                    ax_bot_first = ax
             time_axes.append(ax)
-            if first_ax is None:
-                first_ax = ax
 
     plotted_quantities = [q for q in _COMPARED_QUANTITIES if q in comparisons]
 
@@ -285,18 +301,9 @@ def _build_comparison_figure(
         ax = time_axes[idx]
         cmp = comparisons[qty_name]
 
-        # Subplots with overlays use explicit labels; others use generic ones
-        has_overlay = (
-            (qty_name == "sm" and ("cg" in comparisons or "cp" in comparisons))
-            or (qty_name == "thrust" and "drag" in comparisons)
-        )
-        qty_label = _PLOT_LABELS[qty_name].split(" (")[0]  # e.g. "Thrust"
-        ref_label = f"{qty_label} (Reference)" if has_overlay else "Reference"
-        sim_label = f"{qty_label} (LFS)" if has_overlay else "LFS"
-
         # Reference: grey line + tolerance band
         ax.plot(cmp.ref_time, cmp.ref_values,
-                color="grey", linewidth=1.5, label=ref_label)
+                color="grey", linewidth=1.5, label="Reference")
         ax.fill_between(
             cmp.ref_time,
             cmp.ref_values * (1.0 - cmp.tolerance),
@@ -307,65 +314,42 @@ def _build_comparison_figure(
         # Simulator overlay: green if passed, red if failed
         sim_colour = "#2d7a2d" if cmp.passed else "red"
         ax.plot(cmp.ref_time, cmp.sim_values,
-                color=sim_colour, linewidth=1.2, label=sim_label)
+                color=sim_colour, linewidth=1.2, label="LFS")
 
         ax.set_ylabel(_PLOT_LABELS[qty_name])
         ax.spines[["right", "top"]].set_visible(False)
+        ax.legend(fontsize=8)
 
-        # --- CG / CP overlay on the SM subplot ---
-        if qty_name == "sm" and ("cg" in comparisons or "cp" in comparisons):
-            ax2 = ax.twinx()
-            ax2.yaxis.set_label_position("left")
-            ax2.yaxis.tick_left()
-            ax2.spines["left"].set_position(("outward", 50))
-            ax2.spines[["right", "top"]].set_visible(False)
-            ax2.set_ylabel("CG / CP (m from nose)")
+        # LFS apogee marker on every subplot
+        ax.axvline(t_apogee_lfs, **_VLINE_KW)
+        y_bot = ax.get_ylim()[0]
+        ax.text(t_apogee_lfs, y_bot, f"Apogee\n{t_apogee_lfs:.1f} s",
+                rotation=90, ha="left", va="bottom",
+                fontsize=9, color="grey", bbox=_VLINE_BBOX)
 
-            _SM_OVERLAY_STYLES: dict[str, tuple[str, str]] = {
-                "cg": ("--", "CG"),
-                "cp": (":", "CP"),
-            }
-            for oq, (linestyle, label) in _SM_OVERLAY_STYLES.items():
-                if oq not in comparisons:
-                    continue
-                oc = comparisons[oq]
-                ax2.plot(oc.ref_time, oc.ref_values,
-                         color="grey", linewidth=1.2, linestyle=linestyle,
-                         label=f"{label} (Reference)")
-                oc_colour = "#2d7a2d" if oc.passed else "red"
-                ax2.plot(oc.ref_time, oc.sim_values,
-                         color=oc_colour, linewidth=1.0, linestyle=linestyle,
-                         label=f"{label} (LFS)")
-
-            # Combined legend from both axes
-            h1, l1 = ax.get_legend_handles_labels()
-            h2, l2 = ax2.get_legend_handles_labels()
-            ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="best")
-
-        # --- Drag overlay on the Thrust subplot (shared y-axis, both in N) ---
-        elif qty_name == "thrust" and "drag" in comparisons:
-            dc = comparisons["drag"]
-            ax.plot(dc.ref_time, dc.ref_values,
-                    color="grey", linewidth=1.2, linestyle="--",
-                    label="Drag (Reference)")
-            dc_colour = "#2d7a2d" if dc.passed else "red"
-            ax.plot(dc.ref_time, dc.sim_values,
-                    color=dc_colour, linewidth=1.0, linestyle="--",
-                    label="Drag (LFS)")
-            ax.set_ylabel("Force (N)")
-            ax.legend(fontsize=7, loc="best")
-
-        else:
-            ax.legend(fontsize=8)
+        # Reference Apogee marker on altitude subplot only
+        if qty_name == "altitude":
+            ax.axvline(t_apogee_ref, **_VLINE_KW)
+            # Place label above the LFS apogee label to avoid overlap
+            y_mid = (ax.get_ylim()[0] + ax.get_ylim()[1]) / 2
+            ax.text(t_apogee_ref, y_mid,
+                    f"Reference Apogee\n{t_apogee_ref:.1f} s",
+                    rotation=90, ha="right", va="center",
+                    fontsize=9, color="grey", bbox=_VLINE_BBOX)
 
     # Hide unused time axes
     for idx in range(len(plotted_quantities), len(time_axes)):
         time_axes[idx].set_visible(False)
 
-    # X-label on the bottom-row axes
+    # X-label on the visible bottom-row axes of each group
     for ax in time_axes[-2:]:
         if ax.get_visible():
             ax.set_xlabel("Time (s)")
+    # Top-row x-labels only if bottom rows are on a different time base
+    if ax_top_first is not None:
+        for ax in time_axes[:2]:
+            if ax.get_visible():
+                ax.set_xlabel("Time (s)")
 
     return fig
 
@@ -523,28 +507,44 @@ def run_verification(
         "sm": ver_cfg.sm_tolerance,
         "thrust": ver_cfg.thrust_tolerance,
         "mass": ver_cfg.mass_tolerance,
-        "cd": ver_cfg.cd_tolerance,
+        "cd": ver_cfg.drag_tolerance,
         "drag": ver_cfg.drag_tolerance,
         "cg": ver_cfg.cg_tolerance,
         "cp": ver_cfg.cp_tolerance,
     }
 
+    # Apogee times for trimming and markers
+    t_apogee_lfs = summary.apogee_time
+    t_apogee_ref = float(ref_data["time"][np.argmax(ref_data["altitude"])])
+
+    # Quantities trimmed to ascent (descent values are meaningless)
+    _ASCENT_ONLY = {"sm", "thrust", "mass", "drag"}
+
     comparisons: dict[str, QuantityComparison] = {}
     for qty in _COMPARED_QUANTITIES:
         if qty not in ref_data:
             continue
+        ref_t = ref_data["time"]
+        ref_v = ref_data[qty]
+        sim_t = sim_data["time"]
+        sim_v = sim_data[qty]
+        if qty in _ASCENT_ONLY:
+            ref_mask = ref_t <= t_apogee_lfs
+            sim_mask = sim_t <= t_apogee_lfs
+            ref_t, ref_v = ref_t[ref_mask], ref_v[ref_mask]
+            sim_t, sim_v = sim_t[sim_mask], sim_v[sim_mask]
         comparisons[qty] = _compare_quantity(
             name=qty,
-            ref_time=ref_data["time"],
-            ref_values=ref_data[qty],
-            sim_time=sim_data["time"],
-            sim_values=sim_data[qty],
+            ref_time=ref_t,
+            ref_values=ref_v,
+            sim_time=sim_t,
+            sim_values=sim_v,
             tolerance=tolerance_map[qty],
             exceedance_fraction=ver_cfg.exceedance_fraction,
         )
 
-    # --- Overlay comparisons (CG/CP on SM, drag on thrust) ---
-    for qty in ("cg", "cp", "drag"):
+    # --- Additional comparisons (CSV dump only, not plotted) ---
+    for qty in ("cd", "cg", "cp"):
         if qty not in ref_data or qty not in tolerance_map:
             continue
         comparisons[qty] = _compare_quantity(
@@ -560,7 +560,7 @@ def run_verification(
     all_passed = all(c.passed for c in comparisons.values())
 
     # --- Build comparison figure ---
-    fig = _build_comparison_figure(comparisons)
+    fig = _build_comparison_figure(comparisons, t_apogee_lfs, t_apogee_ref)
 
     return VerificationResult(
         passed=all_passed,

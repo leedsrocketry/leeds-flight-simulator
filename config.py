@@ -128,8 +128,7 @@ class VerificationConfig:
     sm_tolerance: float         # fractional tolerance on static margin
     mass_tolerance: float       # fractional tolerance on vehicle mass
     thrust_tolerance: float     # fractional tolerance on thrust
-    cd_tolerance: float         # fractional tolerance on drag coefficient
-    drag_tolerance: float       # fractional tolerance on drag force
+    drag_tolerance: float       # fractional tolerance on drag force (also used for CD)
     cg_tolerance: float         # fractional tolerance on centre of gravity
     cp_tolerance: float         # fractional tolerance on centre of pressure
     exceedance_fraction: float  # fraction of points allowed outside tolerance (0 = strict)
@@ -440,7 +439,6 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             sm_tolerance=float(ver_raw["sm_tolerance"]),
             mass_tolerance=float(ver_raw["mass_tolerance"]),
             thrust_tolerance=float(ver_raw.get("thrust_tolerance", ver_raw["altitude_tolerance"])),
-            cd_tolerance=float(ver_raw.get("cd_tolerance", ver_raw.get("mach_tolerance", 0.05))),
             drag_tolerance=float(ver_raw.get("drag_tolerance", ver_raw.get("cd_tolerance", ver_raw.get("mach_tolerance", 0.05)))),
             cg_tolerance=float(ver_raw.get("cg_tolerance", ver_raw.get("sm_tolerance", 0.05))),
             cp_tolerance=float(ver_raw.get("cp_tolerance", ver_raw.get("sm_tolerance", 0.05))),
