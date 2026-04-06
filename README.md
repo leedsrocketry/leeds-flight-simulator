@@ -18,6 +18,7 @@ Runs entirely offline. The only network access is to fetch base map tiles for th
 - [Input Files](#input-files)
 - [Acceptance Criteria](#acceptance-criteria)
 - [Optimisation](#optimisation)
+- [Integrator Tolerances](#integrator-tolerances)
 - [Output Files](#output-files)
 - [Replaying Samples](#replaying-samples)
 - [Verification](#verification)
@@ -207,6 +208,7 @@ Key sections:
 | `launch` | Rail geometry, azimuth/inclination (or `"auto"`), wind profiles, surface wind override |
 | `monte_carlo` | Sample count, seed, uncertainties (1σ), acceptance criteria |
 | `verification` | Optional reference trajectory comparison (see [Verification](#verification)) |
+| `rtol`, `atol` | Optional integrator tolerances (see [Integrator Tolerances](#integrator-tolerances)) |
 
 ### `vehicle.yaml`
 
@@ -356,6 +358,46 @@ When `azimuth` and/or `inclination` are set to `"auto"`, the optimisation routin
 4. **Candidate Validation.** Top candidate azimuths validated with the full uncertainty set (wind, impulse, launch angles, fin cant). Selects the azimuth with the greatest containment margin.
 
 If only inclination is `"auto"`, only step 1 runs. If only azimuth is `"auto"`, steps 2–4 run with the provided inclination.
+
+
+## Integrator Tolerances
+
+The 6DoF trajectory integrator uses a Dormand-Prince RK4(5) adaptive step-size scheme. At each step, the local truncation error is estimated and the step is accepted when:
+
+```
+error <= atol + rtol * |state|
+```
+
+Two optional top-level fields in `simulation.yaml` control the accuracy/speed trade-off:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `rtol` | `1e-4` | Relative tolerance — error limit as a fraction of the state magnitude. Controls accuracy for large values (e.g. altitude at 10,000 m, velocity at 300 m/s). |
+| `atol` | `1e-8` | Absolute tolerance — fixed error floor in state units. Prevents the stepper from taking excessively large steps when state values pass through zero (e.g. vertical velocity at apogee, angular rates during smooth flight). |
+
+### How the defaults were chosen
+
+The 13-element state vector contains positions (metres), velocities (m/s), quaternion components (~1), and angular rates (rad/s). The dominant cost is the number of accepted steps — tighter tolerances force smaller steps and longer runtimes.
+
+`rtol=1e-4` gives 0.01% relative accuracy per step: at 10,000 m altitude, the per-step position error is bounded to ~1 m, which the global error accumulates far less than across the full trajectory. This is well within the percent-level tolerance bands used for verification against external simulators.
+
+`atol=1e-8` is a tight absolute floor that ensures near-zero quantities (angular rates during stable flight, velocity components at apogee) still receive fine resolution. Without this, the integrator could take large steps through zero-crossings where the relative tolerance alone provides no constraint.
+
+This combination is standard for aerospace trajectory simulation of short-duration flights (seconds to minutes). Orbital mechanics codes typically use much tighter values (`1e-12`) because they integrate over hours to days, but sounding rocket flights are too short for per-step errors at the `1e-4` level to accumulate meaningfully.
+
+### Choosing your own values
+
+1. Run the verification command with the default tolerances:
+   ```
+   python . verify config.yaml -q
+   ```
+2. Confirm all quantities pass within their tolerance bands.
+3. To speed up the Monte Carlo (at the cost of accuracy), try loosening `rtol` by one order of magnitude (e.g. `1e-3`). Re-run verification to check.
+4. To increase accuracy (at the cost of runtime), tighten `rtol` (e.g. `1e-5` or `1e-6`).
+5. `atol` rarely needs changing. Only increase it if you observe the integrator taking unnecessarily small steps near zero-crossings. Decreasing it below `1e-8` has negligible effect.
+
+As a rule of thumb, the Monte Carlo runtime scales roughly linearly with `1/rtol` — halving `rtol` approximately doubles the number of integration steps.
+
 
 ## Output Files
 

@@ -142,6 +142,8 @@ class SimulationConfig:
     launch: LaunchConfig
     monte_carlo: MonteCarloConfig
     verification: VerificationConfig | None  # None → trajectory comparison skipped
+    rtol: float = 1.0e-4    # integrator relative tolerance
+    atol: float = 1.0e-8    # integrator absolute tolerance
 
 
 # ---------------------------------------------------------------------------
@@ -448,12 +450,18 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     else:
         verification = None
 
+    # -- integrator tolerances (optional, top-level)
+    rtol = float(raw.get("rtol", 1.0e-4))
+    atol = float(raw.get("atol", 1.0e-8))
+
     return SimulationConfig(
         vehicle=vehicle,
         site=site,
         launch=launch,
         monte_carlo=monte_carlo,
         verification=verification,
+        rtol=rtol,
+        atol=atol,
     )
 
 

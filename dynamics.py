@@ -296,8 +296,8 @@ class SimParams:
     t_offset: float                   # K — uniform temperature offset from ISA
 
     # Integration tolerances
-    rtol: float = 1.0e-6
-    atol: float = 1.0e-6
+    rtol: float = 1.0e-4
+    atol: float = 1.0e-8
 
 
 @dataclass

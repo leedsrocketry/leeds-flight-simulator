@@ -239,6 +239,9 @@ def build_sim_params(
             if sim_cfg.site.temperature is not None
             else 0.0
         ),
+        # Integrator tolerances
+        rtol=sim_cfg.rtol,
+        atol=sim_cfg.atol,
     )
 
 
