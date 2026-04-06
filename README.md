@@ -21,7 +21,7 @@ Runs entirely offline. The only network access is to fetch base map tiles for th
 - [Output Files](#output-files)
 - [Replaying Samples](#replaying-samples)
 - [Verification](#verification)
-- [Configuration Diff](#configuration-diff)
+- [Damping Assessment](#damping-assessment)
 - [Operational Workflow](#operational-workflow)
 - [Contact](#contact)
 - [Licence](#licence)
@@ -218,6 +218,7 @@ Top-level fields:
 |-------|-------------|
 | `motor` | Path to RASP `.eng` thrust curve file |
 | `aero_tables` | Path to aero CSV directory (or single file) |
+| `fins_aero_table` | Optional path to a specific fins component CSV, overriding the file matched by name from the aero tables directory |
 | `body_diameter_mm` | Overall body diameter [mm] |
 | `nozzle_diameter_mm` | Nozzle exit diameter [mm] |
 | `rasaero` | RASAero-specific properties (pyrasaero reads; LFS ignores) |
@@ -281,8 +282,8 @@ The `aero_tables` field in `vehicle.yaml` can point to either a single `.csv` fi
 
 Each `.csv` must use one of two column layouts. CP_m is in metres from the nosecone tip. The grid need not be uniformly spaced.
 
-- **7-column** (recommended): `Mach, Reynolds, AoA_deg, CA_off, CA_on, CN, CP_m` — `CA_off` and `CA_on` are the axial force coefficients for motor-off and motor-on respectively.
-- **6-column**: `Mach, Reynolds, AoA_deg, CA, CN, CP_m` — the single CA column is used for both power-on and power-off (no base drag correction).
+- **8-column** (recommended): `Mach, Reynolds, AoA_deg, CA_off, CA_on, CN, CP_m, CN_alpha_per_rad` — includes the normal force derivative per radian, used for analytical damping computation.
+- **7-column**: `Mach, Reynolds, AoA_deg, CA_off, CA_on, CN, CP_m` — `CA_off` and `CA_on` are the axial force coefficients for motor-off and motor-on respectively. `CN_alpha_per_rad` is set to NaN (damping uses finite-difference fallback).
 
 #### Base Drag and Power-On/Off Switching
 
@@ -356,11 +357,6 @@ When `azimuth` and/or `inclination` are set to `"auto"`, the optimisation routin
 
 If only inclination is `"auto"`, only step 1 runs. If only azimuth is `"auto"`, steps 2–4 run with the provided inclination.
 
-### Tolerance Auto-Calibration
-
-At the start of execution, the simulator runs a small batch of samples at tight integrator tolerances, then re-runs at progressively looser settings. It automatically selects and reports the loosest tolerance that maintains acceptable output deviation.
-
-
 ## Output Files
 
 Results are saved to `results/`, relative to the directory containing `simulation.yaml`. The directory is cleared at the start of each run.
@@ -371,17 +367,19 @@ Results are saved to `results/`, relative to the directory containing `simulatio
 | `samples.csv` | One row per sample — stochastic inputs, flight time, per-check compliance flags, aerodynamic extremes, and landing/apogee coordinates |
 | `dispersion_plot.png` | Landing dispersion map (only when `-q` is used; see below) |
 | `altitude_plot.png` | Mean altitude profile for each scenario (only when `-q` is used; see below) |
+| `damping.png` | Damping ratio, natural frequency, and corrective/damping moment coefficients vs. time (only when `-q` is used; generated if per-component aero tables are loaded) |
+| `damping_breakdown.png` | Per-component C1 and C2A breakdown vs. time (only when `-q` is used; generated if per-component aero tables are loaded) |
 | `verification_plot.png` | Reference trajectory comparison (only when `-q` is used) |
 
 ### Dispersion Plot
 
-![Dispersion plot](figures/dispersion_plot.png)
+![Dispersion plot](doc/dispersion_plot.png)
 
 Landing points colour-coded by descent scenario, overlaid on an OS Maps base map with the danger area, buffer boundary, coastline, monitor station coverage circles, map markers, and launch site.
 
 ### Altitude Plot
 
-![Altitude plot](figures/altitude_plot.png)
+![Altitude plot](doc/altitude_plot.png)
 
 Mean altitude profile vs. time for each active descent scenario.
 
@@ -395,18 +393,20 @@ Replay displays figures interactively by default. Pass `-q` to save them to disk
 1. **3D Isometric** — trajectory in NED space with the map overlaid on the ground plane, matching the dispersion plot style. Coloured by descent scenario; pink if terminated early due to a stability or AoA violation.
 2. **Plan View** — same as above, viewed from directly above.
 3. **Altitude vs. Time** — full flight from rail exit to landing.
+4. **Angle of Attack vs. Time** — AoA profile over the flight.
+5. **Roll Rate vs. Time** — roll rate history, with peak roll rate annotated.
 
 The 3D isometric view shows the full trajectory from rail exit through descent, with the danger area and coastline projected onto the ground plane:
 
-![3D replay](figures/replay_3d.png)
+![3D replay](doc/replay_3d.png)
 
 The plan view provides a top-down perspective for checking lateral dispersion against the danger area boundary:
 
-![Plan view replay](figures/replay_plan_view.png)
+![Plan view replay](doc/replay_plan_view.png)
 
 The altitude-time plot shows the complete flight profile, highlighting the transition between ascent and descent phases:
 
-![Altitude replay](figures/replay_altitude.png)
+![Altitude replay](doc/replay_altitude.png)
 
 
 ## Verification
@@ -435,12 +435,11 @@ python . verify <simulation.yaml>
 
 | Flag | Effect |
 |------|--------|
-| `-a`, `--azimuth` `FLOAT` | Launch rail azimuth (degrees); overrides config value |
 | `-i`, `--inclination` `FLOAT` | Launch rail inclination (degrees); overrides config value |
 | `-q`, `--no-popup` | Save figure to `results/verification_plot.png` instead of displaying interactively |
 | `--dump-csv PATH` | Write per-timestep comparison data (reference, simulator, and error for each quantity) to a CSV file |
 
-Azimuth is always zero for verification (wind is zero, so heading is irrelevant). The inclination can be set at three levels, with later entries taking precedence:
+The inclination can be set at three levels, with later entries taking precedence:
 
 1. `launch.rail.inclination` in the simulation config (uses the midpoint of `inclination_range` if set to `"auto"`)
 2. `verification.inclination` in the simulation config (optional)
@@ -467,13 +466,43 @@ The overall verification result passes if every compared quantity passes.
 
 By default, the comparison figure is displayed interactively. Pass `-q` to save to file instead.
 
-![Verification plot](figures/verification_plot.png)
+![Verification plot](doc/verification_plot.png)
 
 Six time-series subplots in a 3×2 grid. The top row (altitude, Mach) shows the full flight from launch to landing. The bottom four (stability margin, thrust, mass, drag force) show the ascent phase only, trimmed to apogee. Reference data is plotted in grey with fractional tolerance bands; the LFS output is overlaid in green (pass) or red (fail). LFS apogee time is marked on all subplots as a grey dashed vertical line; the reference apogee time is additionally marked on the altitude subplot.
 
 #### CSV Dump
 
 When `--dump-csv` is used, a CSV file is written with columns for each compared quantity: `ref_{qty}`, `lfs_{qty}`, `err_{qty}`. The time column uses the longest (full-flight) time base; ascent-only quantities have empty cells after apogee.
+
+
+## Damping Assessment
+
+Run a single mean-wind nominal trajectory and assess pitch/yaw damping:
+
+```
+python . damping <simulation.yaml>
+```
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `-q`, `--no-popup` | Save figures to disk instead of displaying interactively |
+
+Produces two plots:
+
+1. **Damping plot** (`damping.png`) — corrective moment coefficient C1, total damping coefficient C2 (aerodynamic C2A + jet damping C2R), damping ratio zeta, and natural frequency, all vs. time from rail exit to apogee.
+2. **Damping breakdown** (`damping_breakdown.png`) — per-component contributions to C1 and C2A, showing which components drive stability and which contribute anti-damping.
+
+Damping quantities are computed from rail exit to apogee only. During the rail phase the vehicle is constrained and airspeed is too low for aerodynamic moments to be meaningful.
+
+Damping plots are also generated automatically during `run` when per-component aero tables are loaded, using the nominal baseline trajectory.
+
+Example:
+
+```
+python . damping ../simulations/cases/g2b2-cape-wrath/config.yaml -q
+```
 
 
 ## Operational Workflow

@@ -4,13 +4,13 @@ Loads per-component RASAero II Aeroplot CSVs, assembles per-component and
 whole-vehicle tables on a regular grid, and exposes Numba @njit hot-loop
 functions.
 
-CSV format (one header row, then data).  7-column (recommended)::
+CSV format (one header row, then data).  8-column (recommended)::
+
+    Mach,Reynolds,AoA_deg,CA_off,CA_on,CN,CP_m,CN_alpha_per_rad
+
+or 7-column (no CN_alpha_per_rad)::
 
     Mach,Reynolds,AoA_deg,CA_off,CA_on,CN,CP_m
-
-or 6-column (CA used for both power-on and power-off)::
-
-    Mach,Reynolds,AoA_deg,CA,CN,CP_m
 
 ``CP_m`` is in metres from the nosecone tip.  Reynolds is the full
 Reynolds number (not ×10⁶).
@@ -173,8 +173,6 @@ def _read_csv(path: Path) -> np.ndarray:
       — standard per-component output from ``pyrasaero convert``.
     * **7-column**: ``Mach,Reynolds,AoA_deg,CA_off,CA_on,CN,CP_m``
       — legacy format; column 7 (CN_alpha_per_rad) is set to NaN.
-    * **6-column**: ``Mach,Reynolds,AoA_deg,CA,CN,CP_m``
-      — single CA duplicated into CA_off and CA_on; column 7 set to NaN.
     """
     try:
         data = np.loadtxt(path, delimiter=",", skiprows=1, dtype=np.float64)
@@ -192,21 +190,10 @@ def _read_csv(path: Path) -> np.ndarray:
         data = np.empty((d7.shape[0], 8), dtype=np.float64)
         data[:, :7] = d7
         data[:, 7] = math.nan
-    elif data.shape[1] >= 6:
-        # 6-column format: Mach, Re, AoA_deg, CA, CN, CP_m
-        d6 = data[:, :6]
-        # Duplicate CA into CA_off and CA_on; no CN_alpha_per_rad
-        data = np.empty((d6.shape[0], 8), dtype=np.float64)
-        data[:, :3] = d6[:, :3]       # Mach, Re, AoA_deg
-        data[:, 3]  = d6[:, 3]        # CA_off = CA
-        data[:, 4]  = d6[:, 3]        # CA_on  = CA
-        data[:, 5]  = d6[:, 4]        # CN
-        data[:, 6]  = d6[:, 5]        # CP_m
-        data[:, 7]  = math.nan        # CN_alpha_per_rad unavailable
     else:
         raise ValueError(
-            f"{path.name}: expected ≥6 columns "
-            f"(Mach,Reynolds,AoA_deg,CA,CN,CP_m), got {data.shape[1]}"
+            f"{path.name}: expected ≥7 columns "
+            f"(Mach,Reynolds,AoA_deg,CA_off,CA_on,CN,CP_m), got {data.shape[1]}"
         )
 
     return np.ascontiguousarray(data, dtype=np.float64)
