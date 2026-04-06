@@ -196,13 +196,21 @@ class _RunDisplay:
 
 
 class _QuietGroup(click.Group):
-    """Suppress Click's default ``Aborted!`` on keyboard interrupt."""
+    """Suppress Click's ``Aborted!`` and style uncaught exceptions."""
 
     def invoke(self, ctx: click.Context):
         try:
             return super().invoke(ctx)
         except KeyboardInterrupt:
             raise SystemExit(130)
+        except (click.exceptions.Exit, click.Abort, click.ClickException):
+            raise
+        except Exception as exc:
+            console.print(Panel(
+                f"{type(exc).__name__}: {exc}",
+                border_style="red", title="ERROR", title_align="left",
+            ))
+            raise SystemExit(1)
 
 
 def _start_warning_capture(
@@ -314,11 +322,17 @@ def _clear_results(results_root: Path, display: _RunDisplay) -> None:
 # rolling your own.
 #
 # Warnings
-#     w, orig = _start_warning_capture(display)   # or no display arg
+#     w, orig = _start_warning_capture()           # before config loading
+#     sim_cfg = load_simulation_config(...)
+#     display = _RunDisplay(console)
+#     _stop_warning_capture(orig)                   # stop displayless capture
+#     for w in early: display.add_warning(w)        # replay into display
+#     w, orig = _start_warning_capture(display)     # restart with display
 #     ...
 #     _stop_warning_capture(orig)
-#   Routes ``warnings.warn()`` to the live display (if provided) and
-#   collects them in a list.  Always restore before ``display.stop()``.
+#   Start capture *before* ``load_simulation_config`` so model-loading
+#   warnings are collected.  Replay them into the display when ready.
+#   Always restore before ``display.stop()``.
 #   For commands without a display, call ``_print_warnings(w)`` afterwards.
 #
 # Error exit
@@ -327,6 +341,11 @@ def _clear_results(results_root: Path, display: _RunDisplay) -> None:
 #   ``console.print("[red]Error:...")``, ``sys.exit``, or ``raise
 #   SystemExit`` directly — always go through ``_error_exit`` so every
 #   error looks the same.
+#
+#   ``_QuietGroup`` provides a catch-all: any uncaught exception from
+#   any command is displayed as a red ERROR panel.  Per-command
+#   ``try/except`` blocks are only needed for recovery (e.g. skip a
+#   plot and continue) — not for styling.
 #
 # Vertical spacing
 #   • After ``display.stop()``, print a blank ``console.print()`` to
@@ -357,6 +376,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
     import matplotlib.pyplot as plt
 
     config_path = Path(config_path).resolve()
+    all_warnings, _orig_warn = _start_warning_capture()
     sim_cfg = load_simulation_config(config_path)
 
     if no_termination:
@@ -365,6 +385,9 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
         mc = replace(sim_cfg.monte_carlo, acceptance=acc)
         sim_cfg = replace(sim_cfg, monte_carlo=mc)
     display = _RunDisplay(console)
+    _stop_warning_capture(_orig_warn)
+    for w in all_warnings:
+        display.add_warning(w)
     all_warnings, _orig_warn = _start_warning_capture(display)
 
     # --- Detect wind profile mode ---
@@ -663,7 +686,11 @@ def replay(
         _error_exit("--sample requires --scenario.")
 
     # --- Live display (same style as run command) ---
+    early_warnings, _early_orig = _start_warning_capture()
     display = _RunDisplay(console)
+    _stop_warning_capture(_early_orig)
+    for w in early_warnings:
+        display.add_warning(w)
     _, _orig_warn = _start_warning_capture(display)
 
     try:
@@ -787,12 +814,18 @@ def verify(config_path: Path, inclination: float | None,
     import matplotlib.pyplot as plt
 
     config_path = Path(config_path).resolve()
+    early_warnings, _early_orig = _start_warning_capture()
     sim_cfg = load_simulation_config(config_path)
 
     if sim_cfg.verification is None:
+        _stop_warning_capture(_early_orig)
+        _print_warnings(early_warnings)
         _error_exit("No verification section in config.")
 
     display = _RunDisplay(console)
+    _stop_warning_capture(_early_orig)
+    for w in early_warnings:
+        display.add_warning(w)
     _, _orig_warn = _start_warning_capture(display)
 
     display.start()
@@ -865,9 +898,13 @@ def damping(config_path: Path, no_popup: bool) -> None:
     import matplotlib.pyplot as plt
 
     config_path = Path(config_path).resolve()
+    early_warnings, _early_orig = _start_warning_capture()
     sim_cfg = load_simulation_config(config_path)
 
     display = _RunDisplay(console)
+    _stop_warning_capture(_early_orig)
+    for w in early_warnings:
+        display.add_warning(w)
     _, _orig_warn = _start_warning_capture(display)
 
     display.start()
