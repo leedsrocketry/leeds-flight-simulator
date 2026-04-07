@@ -441,7 +441,7 @@ Replay displays figures interactively by default. Pass `-q` to save them to disk
 2. **Plan View** — same as above, viewed from directly above.
 3. **Altitude vs. Time** — full flight from rail exit to landing.
 4. **Angle of Attack vs. Time** — AoA profile over the flight.
-5. **Roll Rate vs. Time** — roll rate history, with peak roll rate annotated.
+5. **Roll Rate vs. Time** — roll rate history. When per-component aero tables are loaded, a dashed red line shows the maximum permissible roll rate — defined as one third of the damped pitch natural frequency (ω_d / 3). Beyond this rate, pitch-roll coupling becomes significant and the linearised damping model breaks down.
 
 The 3D isometric view shows the full trajectory from rail exit through descent, with the danger area and coastline projected onto the ground plane:
 

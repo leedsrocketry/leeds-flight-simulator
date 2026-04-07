@@ -818,6 +818,19 @@ def replay(
             console.print()
             return
 
+        # --- Compute damping on replayed trajectories (for roll rate limit) ---
+        if aero_model.has_components:
+            from damping import compute_damping
+            for sr in results:
+                if sr.trajectory is not None and sr.trajectory.zeta is None:
+                    params = build_sim_params(
+                        sim_cfg, vehicle, propellant, aero_model, wind_ensemble,
+                        sr.wind_profile_index, sr.azimuth_deg,
+                        sr.inclination_deg, sr.impulse_factor,
+                        sr.fin_cant_deg,
+                    )
+                    compute_damping(sr.trajectory, params)
+
         display.update_status("Generating plots...")
 
         # --- Generate replay figures ---

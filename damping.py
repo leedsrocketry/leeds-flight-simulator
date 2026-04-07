@@ -78,9 +78,6 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
     t_exit = profile.rail_exit_time
     rail_exit_idx = int(np.searchsorted(profile.time, t_exit))
 
-    # Roll rate characteristic radius
-    r_roll = (p.diameter + p.fin_span) / 2.0
-
     for i in range(rail_exit_idx, apogee_idx + 1):
         h = max(float(profile.altitude[i]), 0.0)
         M = float(profile.mach[i])
@@ -166,9 +163,10 @@ def compute_damping(profile: TrajectoryProfile, params: SimParams) -> None:
             else:
                 omega_d[i] = 0.0
 
-        # Max permissible roll rate
-        if r_roll > 0.0:
-            max_roll_hz[i] = V / r_roll / (2.0 * math.pi)
+        # Max permissible roll rate: 1/3 of the damped pitch natural
+        # frequency, beyond which pitch-roll coupling becomes significant.
+        if not math.isnan(omega_d[i]) and omega_d[i] > 0.0:
+            max_roll_hz[i] = omega_d[i] / 3.0 / (2.0 * math.pi)
 
     # Store results on profile
     profile.c1 = c1

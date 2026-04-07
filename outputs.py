@@ -1526,8 +1526,9 @@ def save_replay_aoa(
 
     lw, alpha = _replay_line_style(len(trajectories))
 
-    for t in trajectories:
-        for ln in ax.plot(t["t_aoa_s"], t["aoa_deg"], color="black", linewidth=lw, alpha=alpha):
+    for i, t in enumerate(trajectories):
+        label = "Angle of Attack" if i == 0 else None
+        for ln in ax.plot(t["t_aoa_s"], t["aoa_deg"], color="black", linewidth=lw, alpha=alpha, label=label):
             _tag_line(ln, t["sample_id"])
 
     ax.set_xlabel("Flight Time (s)", fontsize=11)
@@ -1573,11 +1574,12 @@ def save_replay_roll_rate(
     lw, alpha = _replay_line_style(len(trajectories))
 
     max_roll_plotted = False
-    for sr, t in zip(replayed, trajectories):
+    for i, (sr, t) in enumerate(zip(replayed, trajectories)):
         ts = t["t_s"]
         rr = t["roll_rate_hz"]
         mask = ~np.isnan(rr)
-        for ln in ax.plot(ts[mask], rr[mask], color="black", linewidth=lw, alpha=alpha):
+        label = "Roll Rate" if i == 0 else None
+        for ln in ax.plot(ts[mask], rr[mask], color="black", linewidth=lw, alpha=alpha, label=label):
             _tag_line(ln, t["sample_id"])
 
         # Overlay max permissible roll rate from damping post-processing
@@ -1596,8 +1598,7 @@ def save_replay_roll_rate(
     ax.set_xlabel("Flight Time (s)", fontsize=11)
     ax.set_ylabel("Roll Rate (Hz)", fontsize=11)
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
-    if max_roll_plotted:
-        ax.legend()
+    ax.legend(fontsize=9, framealpha=0.9, edgecolor="gray")
 
     fig.tight_layout()
 
