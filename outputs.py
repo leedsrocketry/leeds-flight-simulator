@@ -1578,8 +1578,8 @@ def save_replay_roll_rate(
         ts = t["t_s"]
         rr = t["roll_rate_hz"]
         mask = ~np.isnan(rr)
-        label = "Roll Rate" if i == 0 else None
-        for ln in ax.plot(ts[mask], rr[mask], color="black", linewidth=lw, alpha=alpha, label=label):
+        label = "|Roll Rate|" if i == 0 else None
+        for ln in ax.plot(ts[mask], np.abs(rr[mask]), color="black", linewidth=lw, alpha=alpha, label=label):
             _tag_line(ln, t["sample_id"])
 
         # Overlay max permissible roll rate from damping post-processing
@@ -1596,7 +1596,7 @@ def save_replay_roll_rate(
                     max_roll_plotted = True
 
     ax.set_xlabel("Flight Time (s)", fontsize=11)
-    ax.set_ylabel("Roll Rate (Hz)", fontsize=11)
+    ax.set_ylabel("|Roll Rate| (Hz)", fontsize=11)
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
     ax.legend(fontsize=9, framealpha=0.9, edgecolor="gray")
 
