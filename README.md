@@ -115,16 +115,6 @@ python . replay ../simulations/cases/g2b2-cape-wrath/results/summary.yaml --non-
 python . replay ../simulations/cases/g2b2-cape-wrath/results/summary.yaml --compliant --scenario nominal
 ```
 
-Valid reason keywords:
-
-| Keyword | Violation |
-|---------|-----------|
-| `footprint` | Trajectory exited the buffered danger area |
-| `ceiling` | Apogee above the buffered altitude ceiling |
-| `stability` | Static margin below minimum |
-| `coastline` | Landing point is at sea |
-| `monitor` | Landing outside the monitored area |
-
 **Flags:**
 
 | Flag | Effect |
@@ -133,9 +123,19 @@ Valid reason keywords:
 | `--scenario NAME` | Scenario name (`nominal`, `ballistic`, `drogue_only`, `premature_main`). Required with `--sample`; optional filter for `--compliant` / `--non-compliant` |
 | `--sample INTEGER` | Sample index (requires `--scenario`) |
 | `--non-compliant` | Replay all non-compliant samples |
-| `--reason KEYWORD` | Filter `--non-compliant` by violation type; repeatable (see above) |
+| `--reason KEYWORD` | Filter `--non-compliant` by violation type (requires `--non-compliant`). May be repeated to include multiple types — samples matching **any** of the given reasons are replayed. Omit to replay all non-compliant samples regardless of reason. |
 | `--compliant` | Replay all compliant samples |
 | `-q`, `--no-popup` | Save figures to disk instead of displaying interactively |
+
+Valid `--reason` keywords:
+
+| Keyword | Violation |
+|---------|-----------|
+| `footprint` | Trajectory exited the buffered danger area |
+| `ceiling` | Apogee above the buffered altitude ceiling |
+| `stability` | Static margin below minimum |
+| `coastline` | Landing point is at sea |
+| `monitor` | Landing outside the monitored area |
 
 
 ## Key Concepts
