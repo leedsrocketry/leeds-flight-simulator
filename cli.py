@@ -756,6 +756,31 @@ def replay(
                     scenario_filter=scenario_name,
                 )
 
+        # --- Check for compliance mismatches vs original run ---
+        samples_csv_check = summary_dir / "samples.csv"
+        if samples_csv_check.exists():
+            import csv as _csv
+            orig: dict[tuple[int, str], bool] = {}
+            with open(samples_csv_check, newline="", encoding="utf-8") as _f:
+                for _row in _csv.DictReader(_f):
+                    _key = (int(_row["sample_id"]), _row["scenario"].strip())
+                    _cols = [c for c in _row if c.endswith("_compliant")]
+                    _ok = all(_row[c].strip().lower() not in ("false", "0", "no")
+                             for c in _cols)
+                    orig[_key] = _ok
+            n_mismatch = sum(
+                1 for sr in results
+                if (sr.sample_id, sr.scenario) in orig
+                and sr.compliant != orig[(sr.sample_id, sr.scenario)]
+            )
+            if n_mismatch > 0:
+                warnings.warn(
+                    f"{n_mismatch} of {len(results)} replayed samples have "
+                    f"different compliance results to the original run. "
+                    f"This is expected if the simulation config has changed "
+                    f"since the run (e.g. integrator tolerances)."
+                )
+
         if not results:
             display.stop()
             console.print()

@@ -414,6 +414,10 @@ def _make_broken_altitude_axes(
     # Secondary Y axis: km (offset left spine)
     ax_km = ax_l.twinx()
     ax_km.set_ylim(ax_l.get_ylim())
+    # Ensure ax_l stays on top for pick events (twinx puts ax_km last
+    # in the figure axes list, which means it intercepts events first).
+    ax_l.set_zorder(ax_km.get_zorder() + 1)
+    ax_l.patch.set_visible(False)  # transparent so ax_km labels show through
     ax_km.yaxis.set_ticks_position("left")
     ax_km.yaxis.set_label_position("left")
     ax_km.spines["left"].set_position(("outward", 68))
@@ -1353,7 +1357,7 @@ class ReplayPicker:
             ("stability", sr.stability_compliant, "static margin violation"),
         ]
         if sr.landing_at_sea is not None:
-            checks.append(("coastline", not sr.landing_at_sea, "landing at sea"))
+            checks.append(("coastline", sr.landing_at_sea, "landing fails coastline check"))
         if sr.in_coverage is not None:
             checks.append(("monitor", sr.in_coverage, "outside monitored area"))
 
