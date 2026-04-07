@@ -83,7 +83,7 @@ class RailConfig:
 @dataclass(frozen=True)
 class SurfaceWindConfig:
     speed_ms: float        # m/s
-    bearing_deg: float     # degrees clockwise from North
+    bearing_deg: float     # degrees clockwise from North — direction wind is blowing TOWARDS
     blend_height_m: float  # metres AGL — always required when section is present
 
 

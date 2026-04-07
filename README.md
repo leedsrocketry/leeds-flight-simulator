@@ -178,17 +178,21 @@ The `wind_profiles` field in `simulation.yaml` can point to either a single `.np
 
 The simulator has no knowledge of how the profiles were generated; all source-specific logic (EarthGRAM, GFS, ECMWF, radiosonde, perturbation modelling) is handled by [windgen](https://github.com/leedsrocketry/windgen). Each `.npz` file must contain:
 
+**Wind components use the "blowing towards" convention.** Positive `wind_east_ms` means wind blowing towards east; positive `wind_north_ms` means wind blowing towards north. This matches the standard meteorological u/v component convention used by GFS, ECMWF, and EarthGRAM.
+
 | Array Key | Shape | Description |
 |-----------|-------|-------------|
 | `altitude_m` | `(M,)` | Altitude grid in metres AGL, monotonically increasing |
-| `wind_east_ms` | `(N, M)` | Eastward wind component per profile (m/s) |
-| `wind_north_ms` | `(N, M)` | Northward wind component per profile (m/s) |
+| `wind_east_ms` | `(N, M)` | Eastward wind component per profile (m/s, positive = blowing towards east) |
+| `wind_north_ms` | `(N, M)` | Northward wind component per profile (m/s, positive = blowing towards north) |
 
 `N` must be >= `samples` under `monte_carlo` in `simulation.yaml`. Sample `i` uses profile `i`.
 
 ### Surface Wind Override
 
 When a `surface_wind` sub-section is present under `launch` in `simulation.yaml`, a user-specified surface wind replaces the lower portion of each wind profile. The override blends linearly into the profile wind between ground level and `blend_height_m`. Omit the section entirely to disable. Useful on launch day when you have an anemometer reading at the pad but are using forecast or balloon data for the upper atmosphere.
+
+**`bearing_deg` is the direction the wind is blowing towards** (its heading), measured in degrees clockwise from north. A bearing of 0° means wind blowing towards north; 90° means wind blowing towards east. This is consistent with the `wind_east_ms`/`wind_north_ms` component convention described above.
 
 
 ## Input Files

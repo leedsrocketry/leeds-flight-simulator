@@ -29,15 +29,22 @@ from config import SurfaceWindConfig
 class WindEnsemble:
     """Loaded and pre-processed wind profile ensemble.
 
+    **Wind components use the "blowing towards" convention throughout LFS.**
+    Positive ``wind_east_ms`` means wind blowing towards east; positive
+    ``wind_north_ms`` means wind blowing towards north.  This matches the
+    standard meteorological u/v component convention (GFS, ECMWF, EarthGRAM).
+
     Attributes
     ----------
     altitude_m : (M,) float64
         Altitude grid in metres AGL, monotonically increasing.
     wind_east_ms : (N, M) float64
-        Eastward wind component for each profile at each altitude.
-        Surface override (if any) has already been applied.
+        Eastward wind component for each profile at each altitude (m/s,
+        positive = blowing towards east).  Surface override (if any)
+        has already been applied.
     wind_north_ms : (N, M) float64
-        Northward wind component. Same layout as wind_east_ms.
+        Northward wind component (m/s, positive = blowing towards north).
+        Same layout as wind_east_ms.
     mean_east_ms : (M,) float64
         Arithmetic mean eastward wind across all N profiles (for optimisation).
     mean_north_ms : (M,) float64
@@ -95,6 +102,10 @@ def load_wind_ensemble(
     surface_wind: SurfaceWindConfig | None = None,
 ) -> WindEnsemble:
     """Load wind profiles from a .npz file and return a WindEnsemble.
+
+    The .npz must use the **"blowing towards"** convention: positive
+    ``wind_east_ms`` = wind blowing towards east, positive
+    ``wind_north_ms`` = wind blowing towards north.
 
     Parameters
     ----------
@@ -171,6 +182,8 @@ def _apply_surface_wind(
     cfg: SurfaceWindConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return new east/north arrays with the surface wind blended in."""
+    # bearing_deg is the direction the wind is blowing TOWARDS,
+    # measured clockwise from North.  0° = towards north, 90° = towards east.
     bearing_rad = np.radians(cfg.bearing_deg)
     ov_east = cfg.speed_ms * np.sin(bearing_rad)
     ov_north = cfg.speed_ms * np.cos(bearing_rad)
