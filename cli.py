@@ -307,6 +307,34 @@ def _clear_results(results_root: Path, display: _RunDisplay) -> None:
 
 
 
+def _tile_figures() -> None:
+    """Arrange all open matplotlib figures in a grid filling the screen."""
+    import matplotlib.pyplot as plt
+    figs = [plt.figure(n) for n in plt.get_fignums()]
+    n = len(figs)
+    if n == 0:
+        return
+    try:
+        screen = figs[0].canvas.manager.window.screen()
+        geom = screen.availableGeometry()
+        sx, sy, sw, sh = geom.x(), geom.y(), geom.width(), geom.height()
+    except Exception:
+        return
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    cw = sw // cols
+    ch = sh // rows
+    for i, fig in enumerate(figs):
+        r, c = divmod(i, cols)
+        try:
+            win = fig.canvas.manager.window
+            win.setGeometry(sx + c * cw, sy + r * ch, cw, ch)
+            win.showMinimized()
+            win.showNormal()
+            win.raise_()
+            win.activateWindow()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +652,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
     console.print()
 
     if not no_popup:
+        _tile_figures()
         plt.show()
 
 
@@ -819,7 +848,8 @@ def replay(
         if not no_popup:
             if replay_figures:
                 _picker = ReplayPicker(replay_figures, results)  # noqa: F841
-            plt.show()
+            _tile_figures()
+        plt.show()
 
     finally:
         _stop_warning_capture(_orig_warn)
@@ -909,7 +939,8 @@ def verify(config_path: Path, inclination: float | None,
             ver_result.figure.savefig(fig_path, dpi=150, bbox_inches="tight")
             console.print(f"Figure saved to: {fig_path}")
         else:
-            plt.show()
+            _tile_figures()
+        plt.show()
 
     console.print()
 
@@ -1017,6 +1048,7 @@ def damping(config_path: Path, no_popup: bool) -> None:
         for fp in figure_paths:
             console.print(f"Saved: {fp}")
     elif not no_popup:
+        _tile_figures()
         plt.show()
 
     console.print()
