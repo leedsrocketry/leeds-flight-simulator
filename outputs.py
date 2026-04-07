@@ -1222,12 +1222,13 @@ class ReplayPicker:
 
     After all ``save_replay_*`` figures have been created, construct a
     ``ReplayPicker`` with the list of figures and the corresponding
-    ``SampleResult`` list.  It wires up ``pick_event`` and
-    ``button_press_event`` on every figure so that:
+    ``SampleResult`` list.  It wires up ``pick_event`` on every figure
+    so that:
 
-    * Clicking a sample trace **hides every other sample** across all
-      figures and prints a detail panel to the terminal.
-    * Clicking empty space **on the same figure** restores all traces.
+    * Clicking a sample trace **isolates it** across all figures and
+      shows a detail panel in the terminal (overwriting any previous).
+    * Pressing **Enter** in the terminal deselects — all traces
+      restored, panel cleared.
     """
 
     def __init__(
@@ -1235,6 +1236,10 @@ class ReplayPicker:
         figures: list[plt.Figure],
         replayed: list[SampleResult],
     ) -> None:
+        from rich.console import Console
+        from rich.live import Live
+        from rich.text import Text
+
         # Build sample_id → SampleResult lookup
         self._samples: dict[int, SampleResult] = {
             sr.sample_id: sr for sr in replayed
@@ -1260,24 +1265,24 @@ class ReplayPicker:
                 (ln.get_alpha() or 1.0, ln.get_linewidth()) for ln in lines
             ]
 
-        # Track whether the current click cycle triggered a pick
-        self._pick_handled = False
+        # Rich Live widget for the detail panel (overwrites in-place)
+        self._live = Live(Text(), console=Console(), refresh_per_second=4)
+        self._live.start()
 
-        # Connect events
+        # Connect pick and key events on every figure
         self._cids: list = []
         for fig in figures:
-            cid_btn = fig.canvas.mpl_connect("button_press_event", self._on_button_press)
-            cid_pick = fig.canvas.mpl_connect("pick_event", self._on_pick)
-            cid_rel = fig.canvas.mpl_connect("button_release_event", self._on_button_release)
-            self._cids.append((fig, cid_btn, cid_pick, cid_rel))
+            cid_pick = fig.canvas.mpl_connect(
+                "pick_event", self._on_pick,
+            )
+            cid_key = fig.canvas.mpl_connect(
+                "key_press_event", self._on_key,
+            )
+            self._cids.append((fig, cid_pick, cid_key))
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
-
-    def _on_button_press(self, event) -> None:
-        """Reset pick-handled flag at the start of each click."""
-        self._pick_handled = False
 
     def _on_pick(self, event) -> None:
         """Handle a pick on a tagged line."""
@@ -1285,22 +1290,20 @@ class ReplayPicker:
         sid = getattr(artist, _TAG_ATTR, None)
         if sid is None:
             return
-        self._pick_handled = True
         if self._selected_id == sid:
-            return  # already selected — release handler will not deselect
+            return  # already selected
         self._selected_id = sid
         self._isolate(sid)
-        self._print_detail(sid)
+        self._show_detail(sid)
 
-    def _on_button_release(self, event) -> None:
-        """Deselect if the click did not hit any tagged line."""
-        if self._selected_id is None:
+    def _on_key(self, event) -> None:
+        """Escape deselects the current sample."""
+        if event.key != "escape" or self._selected_id is None:
             return
-        if self._pick_handled:
-            return  # click landed on a trace
-        # Click on empty space — deselect
         self._restore_all()
         self._selected_id = None
+        from rich.text import Text
+        self._live.update(Text())
         for f in self._figures:
             f.canvas.draw_idle()
 
@@ -1335,16 +1338,13 @@ class ReplayPicker:
     # Terminal detail panel
     # ------------------------------------------------------------------
 
-    def _print_detail(self, sid: int) -> None:
-        """Print a rich panel with sample details to the terminal."""
-        from rich.console import Console
+    def _show_detail(self, sid: int) -> None:
+        """Update the live panel with sample details."""
         from rich.panel import Panel
 
         sr = self._samples.get(sid)
         if sr is None:
             return
-
-        console = Console()
 
         # Build compliance lines
         checks = [
@@ -1379,16 +1379,15 @@ class ReplayPicker:
             f"\n"
             f"Compliance:  {status}\n"
             + "\n".join(compliance_lines)
+            + "\n\n[dim]Press Escape to deselect[/dim]"
         )
 
-        console.print()
-        console.print(Panel(
+        self._live.update(Panel(
             text,
             border_style="white",
             title="SAMPLE DETAIL",
             title_align="left",
         ))
-        console.print()
 
 
 def save_replay_altitude(
