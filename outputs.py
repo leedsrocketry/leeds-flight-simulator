@@ -1037,12 +1037,12 @@ def save_dispersion_plot(
             ])
             ax.scatter(
                 wm_pts[:, 0], wm_pts[:, 1],
-                s=1, c=colour, alpha=0.4, zorder=8, linewidths=0,
+                s=4, c=colour, alpha=1.0, zorder=8, linewidths=0,
             )
         legend_handles.append(mlines.Line2D(
             [], [], marker="o", color="none",
             markerfacecolor="grey", markeredgecolor="none",
-            markersize=3, linestyle="None", label="Landing Points",
+            markersize=4, linestyle="None", label="Landing Points",
         ))
 
         apogee_wm = np.array([
@@ -1051,12 +1051,12 @@ def save_dispersion_plot(
         ])
         ax.scatter(
             apogee_wm[:, 0], apogee_wm[:, 1],
-            s=1, c="blue", alpha=0.3, zorder=8, linewidths=0,
+            s=4, c="blue", alpha=1.0, zorder=8, linewidths=0,
         )
         legend_handles.append(mlines.Line2D(
             [], [], marker="o", color="none",
             markerfacecolor="blue", markeredgecolor="none",
-            markersize=3, linestyle="None", label="Apogee Points",
+            markersize=4, linestyle="None", label="Apogee Points",
         ))
 
     ax.legend(handles=legend_handles, loc="upper right", fontsize=9).set_zorder(20)
