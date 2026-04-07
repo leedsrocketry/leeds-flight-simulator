@@ -2050,7 +2050,9 @@ def run_trajectory(
 
     if not _ceiling_ok or not _footprint_ok or not stab_ok:
         # Skip descent — sample is already non-compliant.
-        summary = _make_summary(apogee_pos, apogee_t)
+        # Landing position is NaN (no descent was simulated).
+        no_landing = np.array([math.nan, math.nan, math.nan])
+        summary = _make_summary(no_landing, math.nan)
         profile = _maybe_profile()
         return (summary, profile) if keep_profile else summary
 

@@ -623,6 +623,12 @@ def _fit_ellipse_threshold(
     if points_ne.ndim != 2 or points_ne.shape[1] != 2:
         raise ValueError("points_ne must be (N, 2): [north_km, east_km]")
 
+    # Drop rows with NaN (samples that terminated before landing)
+    mask = ~np.isnan(points_ne).any(axis=1)
+    points_ne = points_ne[mask]
+    if len(points_ne) < 3:
+        return None
+
     north, east = points_ne[:, 0], points_ne[:, 1]
     mean_e, mean_n = east.mean(), north.mean()
 
@@ -982,9 +988,14 @@ def save_dispersion_plot(
     all_north_km = np.array([r.landing_north / 1000.0 for r in results])
     all_east_km = np.array([r.landing_east / 1000.0 for r in results])
 
+    # Drop NaN (samples that terminated before landing) for extent computation
+    _valid = ~(np.isnan(all_north_km) | np.isnan(all_east_km))
+    _north_valid = all_north_km[_valid]
+    _east_valid = all_east_km[_valid]
+
     # --- Build map ---
-    ar_n = float(np.ptp(all_north_km)) + 4.0 if len(all_north_km) > 0 else 4.0
-    ar_e = float(np.ptp(all_east_km)) + 4.0 if len(all_east_km) > 0 else 4.0
+    ar_n = float(np.ptp(_north_valid)) + 4.0 if len(_north_valid) > 0 else 4.0
+    ar_e = float(np.ptp(_east_valid)) + 4.0 if len(_east_valid) > 0 else 4.0
     ar = ar_e / ar_n if ar_n > 0 else 1.0
     base = 9
     figsize = (base, base / ar) if ar >= 1 else (base * ar, base)
@@ -992,8 +1003,8 @@ def save_dispersion_plot(
 
     km_to_wm, legend_handles = _build_map_axes(
         ax, sim_cfg,
-        extra_north_km=all_north_km,
-        extra_east_km=all_east_km,
+        extra_north_km=_north_valid,
+        extra_east_km=_east_valid,
     )
 
     # --- Landing point ellipses per scenario ---
@@ -1009,6 +1020,8 @@ def save_dispersion_plot(
             continue
 
         el = _fit_ellipse_threshold(pts_arr, compliance_threshold)
+        if el is None:
+            continue
         colour = ellipse_colours.get(key, "grey")
         style = ellipse_styles[i % len(ellipse_styles)]
         label = SCENARIO_LABELS.get(key, key)
@@ -1031,6 +1044,11 @@ def save_dispersion_plot(
     if show_points:
         for key, pts_list in scenario_points.items():
             pts_arr = np.array(pts_list)
+            # Drop NaN rows (samples that terminated before landing)
+            mask = ~np.isnan(pts_arr).any(axis=1)
+            pts_arr = pts_arr[mask]
+            if len(pts_arr) == 0:
+                continue
             colour = ellipse_colours.get(key, "grey")
             wm_pts = np.array([
                 km_to_wm(n, e) for n, e in pts_arr
