@@ -847,13 +847,15 @@ def replay(
         out_dir = summary_dir if no_popup else None
         figure_paths: list[Path] = []
         replay_figures: list[plt.Figure] = []
-        for save_fn, name in [
+        replay_plots: list[tuple] = [
             (save_replay_3d, "3D isometric"),
             (save_replay_plan_view, "plan view"),
             (save_replay_altitude, "altitude-time"),
             (save_replay_aoa, "angle of attack"),
-            (save_replay_roll_rate, "roll rate"),
-        ]:
+        ]
+        if aero_model.has_components:
+            replay_plots.append((save_replay_roll_rate, "roll rate"))
+        for save_fn, name in replay_plots:
             try:
                 result = save_fn(results, sim_cfg, output_dir=out_dir)
                 if isinstance(result, Path):
