@@ -168,7 +168,7 @@ Which scenarios are active depends on the vehicle's recovery configuration:
 
 `premature_main` is suppressed when `main.threshold = "apogee"` because apogee deployment is already the earliest possible — no earlier failure mode exists.
 
-Scenarios listed in `coastline_check_scenarios` or `monitor_check_scenarios` that are not active for the current vehicle are silently skipped with a warning.
+Scenarios listed in `footprint_check_scenarios`, `coastline_check_scenarios`, or `monitor_check_scenarios` that are not active for the current vehicle are silently skipped with a warning.
 
 ### Wind Profiles
 
@@ -343,9 +343,10 @@ Omit the `coastline` key from `simulation.yaml` to disable the check entirely.
 A sample is compliant if **all** of the following hold:
 
 1. **Stability margin** — checked during ascent only (up to apogee). Whenever AoA < 5° (hardcoded threshold that excludes rail-exit and apogee transients): static margin ≥ `sm_subsonic_min` calibres below Mach 0.91, or ≥ `sm_supersonic_min` calibres at or above it. Violation terminates the sample immediately; no descent phase is run. Maximum AoA is recorded but is not an acceptance criterion.
-2. **Containment** — landing point inside the buffered danger area and peak altitude below the buffered altitude ceiling.
-3. **Coastline** — if a coastline file is provided, the landing point must satisfy the configured `coastline_mode`.
-4. **Monitor coverage** — landing within the configured radius of at least one monitor station. Applied only to scenarios listed in `monitor_check_scenarios`.
+2. **Danger area footprint** — the full trajectory (ascent and descent) must remain inside the buffered danger area. Applied only to scenarios listed in `footprint_check_scenarios`. Unlisted scenarios are exempt — for example, `premature_main` may be excluded because a small percentage of flights drifting outside the boundary under a slow main parachute is acceptably unlikely and low-risk.
+3. **Ceiling** — peak altitude below the buffered altitude ceiling.
+4. **Coastline** — if a coastline file is provided, the landing point must satisfy the configured `coastline_mode`. Applied only to scenarios listed in `coastline_check_scenarios`.
+5. **Monitor coverage** — landing within the configured radius of at least one monitor station. Applied only to scenarios listed in `monitor_check_scenarios`.
 
 A run passes if ≥ `compliance_threshold` fraction of samples are compliant. All active scenario runs must pass.
 

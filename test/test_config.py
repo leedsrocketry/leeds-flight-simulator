@@ -88,6 +88,9 @@ _MINIMAL_SIM_YAML = """
         coastline_check_scenarios:
           - nominal
           - ballistic
+        footprint_check_scenarios:
+          - nominal
+          - ballistic
         monitor_check_scenarios:
           - ballistic
           - drogue_only
@@ -279,6 +282,8 @@ def test_acceptance_scenario_lists(tmp_path):
     acc = cfg.monte_carlo.acceptance
     assert "nominal" in acc.coastline_check_scenarios
     assert "ballistic" in acc.coastline_check_scenarios
+    assert "nominal" in acc.footprint_check_scenarios
+    assert "ballistic" in acc.footprint_check_scenarios
     assert "ballistic" in acc.monitor_check_scenarios
     assert "drogue_only" in acc.monitor_check_scenarios
 
@@ -286,10 +291,11 @@ def test_acceptance_scenario_lists(tmp_path):
 def test_acceptance_scenario_lists_empty_when_omitted(tmp_path):
     """Omitting scenario lists gives empty tuples — no check runs."""
     lines = [l for l in _MINIMAL_SIM_YAML.splitlines()
-             if not any(k in l for k in ("sea_check", "monitor_check", "- nominal",
-                                         "- ballistic", "- drogue_only"))]
+             if not any(k in l for k in ("sea_check", "footprint_check", "monitor_check",
+                                         "- nominal", "- ballistic", "- drogue_only"))]
     cfg = load_simulation_config(_write(tmp_path, "s.yaml", "\n".join(lines)))
     assert cfg.monte_carlo.acceptance.coastline_check_scenarios == ()
+    assert cfg.monte_carlo.acceptance.footprint_check_scenarios == ()
     assert cfg.monte_carlo.acceptance.monitor_check_scenarios == ()
 
 

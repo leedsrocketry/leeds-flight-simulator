@@ -381,11 +381,19 @@ def run_sample(
         )
         monitor_compliant = in_coverage
 
+    # Footprint check — full trajectory must stay inside the buffered danger area,
+    # but only for scenarios listed in footprint_check_scenarios.  Unlisted
+    # scenarios (e.g. premature_main) are exempt: a slow parachute drifting
+    # outside the boundary is low-risk and acceptably unlikely.
+    footprint_ok = True
+    if scenario_name in acc.footprint_check_scenarios:
+        footprint_ok = summary.footprint_compliant
+
     # --- Assemble overall compliance ---
-    # FlightSummary provides footprint/ceiling/stability; this layer adds
-    # coastline and monitor checks that dynamics.py has no knowledge of.
+    # FlightSummary provides ceiling/stability; this layer adds footprint
+    # (scenario-filtered), coastline, and monitor checks.
     dynamics_ok = (
-        summary.footprint_compliant
+        footprint_ok
         and summary.ceiling_compliant
         and summary.stability_compliant
     )
@@ -395,7 +403,7 @@ def run_sample(
     violation = ""
     if not summary.stability_compliant:
         violation = "Stability violation"
-    elif not summary.footprint_compliant:
+    elif not footprint_ok:
         violation = "Trajectory exited buffered danger area"
     elif not summary.ceiling_compliant:
         violation = "Apogee above buffered ceiling"
@@ -707,6 +715,12 @@ def run_monte_carlo(
         if s not in active:
             warnings_list.append(
                 f"coastline_check_scenarios includes '{s}' which is not active "
+                f"for this vehicle configuration"
+            )
+    for s in acc.footprint_check_scenarios:
+        if s not in active:
+            warnings_list.append(
+                f"footprint_check_scenarios includes '{s}' which is not active "
                 f"for this vehicle configuration"
             )
     for s in acc.monitor_check_scenarios:

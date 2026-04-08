@@ -199,6 +199,7 @@ def _make_sim_cfg(tmp_path: Path) -> SimulationConfig:
                 sm_subsonic_min=1.5,
                 sm_supersonic_min=1.0,
                 coastline_check_scenarios=(),
+                footprint_check_scenarios=(),
                 monitor_check_scenarios=(),
             ),
         ),

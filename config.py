@@ -109,6 +109,7 @@ class AcceptanceConfig:
     sm_subsonic_min: float             # calibres (M < 0.91)
     sm_supersonic_min: float           # calibres (M >= 0.91)
     coastline_check_scenarios: tuple[str, ...]  # scenarios checked for sea landing
+    footprint_check_scenarios: tuple[str, ...]  # scenarios whose full trajectory must stay inside danger area
     monitor_check_scenarios: tuple[str, ...]  # scenarios checked for monitor station coverage
 
 
@@ -423,6 +424,9 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
             sm_supersonic_min=float(acc_raw["sm_supersonic_min"]),
             coastline_check_scenarios=tuple(
                 str(s) for s in (acc_raw.get("coastline_check_scenarios") or [])
+            ),
+            footprint_check_scenarios=tuple(
+                str(s) for s in (acc_raw.get("footprint_check_scenarios") or [])
             ),
             monitor_check_scenarios=tuple(
                 str(s) for s in (acc_raw.get("monitor_check_scenarios") or [])
