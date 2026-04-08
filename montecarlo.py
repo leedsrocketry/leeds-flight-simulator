@@ -290,6 +290,86 @@ def generate_sample_draws(
 
 
 # ---------------------------------------------------------------------------
+# Compliance evaluation (single source of truth for all paths)
+# ---------------------------------------------------------------------------
+
+def evaluate_compliance(
+    summary: "FlightSummary",
+    scenario_name: str,
+    acc: "AcceptanceConfig",
+    site: "SiteConfig",
+    landing_north: float,
+    landing_east: float,
+    coastline_prepared: "PreparedGeometry | None",
+    station_norths: "np.ndarray | None",
+    station_easts: "np.ndarray | None",
+    station_radii: "np.ndarray | None",
+) -> tuple[bool, str, "bool | None", "bool | None"]:
+    """Evaluate post-trajectory compliance for a single sample.
+
+    Runs coastline, monitor, and footprint checks (scenario-filtered),
+    then assembles the overall compliance boolean and violation reason.
+
+    Returns
+    -------
+    (compliant, violation_reason, landing_at_sea, in_coverage)
+    """
+    # Coastline check (only for configured scenarios)
+    landing_at_sea: bool | None = None
+    sea_compliant = True
+    if coastline_prepared is not None and scenario_name in acc.coastline_check_scenarios:
+        landing_at_sea = check_coastline(
+            landing_north, landing_east,
+            coastline_prepared, site.coastline_mode,
+        )
+        sea_compliant = landing_at_sea
+
+    # Monitor coverage check (only for configured scenarios)
+    in_coverage: bool | None = None
+    monitor_compliant = True
+    if station_norths is not None and scenario_name in acc.monitor_check_scenarios:
+        in_coverage = check_monitor_coverage(
+            landing_north, landing_east,
+            station_norths, station_easts, station_radii,
+        )
+        monitor_compliant = in_coverage
+
+    # Footprint check — full trajectory must stay inside the buffered danger
+    # area, but only for scenarios listed in footprint_check_scenarios.
+    footprint_ok = True
+    if scenario_name in acc.footprint_check_scenarios:
+        footprint_ok = summary.footprint_compliant
+
+    # Assemble overall compliance
+    dynamics_ok = (
+        footprint_ok
+        and summary.ceiling_compliant
+        and summary.stability_compliant
+    )
+    compliant = dynamics_ok and sea_compliant and monitor_compliant
+
+    # Build violation reason string (first failure wins)
+    violation = ""
+    if not summary.stability_compliant:
+        if summary.violation_code == 3:
+            violation = "AoA exceeded limit"
+        elif summary.violation_code == 4:
+            violation = "Roll rate exceeded pitch-roll coupling limit"
+        else:
+            violation = "Static margin violation"
+    elif not footprint_ok:
+        violation = "Trajectory exited buffered danger area"
+    elif not summary.ceiling_compliant:
+        violation = "Apogee above buffered ceiling"
+    elif not sea_compliant:
+        violation = "Landing fails coastline check"
+    elif not monitor_compliant:
+        violation = "Landing outside monitored area"
+
+    return compliant, violation, landing_at_sea, in_coverage
+
+
+# ---------------------------------------------------------------------------
 # Single-sample runner
 # ---------------------------------------------------------------------------
 
@@ -361,61 +441,12 @@ def run_sample(
     landing_north = float(summary.landing_position[0])
     landing_east = float(summary.landing_position[1])
 
-    # Coastline check (only for configured scenarios)
-    landing_at_sea: bool | None = None
-    sea_compliant = True
-    if coastline_prepared is not None and scenario_name in acc.coastline_check_scenarios:
-        landing_at_sea = check_coastline(
-            landing_north, landing_east,
-            coastline_prepared, site.coastline_mode,
-        )
-        sea_compliant = landing_at_sea
-
-    # Monitor coverage check (only for configured scenarios)
-    in_coverage: bool | None = None
-    monitor_compliant = True
-    if station_norths is not None and scenario_name in acc.monitor_check_scenarios:
-        in_coverage = check_monitor_coverage(
-            landing_north, landing_east,
-            station_norths, station_easts, station_radii,
-        )
-        monitor_compliant = in_coverage
-
-    # Footprint check — full trajectory must stay inside the buffered danger area,
-    # but only for scenarios listed in footprint_check_scenarios.  Unlisted
-    # scenarios (e.g. premature_main) are exempt: a slow parachute drifting
-    # outside the boundary is low-risk and acceptably unlikely.
-    footprint_ok = True
-    if scenario_name in acc.footprint_check_scenarios:
-        footprint_ok = summary.footprint_compliant
-
-    # --- Assemble overall compliance ---
-    # FlightSummary provides ceiling/stability; this layer adds footprint
-    # (scenario-filtered), coastline, and monitor checks.
-    dynamics_ok = (
-        footprint_ok
-        and summary.ceiling_compliant
-        and summary.stability_compliant
+    # Post-sim checks and compliance assembly
+    compliant, violation, landing_at_sea, in_coverage = evaluate_compliance(
+        summary, scenario_name, acc, site,
+        landing_north, landing_east,
+        coastline_prepared, station_norths, station_easts, station_radii,
     )
-    compliant = dynamics_ok and sea_compliant and monitor_compliant
-
-    # Build violation reason string
-    violation = ""
-    if not summary.stability_compliant:
-        if summary.violation_code == 3:
-            violation = "AoA exceeded limit"
-        elif summary.violation_code == 4:
-            violation = "Roll rate exceeded pitch-roll coupling limit"
-        else:
-            violation = "Static margin violation"
-    elif not footprint_ok:
-        violation = "Trajectory exited buffered danger area"
-    elif not summary.ceiling_compliant:
-        violation = "Apogee above buffered ceiling"
-    elif not sea_compliant:
-        violation = "Landing fails coastline check"
-    elif not monitor_compliant:
-        violation = "Landing outside monitored area"
 
     return SampleResult(
         sample_id=sample_index,
