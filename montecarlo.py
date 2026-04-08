@@ -312,7 +312,7 @@ def evaluate_compliance(
 
     Returns
     -------
-    (compliant, violation_reason, landing_at_sea, in_coverage)
+    (compliant, violation_reason, footprint_ok, landing_at_sea, in_coverage)
     """
     # Coastline check (only for configured scenarios)
     landing_at_sea: bool | None = None
@@ -366,7 +366,7 @@ def evaluate_compliance(
     elif not monitor_compliant:
         violation = "Landing outside monitored area"
 
-    return compliant, violation, landing_at_sea, in_coverage
+    return compliant, violation, footprint_ok, landing_at_sea, in_coverage
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +442,7 @@ def run_sample(
     landing_east = float(summary.landing_position[1])
 
     # Post-sim checks and compliance assembly
-    compliant, violation, landing_at_sea, in_coverage = evaluate_compliance(
+    compliant, violation, footprint_ok, landing_at_sea, in_coverage = evaluate_compliance(
         summary, scenario_name, acc, site,
         landing_north, landing_east,
         coastline_prepared, station_norths, station_easts, station_radii,
@@ -467,7 +467,7 @@ def run_sample(
         min_sm_subsonic=summary.min_sm_subsonic,
         min_sm_supersonic=summary.min_sm_supersonic,
         compliant=compliant,
-        footprint_compliant=summary.footprint_compliant,
+        footprint_compliant=footprint_ok,
         ceiling_compliant=summary.ceiling_compliant,
         stability_compliant=summary.stability_compliant,
         landing_at_sea=landing_at_sea,

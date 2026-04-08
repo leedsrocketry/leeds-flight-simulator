@@ -1046,7 +1046,7 @@ def integrate_sixdof(
 
     # Hardcoded stability-check constants
     sm_transition_mach = 0.91
-    _min_q_pa = 500.0     # dynamic pressure gate (Pa)
+    _min_q_pa = 1000.0     # dynamic pressure gate (Pa)
     _max_aoa_deg = 12.0   # max acceptable AoA (degrees)
 
     # Tracking variables

@@ -346,15 +346,15 @@ Omit the `coastline` key from `simulation.yaml` to disable the check entirely.
 
 A sample is compliant if **all** of the following hold:
 
-1. **Static margin** — checked during ascent when dynamic pressure q > 500 Pa. Static margin ≥ `sm_subsonic_min` calibres below Mach 0.91, or ≥ `sm_supersonic_min` calibres at or above it. Violation terminates the sample immediately; no descent phase is run.
-2. **Angle of attack** — checked during ascent when q > 500 Pa. AoA must remain ≤ 12°. This is hardcoded as the conservative limit for linearised aerodynamic validity.
-3. **Roll rate** — checked during ascent when q > 500 Pa and per-component aero tables are loaded. Roll rate must stay below ω_d/3 (one third of the damped pitch natural frequency) to avoid pitch-roll coupling instability. Skipped in whole-vehicle aero mode.
+1. **Static margin** — checked during ascent when dynamic pressure exceeds the hardcoded threshold. Static margin ≥ `sm_subsonic_min` calibres below Mach 0.91, or ≥ `sm_supersonic_min` calibres at or above it. Violation terminates the sample immediately; no descent phase is run.
+2. **Angle of attack** — checked during ascent when dynamic pressure exceeds the threshold. AoA must remain ≤ 12°, the conservative limit for linearised aerodynamic validity.
+3. **Roll rate** — checked during ascent when dynamic pressure exceeds the threshold and per-component aero tables are loaded. Roll rate must stay below ω_d/3 (one third of the damped pitch natural frequency) to avoid pitch-roll coupling instability. Skipped in whole-vehicle aero mode.
 4. **Danger area footprint** — the full trajectory (ascent and descent) must remain inside the buffered danger area. Applied only to scenarios listed in `footprint_check_scenarios`. Unlisted scenarios are exempt — for example, `premature_main` may be excluded because a small percentage of flights drifting outside the boundary under a slow main parachute is acceptably unlikely and low-risk.
 5. **Ceiling** — peak altitude below the buffered altitude ceiling.
 6. **Coastline** — if a coastline file is provided, the landing point must satisfy the configured `coastline_mode`. Applied only to scenarios listed in `coastline_check_scenarios`.
 7. **Monitor coverage** — landing within the configured radius of at least one monitor station. Applied only to scenarios listed in `monitor_check_scenarios`.
 
-The first three checks share a common dynamic pressure gate (q > 500 Pa) that replaces the previous AoA < 5° threshold. This ensures stability checks are only enforced when the vehicle is flying fast enough for aerodynamic forces to be meaningful — naturally excluding rail exit, apogee, and descent under parachute.
+The first three checks share a common dynamic pressure gate that ensures stability checks are only enforced when the vehicle is flying fast enough for aerodynamic forces to be meaningful — naturally excluding rail exit, apogee, and descent under parachute.
 
 A run passes if ≥ `compliance_threshold` fraction of samples are compliant. All active scenario runs must pass.
 
