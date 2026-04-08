@@ -28,6 +28,7 @@ from outputs import (
     save_replay_plan_view,
     save_replay_altitude,
     _fit_ellipse_threshold,
+    _should_use_broken_axis,
 )
 
 
@@ -432,6 +433,32 @@ def _stub_summary(
         ceiling_compliant=True,
         stability_compliant=True,
     )
+
+
+class TestShouldUseBrokenAxis:
+    def test_single_time_no_split(self):
+        assert _should_use_broken_axis([100.0]) is False
+
+    def test_empty_no_split(self):
+        assert _should_use_broken_axis([]) is False
+
+    def test_similar_times_no_split(self):
+        assert _should_use_broken_axis([100.0, 120.0]) is False
+
+    def test_ballistic_vs_parachute_no_split(self):
+        # ~6:1 ratio (ballistic ~100s vs nominal ~650s) should not trigger
+        assert _should_use_broken_axis([100.0, 650.0]) is False
+
+    def test_premature_main_triggers_split(self):
+        # ~20:1 ratio (ballistic ~100s vs premature_main ~2000s)
+        assert _should_use_broken_axis([100.0, 2000.0]) is True
+
+    def test_exactly_at_threshold_no_split(self):
+        # Ratio of exactly 8.0 should NOT trigger (strictly greater than)
+        assert _should_use_broken_axis([100.0, 800.0]) is False
+
+    def test_just_above_threshold_split(self):
+        assert _should_use_broken_axis([100.0, 801.0]) is True
 
 
 class TestSaveAltitudePlot:

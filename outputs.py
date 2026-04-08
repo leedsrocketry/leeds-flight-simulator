@@ -354,6 +354,70 @@ def _km_formatter(x: float, _: float) -> str:
     return f"{x / M_TO_FT * M_TO_KM:.0f}"
 
 
+_BROKEN_AXIS_TIME_RATIO = 8.0
+
+
+def _should_use_broken_axis(landing_times: list[float]) -> bool:
+    """Return True if the spread in landing times warrants a broken x-axis."""
+    if len(landing_times) < 2:
+        return False
+    return max(landing_times) / max(min(landing_times), 1.0) > _BROKEN_AXIS_TIME_RATIO
+
+
+def _make_simple_altitude_axes(
+    t_max: float,
+    alt_max_ft: float,
+) -> tuple[plt.Figure, plt.Axes, plt.Axes]:
+    """Create a single-panel altitude figure with dual y-axes.
+
+    Returns *(fig, ax, ax_km)* where *ax* is the primary ft axis
+    and *ax_km* is the secondary km axis offset to the left.
+    """
+    fig, ax = plt.subplots(figsize=(14, 7))
+    fig.subplots_adjust(left=0.14, right=0.97, top=0.93, bottom=0.10)
+
+    ax.set_xlim(0, t_max)
+    ax.set_ylim(0, alt_max_ft)
+
+    # Tick spacing
+    raw_interval_s = t_max / 7
+    tick_interval_s = raw_interval_s
+    for step in [10, 20, 30, 60, 120, 180, 300, 600]:
+        if raw_interval_s <= step:
+            tick_interval_s = step
+            break
+    else:
+        tick_interval_s = round(raw_interval_s / 60) * 60
+    ax.xaxis.set_major_locator(mticker.MultipleLocator(tick_interval_s))
+
+    # Spines
+    ax.spines[["right", "top"]].set_visible(False)
+
+    # Primary Y axis: ft
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_ft_formatter))
+    ax.set_ylabel("Altitude (ft)", labelpad=8)
+
+    # Secondary Y axis: km (offset left spine)
+    ax_km = ax.twinx()
+    ax_km.set_ylim(ax.get_ylim())
+    ax.set_zorder(ax_km.get_zorder() + 1)
+    ax.patch.set_visible(False)
+    ax_km.yaxis.set_ticks_position("left")
+    ax_km.yaxis.set_label_position("left")
+    ax_km.spines["left"].set_position(("outward", 68))
+    ax_km.spines[["right", "top", "bottom"]].set_visible(False)
+    ft_ticks = ax.yaxis.get_major_locator().tick_values(0, alt_max_ft)
+    ft_ticks = ft_ticks[(ft_ticks >= 0) & (ft_ticks <= alt_max_ft)]
+    ax_km.set_yticks(ft_ticks)
+    ax_km.yaxis.set_major_formatter(mticker.FuncFormatter(_km_formatter))
+    ax_km.set_ylabel("Altitude (km)", labelpad=8)
+
+    # X-axis label
+    ax.set_xlabel("Flight Time (s)", fontsize=11)
+
+    return fig, ax, ax_km
+
+
 def _make_broken_altitude_axes(
     t_left_max: float,
     t_right_end: float,
@@ -463,35 +527,43 @@ def save_altitude_plot(
     """
     active_keys = [k for k in SCENARIO_KEYS if k in scenarios]
 
-    # Left panel x-range — all scenarios except premature_main (if it lands late)
-    left_keys = [k for k in active_keys if k != "premature_main"]
-    if not left_keys:
-        left_keys = active_keys
-    t_left_max = np.ceil(
-        max(scenarios[k][1][-1] for k in left_keys) * 1.05
-    )
-
-    # Right panel
-    LEFT_FRAC = 0.70
-    RIGHT_FRAC = 0.30
-    t_right_span = t_left_max * (RIGHT_FRAC / LEFT_FRAC)
-    if "premature_main" in scenarios:
-        t_pm_land_s = scenarios["premature_main"][1][-1]
-    else:
-        t_pm_land_s = 0.0
-    t_right_end = max(
-        t_left_max + 60.0 + t_right_span,
-        t_pm_land_s * 1.01,
-    )
+    landing_times = [scenarios[k][1][-1] for k in active_keys]
+    use_broken = _should_use_broken_axis(landing_times)
 
     # Y limits
     alt_max_ft = (
         max(np.max(scenarios[k][2]) for k in active_keys) * M_TO_FT * 1.08
     )
 
-    fig, ax_l, ax_r, _ax_km = _make_broken_altitude_axes(
-        t_left_max, t_right_end, alt_max_ft,
-    )
+    if use_broken:
+        # Left panel x-range — all scenarios except premature_main
+        left_keys = [k for k in active_keys if k != "premature_main"]
+        if not left_keys:
+            left_keys = active_keys
+        t_left_max = np.ceil(
+            max(scenarios[k][1][-1] for k in left_keys) * 1.05
+        )
+        LEFT_FRAC = 0.70
+        RIGHT_FRAC = 0.30
+        t_right_span = t_left_max * (RIGHT_FRAC / LEFT_FRAC)
+        if "premature_main" in scenarios:
+            t_pm_land_s = scenarios["premature_main"][1][-1]
+        else:
+            t_pm_land_s = 0.0
+        t_right_end = max(
+            t_left_max + 60.0 + t_right_span,
+            t_pm_land_s * 1.01,
+        )
+        fig, ax_l, ax_r, _ax_km = _make_broken_altitude_axes(
+            t_left_max, t_right_end, alt_max_ft,
+        )
+        axes: list[plt.Axes] = [ax_l, ax_r]
+        legend_ax = ax_r
+    else:
+        t_max = np.ceil(max(landing_times) * 1.05)
+        fig, ax, _ax_km = _make_simple_altitude_axes(t_max, alt_max_ft)
+        axes = [ax]
+        legend_ax = ax
 
     # Draw curves (reversed so Nominal paints on top)
     handles = []
@@ -501,22 +573,24 @@ def save_altitude_plot(
         colour = SCENARIO_COLOURS.get(key, "grey")
         alpha = SCENARIO_ALPHA.get(key, 0.6)
         kw = dict(color=colour, linewidth=1.8, alpha=alpha)
-        line, = ax_l.plot(t_s, alt_ft, **kw)
-        ax_r.plot(t_s, alt_ft, **kw)
+        line, = axes[0].plot(t_s, alt_ft, **kw)
+        for extra_ax in axes[1:]:
+            extra_ax.plot(t_s, alt_ft, **kw)
         handles.insert(0, line)
 
     # Horizontal apogee line
     apogee_ft = max(np.max(scenarios[k][2]) for k in active_keys) * M_TO_FT
     apogee_km = apogee_ft / M_TO_FT * M_TO_KM
     hline_kw = dict(color="grey", linewidth=0.9, linestyle="--", zorder=0)
-    ax_l.axhline(apogee_ft, **hline_kw)
-    ax_r.axhline(apogee_ft, **hline_kw)
+    for a in axes:
+        a.axhline(apogee_ft, **hline_kw)
 
     label_str = f"Apogee ({apogee_ft:,.0f} ft / {apogee_km:.1f} km)"
-    l_pos, r_pos = ax_l.get_position(), ax_r.get_position()
-    mid_x_fig = (l_pos.x0 + r_pos.x1) / 2
+    first_pos = axes[0].get_position()
+    last_pos = axes[-1].get_position()
+    mid_x_fig = (first_pos.x0 + last_pos.x1) / 2
     apogee_axes_frac = apogee_ft / alt_max_ft
-    apogee_fig_y = l_pos.y0 + apogee_axes_frac * l_pos.height
+    apogee_fig_y = first_pos.y0 + apogee_axes_frac * first_pos.height
     fig.text(
         mid_x_fig, apogee_fig_y, label_str,
         ha="center", va="bottom", fontsize=VLINE_LABEL_FONTSIZE, color="grey",
@@ -552,20 +626,22 @@ def save_altitude_plot(
     bbox_kw = dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8)
 
     for _idx, (t_s_ev, event_name) in enumerate(vline_events):
-        ax_l.axvline(t_s_ev, **vline_kw)
-        ax_r.axvline(t_s_ev, **vline_kw)
+        for a in axes:
+            a.axvline(t_s_ev, **vline_kw)
 
-        ax = (
-            ax_l
-            if ax_l.get_xlim()[0] <= t_s_ev <= ax_l.get_xlim()[1]
-            else ax_r
-        )
+        # Place label on whichever axis contains the event time
+        label_ax = axes[0]
+        for a in axes:
+            xl = a.get_xlim()
+            if xl[0] <= t_s_ev <= xl[1]:
+                label_ax = a
+                break
         y_pos = alt_max_ft * 0.05
 
         timestamp = fmt_timestamp(t_s_ev)
         combined_label = f"{event_name}\n{timestamp}"
 
-        ax.text(
+        label_ax.text(
             t_s_ev, y_pos, combined_label,
             rotation=90, ha="left", va="bottom",
             fontsize=VLINE_LABEL_FONTSIZE, color="grey",
@@ -573,7 +649,7 @@ def save_altitude_plot(
         )
 
     active_labels = [SCENARIO_LABELS.get(k, k) for k in active_keys]
-    ax_r.legend(
+    legend_ax.legend(
         handles=handles, labels=active_labels,
         loc="upper right", frameon=True, framealpha=0.9, edgecolor="gray",
     )
@@ -1402,9 +1478,9 @@ def save_replay_altitude(
 ) -> Path | plt.Figure:
     """Generate altitude-time replay plot.
 
-    Uses the same broken-x-axis layout as :func:`save_altitude_plot`
-    (via :func:`_make_broken_altitude_axes`) but without vertical event
-    lines or horizontal apogee annotations.
+    Uses either a single continuous x-axis or a broken-x-axis layout
+    depending on the spread of landing times across the replayed
+    scenarios.
 
     Parameters
     ----------
@@ -1430,32 +1506,41 @@ def save_replay_altitude(
         fig, _ax = plt.subplots()
         return fig
 
-    # Compute axis limits
-    non_pm = [t for t in trajectories if t["label"] != "Premature Main"]
-    left_ref = non_pm if non_pm else trajectories
-    t_left_max = np.ceil(
-        max(t["t_s"][-1] for t in left_ref) * 1.05
-    )
-
-    LEFT_FRAC = 0.70
-    RIGHT_FRAC = 0.30
-    t_right_span = t_left_max * (RIGHT_FRAC / LEFT_FRAC)
-    t_pm_max = max(
-        (t["t_s"][-1] for t in trajectories if t["label"] == "Premature Main"),
-        default=0.0,
-    )
-    t_right_end = max(
-        t_left_max + 60.0 + t_right_span,
-        t_pm_max * 1.01,
-    )
+    # Decide axis layout based on landing time spread
+    landing_times = [t["t_s"][-1] for t in trajectories]
+    use_broken = _should_use_broken_axis(landing_times)
 
     alt_max_ft = (
         max(np.max(t["alt_m"]) for t in trajectories) * M_TO_FT * 1.08
     )
 
-    fig, ax_l, ax_r, _ax_km = _make_broken_altitude_axes(
-        t_left_max, t_right_end, alt_max_ft,
-    )
+    if use_broken:
+        non_pm = [t for t in trajectories if t["label"] != "Premature Main"]
+        left_ref = non_pm if non_pm else trajectories
+        t_left_max = np.ceil(
+            max(t["t_s"][-1] for t in left_ref) * 1.05
+        )
+        LEFT_FRAC = 0.70
+        RIGHT_FRAC = 0.30
+        t_right_span = t_left_max * (RIGHT_FRAC / LEFT_FRAC)
+        t_pm_max = max(
+            (t["t_s"][-1] for t in trajectories if t["label"] == "Premature Main"),
+            default=0.0,
+        )
+        t_right_end = max(
+            t_left_max + 60.0 + t_right_span,
+            t_pm_max * 1.01,
+        )
+        fig, ax_l, ax_r, _ax_km = _make_broken_altitude_axes(
+            t_left_max, t_right_end, alt_max_ft,
+        )
+        axes: list[plt.Axes] = [ax_l, ax_r]
+        legend_ax = ax_r
+    else:
+        t_max = np.ceil(max(landing_times) * 1.05)
+        fig, ax, _ax_km = _make_simple_altitude_axes(t_max, alt_max_ft)
+        axes = [ax]
+        legend_ax = ax
 
     # Legend bookkeeping
     legend_counts: dict[str, int] = {}
@@ -1475,10 +1560,9 @@ def save_replay_altitude(
         legend_seen.add(legend_key)
 
         kw = dict(color=t["colour"], linewidth=lw, alpha=alpha)
-        for ln in ax_l.plot(t["t_s"], alt_ft, **kw):
-            _tag_line(ln, t["sample_id"])
-        for ln in ax_r.plot(t["t_s"], alt_ft, **kw):
-            _tag_line(ln, t["sample_id"])
+        for a in axes:
+            for ln in a.plot(t["t_s"], alt_ft, **kw):
+                _tag_line(ln, t["sample_id"])
 
         if show_label:
             legend_handles.append(mlines.Line2D(
@@ -1486,7 +1570,7 @@ def save_replay_altitude(
                 label=f"{legend_key} (n={legend_counts[legend_key]})",
             ))
 
-    ax_r.legend(
+    legend_ax.legend(
         handles=legend_handles, loc="upper right",
         fontsize=9, frameon=True, framealpha=0.9, edgecolor="gray",
     )

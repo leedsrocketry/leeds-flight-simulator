@@ -686,6 +686,7 @@ def run_monte_carlo(
     inclination_mean: float,
     progress_callback=None,
     scenario_done_callback=None,
+    filter_scenarios: tuple[str, ...] | None = None,
 ) -> MonteCarloResult:
     """Run the full Monte Carlo analysis across all active scenarios.
 
@@ -701,30 +702,48 @@ def run_monte_carlo(
     scenario_done_callback
         Optional callable ``(scenario_name, stats)`` fired when each
         scenario completes and its :class:`ScenarioStats` are available.
+    filter_scenarios
+        Optional tuple of scenario names to run.  If *None*, all active
+        scenarios are run.  Requested scenarios that are not active for
+        the vehicle configuration produce a warning and are skipped.
 
     Returns
     -------
     MonteCarloResult
     """
-    active = vehicle.recovery.active_scenarios
+    all_active = vehicle.recovery.active_scenarios
     warnings_list: list[str] = []
     acc = sim_cfg.monte_carlo.acceptance
 
+    # Apply CLI scenario filter
+    if filter_scenarios is not None:
+        for s in filter_scenarios:
+            if s not in all_active:
+                warnings_list.append(
+                    f"Requested scenario '{s}' is not active for this vehicle "
+                    f"configuration — skipping"
+                )
+        active = tuple(s for s in all_active if s in filter_scenarios)
+        if not active:
+            raise RuntimeError("None of the requested scenarios are active.")
+    else:
+        active = all_active
+
     # Warn about configured checks on inactive scenarios
     for s in acc.coastline_check_scenarios:
-        if s not in active:
+        if s not in all_active:
             warnings_list.append(
                 f"coastline_check_scenarios includes '{s}' which is not active "
                 f"for this vehicle configuration"
             )
     for s in acc.footprint_check_scenarios:
-        if s not in active:
+        if s not in all_active:
             warnings_list.append(
                 f"footprint_check_scenarios includes '{s}' which is not active "
                 f"for this vehicle configuration"
             )
     for s in acc.monitor_check_scenarios:
-        if s not in active:
+        if s not in all_active:
             warnings_list.append(
                 f"monitor_check_scenarios includes '{s}' which is not active "
                 f"for this vehicle configuration"

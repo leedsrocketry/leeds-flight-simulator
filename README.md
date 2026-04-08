@@ -86,11 +86,15 @@ python . run <simulation.yaml>
 | `-q`, `--no-popup` | Save figures to disk instead of displaying interactively |
 | `-p`, `--points` | Overlay individual apogee and landing scatter points on the dispersion plot |
 | `--no-termination` | Disable early termination on stability and AoA violations (all samples run to completion) |
+| `-s`, `--scenario` | Scenario(s) to simulate and plot. May be repeated. Default: all active scenarios. Requested scenarios that are not active for the vehicle configuration are skipped with a warning. |
 
-Example:
+When the landing time spread across the plotted scenarios is small, the altitude-time plot uses a single continuous x-axis. When a scenario lands much later than the rest (e.g. `premature_main`), a broken x-axis is used automatically.
+
+Examples:
 
 ```
 python . run ../simulations/cases/g2b2-cape-wrath/config.yaml -q
+python . run ../simulations/cases/g2b2-cape-wrath/config.yaml -s nominal -s ballistic -q
 ```
 
 ### Replaying Samples

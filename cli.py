@@ -399,7 +399,12 @@ def main():
 @click.option("-p", "--points", is_flag=True, help="Draw apogee and landing points on the dispersion plot.")
 @click.option("--no-termination", is_flag=True,
               help="Disable early termination on stability/AoA violations.")
-def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -> None:
+@click.option("-s", "--scenario", "scenarios", multiple=True,
+              type=click.Choice(list(SCENARIO_LABELS), case_sensitive=False),
+              help="Scenario(s) to simulate and plot.  May be repeated.  "
+                   "Default: all active scenarios.")
+def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool,
+        scenarios: tuple[str, ...]) -> None:
     """Run a Monte Carlo flight safety analysis."""
     import matplotlib.pyplot as plt
 
@@ -525,11 +530,13 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
 
         # --- Monte Carlo ---
         active_scenarios = vehicle.recovery.active_scenarios
+        filter_scenarios = scenarios if scenarios else None
+        display_scenarios = filter_scenarios if filter_scenarios else active_scenarios
         n_samples = sim_cfg.monte_carlo.samples
 
         display.update_status("Running Monte Carlo analysis...")
         tasks = {}
-        for scenario in active_scenarios:
+        for scenario in display_scenarios:
             label = SCENARIO_LABELS.get(scenario, scenario)
             tasks[scenario] = progress.add_task(label, total=n_samples)
             display.start_task(tasks[scenario])
@@ -557,6 +564,7 @@ def run(config_path: Path, no_popup: bool, points: bool, no_termination: bool) -
                 wind_ensemble, azimuth_mean, inclination_mean,
                 progress_callback=_mc_callback,
                 scenario_done_callback=_scenario_done,
+                filter_scenarios=filter_scenarios,
             )
         except RuntimeError as exc:
             _error_exit(str(exc), display)
