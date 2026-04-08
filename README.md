@@ -346,11 +346,15 @@ Omit the `coastline` key from `simulation.yaml` to disable the check entirely.
 
 A sample is compliant if **all** of the following hold:
 
-1. **Stability margin** — checked during ascent only (up to apogee). Whenever AoA < 5° (hardcoded threshold that excludes rail-exit and apogee transients): static margin ≥ `sm_subsonic_min` calibres below Mach 0.91, or ≥ `sm_supersonic_min` calibres at or above it. Violation terminates the sample immediately; no descent phase is run. Maximum AoA is recorded but is not an acceptance criterion.
-2. **Danger area footprint** — the full trajectory (ascent and descent) must remain inside the buffered danger area. Applied only to scenarios listed in `footprint_check_scenarios`. Unlisted scenarios are exempt — for example, `premature_main` may be excluded because a small percentage of flights drifting outside the boundary under a slow main parachute is acceptably unlikely and low-risk.
-3. **Ceiling** — peak altitude below the buffered altitude ceiling.
-4. **Coastline** — if a coastline file is provided, the landing point must satisfy the configured `coastline_mode`. Applied only to scenarios listed in `coastline_check_scenarios`.
-5. **Monitor coverage** — landing within the configured radius of at least one monitor station. Applied only to scenarios listed in `monitor_check_scenarios`.
+1. **Static margin** — checked during ascent when dynamic pressure q > 500 Pa. Static margin ≥ `sm_subsonic_min` calibres below Mach 0.91, or ≥ `sm_supersonic_min` calibres at or above it. Violation terminates the sample immediately; no descent phase is run.
+2. **Angle of attack** — checked during ascent when q > 500 Pa. AoA must remain ≤ 12°. This is hardcoded as the conservative limit for linearised aerodynamic validity.
+3. **Roll rate** — checked during ascent when q > 500 Pa and per-component aero tables are loaded. Roll rate must stay below ω_d/3 (one third of the damped pitch natural frequency) to avoid pitch-roll coupling instability. Skipped in whole-vehicle aero mode.
+4. **Danger area footprint** — the full trajectory (ascent and descent) must remain inside the buffered danger area. Applied only to scenarios listed in `footprint_check_scenarios`. Unlisted scenarios are exempt — for example, `premature_main` may be excluded because a small percentage of flights drifting outside the boundary under a slow main parachute is acceptably unlikely and low-risk.
+5. **Ceiling** — peak altitude below the buffered altitude ceiling.
+6. **Coastline** — if a coastline file is provided, the landing point must satisfy the configured `coastline_mode`. Applied only to scenarios listed in `coastline_check_scenarios`.
+7. **Monitor coverage** — landing within the configured radius of at least one monitor station. Applied only to scenarios listed in `monitor_check_scenarios`.
+
+The first three checks share a common dynamic pressure gate (q > 500 Pa) that replaces the previous AoA < 5° threshold. This ensures stability checks are only enforced when the vehicle is flying fast enough for aerodynamic forces to be meaningful — naturally excluding rail exit, apogee, and descent under parachute.
 
 A run passes if ≥ `compliance_threshold` fraction of samples are compliant. All active scenario runs must pass.
 
@@ -433,7 +437,19 @@ Landing points colour-coded by descent scenario, overlaid on an OS Maps base map
 
 ![Altitude plot](doc/altitude_plot.png)
 
-Mean altitude profile vs. time for each active descent scenario.
+Mean altitude profile vs. time for each active descent scenario. When the landing time spread across scenarios is small, a single continuous x-axis is used. When a scenario lands much later than the rest (e.g. `premature_main`), the x-axis is automatically broken into two panels to keep the ascent detail readable.
+
+### Damping Plot
+
+![Damping plot](doc/damping.png)
+
+Five subplots assessing pitch/yaw dynamic stability from rail exit to apogee (see [Damping Assessment](#damping-assessment) for interpretation).
+
+### Damping Breakdown
+
+![Damping breakdown](doc/damping_breakdown.png)
+
+Per-component contributions to the corrective moment (C1) and aerodynamic damping (C2A), revealing which components drive stability and which contribute anti-damping (see [Damping Assessment](#damping-assessment)).
 
 
 ## Replaying Samples
@@ -445,8 +461,8 @@ Replay displays figures interactively by default. Pass `-q` to save them to disk
 1. **3D Isometric** — trajectory in NED space with the map overlaid on the ground plane, matching the dispersion plot style. Coloured by descent scenario; pink if terminated early due to a stability or AoA violation.
 2. **Plan View** — same as above, viewed from directly above.
 3. **Altitude vs. Time** — full flight from rail exit to landing.
-4. **Angle of Attack vs. Time** — AoA profile over the flight.
-5. **Roll Rate vs. Time** — roll rate history. When per-component aero tables are loaded, a dashed red line shows the maximum permissible roll rate — defined as one third of the damped pitch natural frequency (ω_d / 3). Beyond this rate, pitch-roll coupling becomes significant and the linearised damping model breaks down.
+4. **Angle of Attack vs. Time** — body-frame AoA during ascent. Should remain below 5–10° for a well-damped vehicle; spikes indicate dynamic instability or strong wind shear.
+5. **Roll Rate vs. Time** — roll rate magnitude during ascent. When per-component aero tables are loaded, a dashed red line shows the maximum permissible roll rate — defined as one third of the damped pitch natural frequency (ω_d / 3). Roll rates above this line risk pitch-roll coupling instability.
 
 The 3D isometric view shows the full trajectory from rail exit through descent, with the danger area and coastline projected onto the ground plane:
 
@@ -459,6 +475,14 @@ The plan view provides a top-down perspective for checking lateral dispersion ag
 The altitude-time plot shows the complete flight profile, highlighting the transition between ascent and descent phases:
 
 ![Altitude replay](doc/replay_altitude.png)
+
+The angle-of-attack plot shows the body-frame AoA during 6DoF ascent, with each sample coloured by scenario:
+
+![AoA replay](doc/replay_aoa.png)
+
+The roll rate plot shows the absolute roll rate during ascent, with the pitch-roll coupling limit overlaid (requires per-component aero tables):
+
+![Roll rate replay](doc/replay_roll_rate.png)
 
 
 ## Verification
@@ -535,7 +559,9 @@ When `--dump-csv` is used, a CSV file is written with columns for each compared 
 
 ## Damping Assessment
 
-Run a single mean-wind nominal trajectory and assess pitch/yaw damping:
+The damping assessment uses the Mandell linearised damping model to evaluate pitch/yaw dynamic stability from rail exit to apogee. It answers three questions: *Is the vehicle dynamically stable? How well damped is it? Which components are helping and which are hurting?*
+
+Requires per-component aero tables (a directory of per-component CSVs, not a single whole-vehicle file).
 
 ```
 python . damping <simulation.yaml>
@@ -547,13 +573,6 @@ python . damping <simulation.yaml>
 |------|--------|
 | `-q`, `--no-popup` | Save figures to disk instead of displaying interactively |
 
-Produces two plots:
-
-1. **Damping plot** (`damping.png`) — corrective moment coefficient C1, total damping coefficient C2 (aerodynamic C2A + jet damping C2R), damping ratio zeta, and natural frequency, all vs. time from rail exit to apogee.
-2. **Damping breakdown** (`damping_breakdown.png`) — per-component contributions to C1 and C2A, showing which components drive stability and which contribute anti-damping.
-
-Damping quantities are computed from rail exit to apogee only. During the rail phase the vehicle is constrained and airspeed is too low for aerodynamic moments to be meaningful.
-
 Damping plots are also generated automatically during `run` when per-component aero tables are loaded, using the nominal baseline trajectory.
 
 Example:
@@ -561,6 +580,66 @@ Example:
 ```
 python . damping ../simulations/cases/g2b2-cape-wrath/config.yaml -q
 ```
+
+### The Mandell Model
+
+The model decomposes the pitch/yaw dynamics into a corrective moment and a damping moment. The four coefficients are computed at each time step from rail exit to apogee:
+
+| Coefficient | Formula | Units | Physical Meaning |
+|-------------|---------|-------|-----------------|
+| **C1** | ½ ρ V² A_ref CN_α (CP − CG) | N·m | Corrective (restoring) moment — the "spring". Proportional to V² and static margin. Positive when statically stable. |
+| **C2A** | Σ_j ½ ρ V A_ref CN_α_j (CP_j − CG)² | N·m·s | Aerodynamic damping — the "dashpot". Proportional to V. Each component contributes in proportion to the **square** of its lever arm from CG. |
+| **C2R** | ṁ (L_ne − CG)² | N·m·s | Jet damping from the motor exhaust. Independent of airspeed; active only during powered flight (ṁ > 0). |
+| **C2** | C2A + C2R | N·m·s | Total damping. |
+
+From these, the damping ratio ζ and frequencies are:
+
+```
+ζ   = C2 / (2 √(C1 · I))        damping ratio
+ω_n = √(C1 / I)                 natural frequency (rad/s)
+ω_d = ω_n √(1 − ζ²)             damped frequency (rad/s)
+```
+
+where I is the lateral moment of inertia.
+
+### Interpreting the Damping Plot
+
+The damping plot (`damping.png`) has five subplots:
+
+| Subplot | What to look for |
+|---------|-----------------|
+| **ζ (damping ratio)** | Should stay within the green band (0.05–0.3). Below 0.05 the vehicle oscillates excessively; above 0.3 it is sluggish but stable. |
+| **f_d (damped frequency)** | The actual pitch oscillation frequency in Hz. Higher f_d means tighter, faster corrections. |
+| **C1 (corrective moment)** | Must be positive throughout — rises during boost as V² increases, then falls post-burnout. If C1 goes negative the vehicle is statically unstable. |
+| **C2 breakdown** | Solid line = total C2; dashed = aerodynamic C2A; dotted = jet C2R. During boost both contribute. Post-burnout C2R vanishes (ṁ → 0) and C2A dominates. |
+| **I_lateral** | Lateral moment of inertia — decreases during burn as propellant is consumed. Lower I means faster response (higher ω_n) for the same C1. |
+
+### Interpreting the Damping Breakdown
+
+The breakdown plot (`damping_breakdown.png`) shows per-component contributions in a 2×2 grid:
+
+| Subplot | What it reveals |
+|---------|----------------|
+| **CN_α per component** | Aerodynamic sensitivity to angle of attack. Fins typically dominate (3–5 /rad). Components with negative CN_α (e.g. boattails) are destabilising. |
+| **CP per component** | Centre of pressure for each component. Useful for sanity-checking: nose cone CP should be near the tip, fins near the tail. |
+| **C1 per component** | Each component's contribution to the restoring moment. A component with negative C1 is actively fighting static stability — consider whether it can be shortened, repositioned, or faired. |
+| **C2A per component** | Each component's contribution to aerodynamic damping. Negative C2A means anti-damping — the component is amplifying oscillations. Because C2A scales with the **square** of the lever arm, tail surfaces (fins, boattail) dominate this term for better or worse. |
+
+### Design Guidance
+
+The breakdown plot is the key tool for deciding *what to change*. Some rules of thumb:
+
+- **Underdamped (ζ < 0.05)?** Increase fin area or move them further aft — C2A scales with (CP − CG)² so even a small increase in fin lever arm has a large effect on damping.
+- **Anti-damping from the boattail?** A boattail with negative CN_α contributes negative C2A. Shortening the boattail or reducing its taper angle reduces this anti-damping contribution.
+- **Overdamped (ζ > 0.3)?** This is stable but sluggish. Rarely a problem in practice — only act on it if wind response is a concern.
+- **C1 dropping near zero?** The static margin is marginal. Increase it by moving CG forward (heavier nose) or CP aft (larger fins).
+- **Roll rate exceeding the ω_d/3 limit?** Reduce fin cant angle to lower the induced roll rate, or increase damping (which raises ω_d and therefore the limit). The roll rate replay plot shows this directly.
+
+### Scope and Limitations
+
+Damping quantities are computed from rail exit to apogee only. During the rail phase the vehicle is constrained, and during descent the parachute dominates — aerodynamic moments are not meaningful in either regime.
+
+The model is linearised: it assumes small angles of attack and treats pitch and yaw identically (axial symmetry). It does not capture nonlinear effects at high AoA, fin stall, or Magnus forces from spin. For vehicles with significant roll rates, the ω_d/3 roll rate limit provides a conservative boundary for when pitch-roll coupling invalidates the linearised analysis.
 
 
 ## Operational Workflow
@@ -594,10 +673,10 @@ uncertainties:
   impulse_factor_sigma: 0.0
 ```
 
-When generating wind profiles with windgen, use `--perturbation-scale 0.0` to produce an ensemble where every profile is identical to the mean:
+When generating wind profiles with windgen, use `--scale 0.1` to produce an ensemble where every profile is close to the mean:
 
 ```
-python . generate config.yaml 21-06-26 --perturbation-scale 0.0
+python . generate config.yaml 21-06-26 --scale 0.1
 ```
 
 ### Effect on execution speed

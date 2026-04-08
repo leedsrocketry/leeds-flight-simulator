@@ -324,7 +324,7 @@ def test_cp_moment_balance(tmp_path):
     V = 100.0
     u_rel = V * math.cos(alpha_rad)
     w_rel = V * math.sin(alpha_rad)
-    _, _, _, _, _, cp_whole = aero_forces_moments(
+    _, _, _, _, _, cp_whole, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
@@ -367,7 +367,7 @@ def test_pitch_damping_matches_mandell_small_q(tmp_path, q_rate):
     m = _damp_model(tmp_path)
 
     # u_rel = V, v_rel = w_rel = 0  → zero bulk AoA, pure rotation
-    _, _, _, tau_pitch, _, _ = aero_forces_moments(
+    _, _, _, tau_pitch, _, _, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
@@ -388,7 +388,7 @@ def test_yaw_damping_matches_mandell_small_r(tmp_path, q_rate):
     """Pure yaw rate: τ_yaw matches Mandell to within 1% (symmetry of model)."""
     m = _damp_model(tmp_path)
 
-    _, _, _, _, tau_yaw, _ = aero_forces_moments(
+    _, _, _, _, tau_yaw, _, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
@@ -411,7 +411,7 @@ def test_yaw_damping_matches_mandell_small_r(tmp_path, q_rate):
 def test_pitch_damping_opposes_positive_q(tmp_path):
     """Positive pitch rate → negative (nose-down restoring) pitch moment."""
     m = _damp_model(tmp_path)
-    _, _, _, tau_pitch, _, _ = aero_forces_moments(
+    _, _, _, tau_pitch, _, _, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
@@ -428,7 +428,7 @@ def test_pitch_damping_opposes_positive_q(tmp_path):
 def test_yaw_damping_opposes_positive_r(tmp_path):
     """Positive yaw rate → negative yaw moment."""
     m = _damp_model(tmp_path)
-    _, _, _, _, tau_yaw, _ = aero_forces_moments(
+    _, _, _, _, tau_yaw, _, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
@@ -453,7 +453,7 @@ def test_restoring_moment_no_rotation(tmp_path):
     u_rel = _DAMP_V * math.cos(alpha)
     w_rel = _DAMP_V * math.sin(alpha)
 
-    _, _, _, tau_pitch, _, _ = aero_forces_moments(
+    _, _, _, tau_pitch, _, _, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
@@ -480,7 +480,7 @@ def test_cp_whole_at_nonzero_aoa(tmp_path):
     u_rel = _DAMP_V * math.cos(alpha)
     w_rel = _DAMP_V * math.sin(alpha)
 
-    _, _, _, _, _, cp_whole = aero_forces_moments(
+    _, _, _, _, _, cp_whole, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,
@@ -497,7 +497,7 @@ def test_cp_whole_at_nonzero_aoa(tmp_path):
 def test_cp_whole_fallback_to_cg_at_zero_aoa(tmp_path):
     """At zero AoA (no rotation), cp_whole falls back to CG."""
     m = _damp_model(tmp_path)
-    _, _, _, _, _, cp_whole = aero_forces_moments(
+    _, _, _, _, _, cp_whole, _, _ = aero_forces_moments(
         m.mach_grid, m.re_grid, m.alpha_grid,
         m.ca_table_off, m.ca_table_on, False,
         m.cn_table, m.cp_table,

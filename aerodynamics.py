@@ -778,10 +778,12 @@ def aero_forces_moments(
 
     Returns
     -------
-    (F_x, F_y, F_z, tau_pitch, tau_yaw, cp_whole)
+    (F_x, F_y, F_z, tau_pitch, tau_yaw, cp_whole, cna_sum, damp_sum)
         Forces in N, moments in N·m.
         ``cp_whole`` is the moment-balanced whole-vehicle CP [m from nosecone
         tip] — equals ``cg`` when total C_N ≈ 0.
+        ``cna_sum`` is Σ CN_α_j (total CN_alpha, 1/rad); 0 in whole-vehicle mode.
+        ``damp_sum`` is Σ CN_α_j · (CP_j − CG)² (m²/rad); 0 in whole-vehicle mode.
     """
     EPS = 1.0e-6
 
@@ -804,6 +806,7 @@ def aero_forces_moments(
         tau_yaw = 0.0
         cn_sum = 0.0
         cn_cp_sum = 0.0
+        cna_sum = 0.0   # Σ C_Nα_i (total CN_alpha)
         damp_sum = 0.0  # Σ C_Nα_i · arm_i²
 
         # Force direction from bulk crossflow
@@ -836,6 +839,7 @@ def aero_forces_moments(
 
             # Damping coefficient: C_Nα_i · arm_i²
             cna_i = _interp2(mach_g, re_g, cn_alpha_comp[i], M, Re)
+            cna_sum += cna_i
             damp_sum += cna_i * arm_i * arm_i
 
             # Accumulate for whole-vehicle CP (§6.3 item 3)
@@ -852,7 +856,7 @@ def aero_forces_moments(
         else:
             cp_whole = cg  # undefined at zero AoA; return CG (zero margin)
 
-        return F_x, F_y, F_z, tau_pitch, tau_yaw, cp_whole
+        return F_x, F_y, F_z, tau_pitch, tau_yaw, cp_whole, cna_sum, damp_sum
 
     else:
         # Single-file fallback — restoring only, no pitch/yaw damping (§6.4)
@@ -874,7 +878,7 @@ def aero_forces_moments(
         tau_pitch =  arm * F_z
         tau_yaw   = -arm * F_y
 
-        return F_x, F_y, F_z, tau_pitch, tau_yaw, CP
+        return F_x, F_y, F_z, tau_pitch, tau_yaw, CP, 0.0, 0.0
 
 
 @nb.njit(cache=True, fastmath=True)

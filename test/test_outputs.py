@@ -432,6 +432,7 @@ def _stub_summary(
         footprint_compliant=True,
         ceiling_compliant=True,
         stability_compliant=True,
+        violation_code=0,
     )
 
 

@@ -323,6 +323,7 @@ class FlightSummary:
     footprint_compliant: bool     # full trajectory inside buffered footprint
     ceiling_compliant: bool       # apogee below buffered altitude ceiling
     stability_compliant: bool
+    violation_code: int           # 0=none, 2=SM, 3=AoA, 4=roll rate
 
 
 def check_stability_compliance(
@@ -343,16 +344,24 @@ def check_stability_compliance(
         message), e.g. ``"Baseline 'nominal'"`` or ``"Verification"``.
     """
     if not summary.stability_compliant:
+        if summary.violation_code == 3:
+            detail = (
+                f"AoA exceeded 12° during ascent (max = "
+                f"{summary.max_aoa_deg:.1f}°)"
+            )
+        elif summary.violation_code == 4:
+            detail = "Roll rate exceeded ω_d/3 pitch-roll coupling limit"
+        else:
+            detail = (
+                f"min SM subsonic = {summary.min_sm_subsonic:.2f} cal "
+                f"[limit {acceptance.sm_subsonic_min}], "
+                f"min SM supersonic = {summary.min_sm_supersonic:.2f} cal "
+                f"[limit {acceptance.sm_supersonic_min}]"
+            )
         raise RuntimeError(
-            f"{label} trajectory is stability-non-compliant "
-            f"(min SM subsonic = {summary.min_sm_subsonic:.2f} cal "
-            f"[limit {acceptance.sm_subsonic_min}], "
-            f"min SM supersonic = {summary.min_sm_supersonic:.2f} cal "
-            f"[limit {acceptance.sm_supersonic_min}]). "
-            f"The vehicle does not meet the configured acceptance "
-            f"thresholds even with zero uncertainties. Review the "
-            f"transonic stability margins or adjust acceptance "
-            f"thresholds in the config. "
+            f"{label} trajectory is stability-non-compliant ({detail}). "
+            f"The vehicle does not meet acceptance thresholds even with "
+            f"zero uncertainties. "
             f"Use --no-termination to run regardless."
         )
 
@@ -818,7 +827,8 @@ def _sixdof_deriv(
     """13-component derivative for the 6DoF state vector.
 
     Writes derivatives into *dy* (pre-allocated by caller — no allocation).
-    Returns ``(alpha_rad, cp_whole, mach)`` for acceptance checking.
+    Returns ``(alpha_rad, cp_whole, mach, q_dyn, C1, C2A, I_lat)``
+    for acceptance checking.
 
     State layout: [rN, rE, rD, q0, q1, q2, q3, u, v, w, p, q_rate, r_rate]
     """
@@ -890,7 +900,7 @@ def _sixdof_deriv(
 
     # --- Aerodynamic forces and moments ---
     power_on = t <= t_burnout
-    Fx, Fy, Fz, tau_p_aero, tau_y_aero, cp_whole = aero_forces_moments(
+    Fx, Fy, Fz, tau_p_aero, tau_y_aero, cp_whole, cna_sum, damp_sum = aero_forces_moments(
         mach_g, re_g, alpha_g,
         ca_tbl_off, ca_tbl_on, power_on,
         cn_tbl, cp_tbl,
@@ -966,7 +976,11 @@ def _sixdof_deriv(
     V_lat = (v_rel * v_rel + w_rel * w_rel) ** 0.5
     alpha_rad = math.atan2(V_lat, u_rel)
 
-    return alpha_rad, cp_whole, M
+    q_dyn = 0.5 * rho * V * V
+    C1 = q_dyn * A_ref * cna_sum * (cp_whole - cg)   # restoring moment
+    C2A = 0.5 * rho * V * A_ref * damp_sum            # aero damping
+
+    return alpha_rad, cp_whole, M, q_dyn, C1, C2A, I_lat
 
 
 @nb.njit(cache=True, fastmath=True)
@@ -1032,7 +1046,8 @@ def integrate_sixdof(
 
     # Hardcoded stability-check constants
     sm_transition_mach = 0.91
-    sm_aoa_threshold_rad = 5.0 * math.pi / 180.0
+    _min_q_pa = 500.0     # dynamic pressure gate (Pa)
+    _max_aoa_deg = 12.0   # max acceptable AoA (degrees)
 
     # Tracking variables
     max_mach = 0.0
@@ -1169,7 +1184,7 @@ def integrate_sixdof(
             )
 
         # Stage 7 (FSAL) — also returns auxiliaries for acceptance checking
-        alpha_rad, cp_whole, mach_now = _sixdof_deriv(
+        alpha_rad, cp_whole, mach_now, q_now, C1_now, C2A_now, I_lat_now = _sixdof_deriv(
             t + h_step, y_new, k7,
             _mt, _mth, _mp0, _ti, _na, _np_, _md, _cgd, _mcl,
             _ird, _ild, _pro, _pri, _pl, _if,
@@ -1235,25 +1250,44 @@ def integrate_sixdof(
             if y[2] > prev_rD and n > 2:
                 past_apogee = True
 
-            # Stability checks apply only during ascent (up to apogee).
-            # Post-apogee attitudes are not meaningful for vehicle
-            # stability assessment.
-            if not past_apogee:
-                # SM check (only when AoA < threshold)
-                if alpha_rad < sm_aoa_threshold_rad:
-                    if mach_now < sm_transition_mach:
-                        if sm_cal < min_sm_sub:
-                            min_sm_sub = sm_cal
-                        if sm_cal < sm_subsonic_min:
+            # Stability checks apply only during ascent (up to apogee)
+            # and only when dynamic pressure is high enough for
+            # aerodynamic forces to be meaningful.
+            if not past_apogee and q_now > _min_q_pa:
+                # Static margin check
+                if mach_now < sm_transition_mach:
+                    if sm_cal < min_sm_sub:
+                        min_sm_sub = sm_cal
+                    if sm_cal < sm_subsonic_min:
+                        stability_compliant = False
+                        violation_code = 2
+                        break
+                else:
+                    if sm_cal < min_sm_sup:
+                        min_sm_sup = sm_cal
+                    if sm_cal < sm_supersonic_min:
+                        stability_compliant = False
+                        violation_code = 2
+                        break
+
+                # AoA check
+                if aoa_deg > _max_aoa_deg:
+                    stability_compliant = False
+                    violation_code = 3
+                    break
+
+                # Roll rate check (per-component aero only)
+                if C1_now > 0.0 and I_lat_now > 1.0e-12:
+                    m_dot = mdot_at(_mt, _mth, _mp0, _ti, t)
+                    lever = _np_ - cg_now
+                    C2 = C2A_now + m_dot * lever * lever
+                    omega_n = math.sqrt(C1_now / I_lat_now)
+                    zeta = C2 / (2.0 * math.sqrt(C1_now * I_lat_now))
+                    if 0.0 < zeta < 1.0:
+                        omega_d = omega_n * math.sqrt(1.0 - zeta * zeta)
+                        if abs(y[10]) > omega_d / 3.0:
                             stability_compliant = False
-                            violation_code = 2
-                            break
-                    else:
-                        if sm_cal < min_sm_sup:
-                            min_sm_sup = sm_cal
-                        if sm_cal < sm_supersonic_min:
-                            stability_compliant = False
-                            violation_code = 2
+                            violation_code = 4
                             break
 
             # Termination detection
@@ -1723,7 +1757,7 @@ def _build_profile(
         r_rate = float(state_asc[i, 12])
 
         power_on = ti <= t_burnout
-        _, _, _, _, _, cp_whole = aero_forces_moments(
+        _, _, _, _, _, cp_whole, _, _ = aero_forces_moments(
             p.mach_g, p.re_g, p.alpha_g,
             p.ca_tbl_off, p.ca_tbl_on, power_on,
             p.cn_tbl, p.cp_tbl,
@@ -2018,6 +2052,7 @@ def run_trajectory(
             footprint_compliant=_footprint_ok,
             ceiling_compliant=_ceiling_ok,
             stability_compliant=stab_ok,
+            violation_code=viol_code,
         )
 
     # Helper to build profile when requested

@@ -402,7 +402,12 @@ def run_sample(
     # Build violation reason string
     violation = ""
     if not summary.stability_compliant:
-        violation = "Stability violation"
+        if summary.violation_code == 3:
+            violation = "AoA exceeded limit"
+        elif summary.violation_code == 4:
+            violation = "Roll rate exceeded pitch-roll coupling limit"
+        else:
+            violation = "Static margin violation"
     elif not footprint_ok:
         violation = "Trajectory exited buffered danger area"
     elif not summary.ceiling_compliant:
