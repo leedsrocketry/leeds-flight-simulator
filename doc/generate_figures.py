@@ -5,13 +5,11 @@ Usage
 -----
     python doc/generate_figures.py <simulation.yaml>
 
-Runs the verify, run, and replay commands with ``-q`` and copies the
-resulting figures into ``doc/``.  Requires a valid simulation config
-with wind profiles and a verification reference trajectory.
-
-The Monte Carlo is run with the default sample count from the config.
-To produce representative figures quickly, temporarily lower
-``monte_carlo.samples`` in the config (e.g. to 100).
+Runs verify, damping, and a single-sample replay (ballistic sample 0)
+with ``-q`` and copies the resulting figures into ``doc/``.  Ballistic
+sample 0 is used because it is always active regardless of vehicle
+recovery configuration and produces all plot features without needing
+a full Monte Carlo run.
 """
 
 from __future__ import annotations
@@ -23,17 +21,13 @@ from pathlib import Path
 
 DOC_DIR = Path(__file__).resolve().parent
 
-# Figures produced by each command, mapped to their output locations
-# relative to the results directory.
-RUN_FIGURES = [
-    "altitude_plot.png",
-    "dispersion_plot.png",
-    "damping.png",
-    "damping_breakdown.png",
-]
-
 VERIFY_FIGURES = [
     "verification_plot.png",
+]
+
+DAMPING_FIGURES = [
+    "damping.png",
+    "damping_breakdown.png",
 ]
 
 REPLAY_FIGURES = [
@@ -69,22 +63,30 @@ def main() -> None:
     results_dir = config_path.parent / "results"
     config_str = str(config_path)
 
-    # 1. Verify
+    # 1. Verify (produces verification_plot.png)
     _run([sys.executable, ".", "verify", config_str, "-q"])
 
-    # 2. Run (produces altitude, dispersion, damping plots)
-    _run([sys.executable, ".", "run", config_str, "-q", "-p"])
+    # 2. Damping (produces damping.png, damping_breakdown.png)
+    _run([sys.executable, ".", "damping", config_str, "-q"])
 
-    # 3. Replay non-compliant samples (produces replay plots)
+    # 3. Run with 1 sample, ballistic only (produces altitude_plot.png,
+    #    dispersion_plot.png, and provides summary.yaml for replay)
+    _run([sys.executable, ".", "run", config_str,
+          "-q", "-p", "-s", "ballistic"])
+
+    # 4. Replay ballistic sample 0 (produces all replay plots)
     summary_path = results_dir / "summary.yaml"
-    if summary_path.exists():
-        _run([sys.executable, ".", "replay", str(summary_path),
-              "--non-compliant", "-q"])
+    _run([sys.executable, ".", "replay", str(summary_path),
+          "--scenario", "ballistic", "--sample", "0", "-q"])
 
     # Copy figures to doc/
+    all_figures = VERIFY_FIGURES + DAMPING_FIGURES + REPLAY_FIGURES + [
+        "altitude_plot.png",
+        "dispersion_plot.png",
+    ]
     copied = []
     missing = []
-    for name in RUN_FIGURES + VERIFY_FIGURES + REPLAY_FIGURES:
+    for name in all_figures:
         src = results_dir / name
         if src.exists():
             shutil.copy2(src, DOC_DIR / name)
@@ -97,7 +99,7 @@ def main() -> None:
         print(f"  {name}")
     if missing:
         print(f"\n{len(missing)} figures not generated (may require "
-              f"per-component aero tables or non-compliant samples):")
+              f"per-component aero tables):")
         for name in missing:
             print(f"  {name}")
 
