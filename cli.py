@@ -960,10 +960,11 @@ def verify(config_path: Path, inclination: float | None,
             fig_path = config_path.parent / "results" / "verification_plot.png"
             fig_path.parent.mkdir(parents=True, exist_ok=True)
             ver_result.figure.savefig(fig_path, dpi=150, bbox_inches="tight")
+            plt.close(ver_result.figure)
             console.print(f"Figure saved to: {fig_path}")
         else:
             _tile_figures()
-        plt.show()
+            plt.show()
 
     console.print()
 
