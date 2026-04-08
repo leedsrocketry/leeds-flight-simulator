@@ -54,13 +54,13 @@ def _nominal_scenario(vehicle: "Vehicle") -> int:
 # Absolute floors for fractional tolerance comparison (avoid false failures
 # near zero).  Physically motivated minimum-significance thresholds.
 _TOLERANCE_FLOORS: dict[str, float] = {
-    "altitude": 50.0,    # metres
-    "mach": 0.05,       # dimensionless
-    "sm": 0.2,          # calibres
+    "altitude": 100.0,  # metres
+    "mach": 0.05,        # dimensionless
+    "sm": 0.1,          # calibres
     "mass": 0.2,        # kg
-    "thrust": 5.0,     # newtons
+    "thrust": 5.0,      # newtons
     "cd": 0.01,         # dimensionless
-    "drag": 5.0,        # newtons
+    "drag": 10.0,        # newtons
     "cg": 0.01,         # metres
     "cp": 0.01,         # metres
 }

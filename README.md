@@ -506,13 +506,19 @@ python . verify ../simulations/cases/g2b2-cape-wrath/config.yaml --dump-csv debu
 
 #### Acceptance
 
-Each compared quantity is checked against its configured fractional tolerance band. A quantity passes if the fraction of comparison points outside the band is within the `exceedance_fraction` threshold.
+Each compared quantity is checked against its configured fractional tolerance band. The effective band at each point is `max(tolerance × |reference|, floor)`, where the floor is an absolute minimum error threshold that prevents false failures when the reference value passes through or near zero.
 
 Stability margin, thrust, mass, and drag force are compared over the **ascent phase only** (up to LFS apogee). Descent-phase values for these quantities are physically meaningless (no aerodynamic stability under parachute, no thrust, constant mass) and are excluded from both the comparison and the plot. Altitude and Mach are compared over the full flight.
 
 CD, CG, and CP are compared over the full flight and included in the CSV dump but are not plotted.
 
 The overall verification result passes if every compared quantity passes.
+
+#### Tolerance Floors
+
+The tolerance floors are hardcoded in `verify.py` in the `_TOLERANCE_FLOORS` dictionary. They set the minimum absolute error that is always considered acceptable, regardless of the fractional tolerance — this avoids spurious failures near zero-crossings (e.g. altitude at launch/landing, Mach at rail exit, thrust after burnout).
+
+To adjust a floor, edit the corresponding entry in `_TOLERANCE_FLOORS` in `verify.py`. Quantities not listed default to a floor of 1.0 in their native unit.
 
 #### Comparison Figure
 
